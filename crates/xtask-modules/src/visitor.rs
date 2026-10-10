@@ -478,6 +478,13 @@ impl<'ast> Visit<'ast> for References<'_> {
         if item.mac.path.is_ident("macro_rules") {
             return;
         }
+        if self
+            .options
+            .trusted_macros
+            .contains(&macro_path_text(&item.mac.path))
+        {
+            return;
+        }
         self.diagnostics.insert(format!(
             "{}: item macro expansion is unsupported: {}",
             self.module,
@@ -524,6 +531,13 @@ impl<'ast> Visit<'ast> for References<'_> {
         self.namespace = Namespace::Macro;
         self.visit_path(&mac.path);
         self.namespace = previous_namespace;
+        if self
+            .options
+            .trusted_macros
+            .contains(&macro_path_text(&mac.path))
+        {
+            return;
+        }
         let external = local_macro
             .iter()
             .filter_map(|target| match target {
@@ -696,4 +710,13 @@ impl<'ast> Visit<'ast> for References<'_> {
             self.module
         ));
     }
+}
+
+/// Macro invocation path as written, joined with `::` and without a leading `::`.
+fn macro_path_text(path: &syn::Path) -> String {
+    path.segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::")
 }

@@ -45,6 +45,7 @@ pub struct AnalysisSettings {
     pub cfg: Vec<String>,
     pub trusted_attributes: BTreeSet<String>,
     pub trusted_derives: BTreeSet<String>,
+    pub trusted_macros: BTreeSet<String>,
 }
 
 impl Default for AnalysisSettings {
@@ -57,6 +58,7 @@ impl Default for AnalysisSettings {
             cfg: Vec::new(),
             trusted_attributes: BTreeSet::new(),
             trusted_derives: BTreeSet::new(),
+            trusted_macros: BTreeSet::new(),
         }
     }
 }

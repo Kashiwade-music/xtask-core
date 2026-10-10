@@ -320,6 +320,47 @@ fn custom_expansions_require_explicit_trust() {
 }
 
 #[test]
+fn trusted_macros_skip_expansion_diagnostics_only_on_exact_path() {
+    let files = [(
+        "lib.rs",
+        "proptest! { fn a() {} } fn f() { prop_assert!(1 == 1); ::proptest::prop_oneof![1, 2]; }",
+    )];
+    let result = graph(&files, AnalysisOptions::default());
+    assert!(!result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let mut options = AnalysisOptions::default();
+    for name in ["proptest", "prop_assert", "proptest::prop_oneof"] {
+        options.trusted_macros.insert(name.into());
+    }
+    let result = graph(&files, options);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+
+    let mut options = AnalysisOptions::default();
+    options.trusted_macros.insert("proptest".into());
+    let result = graph(
+        &[(
+            "lib.rs",
+            "proptest! { fn a() {} } other! { fn b() {} } fn f() { other_expr!(1); prop_assert!(true); }",
+        )],
+        options,
+    );
+    assert!(
+        result.diagnostics.iter().any(|d| d.contains("other")),
+        "{:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics.iter().all(|d| !d.contains("proptest")),
+        "{:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics.iter().any(|d| d.contains("prop_assert")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn builtin_inert_attributes_and_derive_helpers_need_no_expansion() {
     let result = graph(
         &[(

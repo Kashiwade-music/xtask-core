@@ -127,6 +127,7 @@ fn analyze_workspace(
                     features: features.clone(),
                     trusted_attributes: settings.trusted_attributes.clone(),
                     trusted_derives: settings.trusted_derives.clone(),
+                    trusted_macros: settings.trusted_macros.clone(),
                     max_role_chars,
                 };
                 let context = format!(
@@ -159,8 +160,11 @@ fn analyze_workspace(
             }
         }
     }
-    if !settings.trusted_attributes.is_empty() || !settings.trusted_derives.is_empty() {
-        report.notes.push(format!("source-only macro assumptions: attributes {:?}, derives {:?}; generated code is not analyzed", settings.trusted_attributes, settings.trusted_derives));
+    if !settings.trusted_attributes.is_empty()
+        || !settings.trusted_derives.is_empty()
+        || !settings.trusted_macros.is_empty()
+    {
+        report.notes.push(format!("source-only macro assumptions: attributes {:?}, derives {:?}, macros {:?}; generated code is not analyzed", settings.trusted_attributes, settings.trusted_derives, settings.trusted_macros));
     }
     Ok(Analysis {
         workspace,
