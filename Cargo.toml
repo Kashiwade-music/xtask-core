@@ -19,6 +19,8 @@ xtask-source = { path = "crates/xtask-source" }
 xtask-workspace = { path = "crates/xtask-workspace" }
 xtask-modules = { path = "crates/xtask-modules" }
 xtask-graph = { path = "crates/xtask-graph" }
+xtask-layout = { path = "crates/xtask-layout" }
+xtask-svg = { path = "crates/xtask-svg" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -1,102 +1,48 @@
-//! Deterministic DOT generation and Graphviz SVG export.
+//! Deterministic diagram requests and direct ELK-backed SVG export.
 
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod adapter;
 mod layout;
 mod model;
-mod wave;
 pub use layout::{Cluster, Direction, EdgeStyle, Layout};
 pub use model::{Edge, Graph, Node};
 
-/// Write DOT and render SVG with `XTASK_GRAPHVIZ_DOT`, or `dot` on PATH.
+/// Render SVG with ELK and `XTASK_NODE`, or `node` on PATH.
 ///
-/// DOT remains available for inspection when rendering fails. A previous SVG
-/// is kept until Graphviz has successfully generated a nonempty replacement.
-pub fn write(graph: &Graph, dot_path: &Path, svg_path: &Path) -> Result<(), String> {
-    let binary = std::env::var_os("XTASK_GRAPHVIZ_DOT").unwrap_or_else(|| "dot".into());
-    write_with_dot(graph, dot_path, svg_path, &binary)
+/// A previous SVG is kept until ELK and the independent SVG renderer succeed.
+pub fn write(graph: &Graph, svg_path: &Path) -> Result<(), String> {
+    write_with_layout(graph, &Layout::default(), svg_path)
 }
 
-/// Export with an explicit Graphviz executable, without changing process env.
-pub fn write_with_dot(
-    graph: &Graph,
-    dot_path: &Path,
-    svg_path: &Path,
-    binary: &OsStr,
-) -> Result<(), String> {
-    write_with_dot_and_layout(graph, &Layout::default(), dot_path, svg_path, binary)
+/// Export with an explicit Node executable, without changing process env.
+pub fn write_with_node(graph: &Graph, svg_path: &Path, binary: &OsStr) -> Result<(), String> {
+    write_with_node_and_layout(graph, &Layout::default(), svg_path, binary)
 }
 
 /// Export with explicit ranks, nested regions and dependency styles.
-pub fn write_with_layout(
-    graph: &Graph,
-    layout: &Layout,
-    dot_path: &Path,
-    svg_path: &Path,
-) -> Result<(), String> {
-    let binary = std::env::var_os("XTASK_GRAPHVIZ_DOT").unwrap_or_else(|| "dot".into());
-    write_with_dot_and_layout(graph, layout, dot_path, svg_path, &binary)
+pub fn write_with_layout(graph: &Graph, layout: &Layout, svg_path: &Path) -> Result<(), String> {
+    let binary = std::env::var_os("XTASK_NODE").unwrap_or_else(|| "node".into());
+    write_with_node_and_layout(graph, layout, svg_path, &binary)
 }
 
-/// Export a layout with an injected Graphviz executable.
-pub fn write_with_dot_and_layout(
+/// Export a layout with an injected Node executable.
+pub fn write_with_node_and_layout(
     graph: &Graph,
     layout: &Layout,
-    dot_path: &Path,
     svg_path: &Path,
     binary: &OsStr,
 ) -> Result<(), String> {
-    if dot_path == svg_path {
-        return Err("DOT and SVG output paths must be different".into());
-    }
-    let dot = graph.dot_with_layout(layout)?;
-    create_parent(dot_path)?;
+    let request = graph.layout_request(layout)?;
+    let scene = xtask_layout::layout_with_node(&request, binary)?;
+    let svg = xtask_svg::render(&scene)?;
     create_parent(svg_path)?;
-    fs::write(dot_path, dot)
-        .map_err(|error| format!("cannot write DOT {}: {error}", dot_path.display()))?;
     let temporary = TemporarySvg::new(svg_path)?;
-    let output = Command::new(binary)
-        .arg("-Tsvg")
-        .arg(dot_path)
-        .arg("-o")
-        .arg(&temporary.path)
-        .output()
-        .map_err(|error| {
-            format!(
-                "cannot run Graphviz {:?}: {error}; install Graphviz or set XTASK_GRAPHVIZ_DOT to its dot executable. DOT retained at {}",
-                binary,
-                dot_path.display()
-            )
-        })?;
-    if !output.status.success() {
-        return Err(format!(
-            "Graphviz {:?} failed ({}): {}; DOT retained at {}",
-            binary,
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim(),
-            dot_path.display()
-        ));
-    }
-    let metadata = fs::metadata(&temporary.path)
-        .map_err(|error| format!("cannot read Graphviz SVG output: {error}"))?;
-    if metadata.len() == 0 {
-        return Err(format!(
-            "Graphviz succeeded but produced an empty SVG; DOT retained at {}",
-            dot_path.display()
-        ));
-    }
-    let dev_ids = graph.dev_edge_ids(layout);
-    if !dev_ids.is_empty() {
-        let svg = fs::read_to_string(&temporary.path)
-            .map_err(|error| format!("cannot read SVG for wave rendering: {error}"))?;
-        let svg = wave::render(&svg, &dev_ids)?;
-        fs::write(&temporary.path, svg)
-            .map_err(|error| format!("cannot save SVG wave rendering: {error}"))?;
-    }
+    fs::write(&temporary.path, svg)
+        .map_err(|error| format!("cannot write SVG {}: {error}", svg_path.display()))?;
     // Windows cannot rename over an existing file. Remove it only after the
     // new output has been produced and validated.
     #[cfg(windows)]

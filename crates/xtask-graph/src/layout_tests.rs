@@ -1,4 +1,5 @@
 use super::*;
+use std::{fs, process::Command};
 
 fn example() -> Graph {
     Graph {
@@ -38,16 +39,43 @@ fn explicit_layout_validates_membership_and_keeps_styles_and_ranks_separate() {
         edge_styles: [(0, EdgeStyle::Unconstrained), (2, EdgeStyle::Dev)].into(),
         ..Default::default()
     };
-    let dot = graph.dot_with_layout(&layout).unwrap();
-    assert!(dot.contains("\"a\" -> \"b\" [label=\"uses\"];"));
-    assert!(dot.contains("label=\"dev\", constraint=false, id=\"xtask-dev-edge-0\""));
-    assert!(dot.contains("\"b\" -> \"a\" [constraint=false]"));
-    assert!(dot.contains("{ rank=same; \"a\"; }"));
+    let request = graph.layout_request(&layout).unwrap();
+    assert_eq!(request.ranks, layout.ranks);
+    assert_eq!(request.direction, xtask_layout::Direction::LeftToRight);
+    assert!(
+        request
+            .edges
+            .iter()
+            .any(|edge| edge.label.as_deref() == Some("uses")
+                && edge.style == xtask_layout::EdgeStyle::Normal)
+    );
+    assert!(
+        request
+            .edges
+            .iter()
+            .any(|edge| edge.label.as_deref() == Some("dev")
+                && edge.style == xtask_layout::EdgeStyle::Dev)
+    );
+    assert!(request.edges.iter().any(|edge| edge.from == "b"
+        && edge.to == "a"
+        && edge.style == xtask_layout::EdgeStyle::Unconstrained));
+    assert_eq!(
+        request
+            .edges
+            .iter()
+            .map(|edge| &edge.id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        3
+    );
     let mut reordered = graph.clone();
     reordered.edges.reverse();
     let mut reordered_layout = layout.clone();
     reordered_layout.edge_styles = [(2, EdgeStyle::Unconstrained), (0, EdgeStyle::Dev)].into();
-    assert_eq!(dot, reordered.dot_with_layout(&reordered_layout).unwrap());
+    assert_eq!(
+        request,
+        reordered.layout_request(&reordered_layout).unwrap()
+    );
     for invalid in [
         Layout {
             ranks: vec![vec!["missing".into()]],
@@ -92,57 +120,19 @@ fn explicit_layout_validates_membership_and_keeps_styles_and_ranks_separate() {
             ..Default::default()
         },
     ] {
-        assert!(graph.dot_with_layout(&invalid).is_err());
+        assert!(graph.layout_request(&invalid).is_err());
     }
 }
 
 #[test]
-fn failed_wave_processing_keeps_previous_svg() {
-    let directory = tempfile::tempdir().unwrap();
-    let svg_path = directory.path().join("old.svg");
-    let dot_path = directory.path().join("nodes.dot");
-    fs::write(&svg_path, "previous SVG").unwrap();
-    let source = directory.path().join("fake_dot.rs");
-    fs::write(&source, r#"fn main() { let args: Vec<_> = std::env::args_os().collect(); std::fs::write(&args[4], "<svg/>").unwrap(); }"#).unwrap();
-    let binary = directory
-        .path()
-        .join(format!("fake-dot{}", std::env::consts::EXE_SUFFIX));
-    let status = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
-        .arg(source)
-        .arg("-o")
-        .arg(&binary)
-        .status()
-        .unwrap();
-    assert!(status.success());
-    let layout = Layout {
-        edge_styles: [(0, EdgeStyle::Dev)].into(),
-        ..Default::default()
-    };
-    let error = write_with_dot_and_layout(
-        &example(),
-        &layout,
-        &dot_path,
-        &svg_path,
-        binary.as_os_str(),
-    )
-    .unwrap_err();
-    assert!(error.contains("expected one SVG dev edge"));
-    assert_eq!(fs::read_to_string(&svg_path).unwrap(), "previous SVG");
-    assert_eq!(
-        fs::read_to_string(dot_path).unwrap(),
-        example().dot_with_layout(&layout).unwrap()
-    );
-}
-
-#[test]
-fn real_graphviz_nested_regions_and_true_waves() {
-    let binary = std::env::var_os("XTASK_GRAPHVIZ_DOT").unwrap_or_else(|| "dot".into());
+fn real_elk_nested_regions_side_ports_and_dev_styles() {
+    let binary = std::env::var_os("XTASK_NODE").unwrap_or_else(|| "node".into());
     if !Command::new(&binary)
-        .arg("-V")
+        .arg("--version")
         .output()
         .is_ok_and(|output| output.status.success())
     {
-        eprintln!("Graphviz not available; optional wave integration check skipped");
+        eprintln!("Node not available; optional ELK layout integration check skipped");
         return;
     }
     let directory = tempfile::tempdir().unwrap();
@@ -174,11 +164,6 @@ fn real_graphviz_nested_regions_and_true_waves() {
             Edge {
                 from: "crate::a".into(),
                 to: "crate".into(),
-                label: None,
-            },
-            Edge {
-                from: "crate".into(),
-                to: "crate::a".into(),
                 label: Some("dev: cfg(test)".into()),
             },
             Edge {
@@ -189,6 +174,7 @@ fn real_graphviz_nested_regions_and_true_waves() {
         ],
     };
     let layout = Layout {
+        direction: Direction::LeftToRight,
         clusters: vec![Cluster {
             id: "crate".into(),
             label: "crate".into(),
@@ -213,94 +199,94 @@ fn real_graphviz_nested_regions_and_true_waves() {
                 },
             ],
         }],
-        edge_styles: [
-            (3, EdgeStyle::Dev),
-            (4, EdgeStyle::Dev),
-            (5, EdgeStyle::Dev),
-        ]
-        .into(),
+        edge_styles: [(3, EdgeStyle::Dev), (4, EdgeStyle::Dev)].into(),
         ..Default::default()
     };
-    let dot_path = directory.path().join("modules.dot");
-    let raw_path = directory.path().join("raw.svg");
     let svg_path = directory.path().join("modules.svg");
-    fs::write(&dot_path, graph.dot_with_layout(&layout).unwrap()).unwrap();
-    let raw_render = Command::new(&binary)
-        .arg("-Tsvg")
-        .arg(&dot_path)
-        .arg("-o")
-        .arg(&raw_path)
-        .output()
-        .unwrap();
-    assert!(
-        raw_render.status.success(),
-        "{}",
-        String::from_utf8_lossy(&raw_render.stderr)
-    );
-    write_with_dot_and_layout(&graph, &layout, &dot_path, &svg_path, &binary).unwrap();
-    let original = fs::read_to_string(raw_path).unwrap();
+    write_with_node_and_layout(&graph, &layout, &svg_path, &binary).unwrap();
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     let rendered = fs::read_to_string(svg_path).unwrap();
-    let options = || roxmltree::ParsingOptions {
-        allow_dtd: true,
-        ..Default::default()
-    };
-    let original_doc = roxmltree::Document::parse_with_options(&original, options()).unwrap();
-    let rendered_doc = roxmltree::Document::parse_with_options(&rendered, options()).unwrap();
+    let document = roxmltree::Document::parse(&rendered).unwrap();
     assert_eq!(
-        rendered_doc
-            .descendants()
-            .filter(|node| node.attribute("class") == Some("cluster"))
-            .count(),
-        4
+        document.root_element().attribute("data-layout-engine"),
+        Some("ELK")
     );
-    for original_group in original_doc
+    let clusters: Vec<_> = document
+        .descendants()
+        .filter(|node| node.attribute("class") == Some("cluster"))
+        .collect();
+    assert_eq!(clusters.len(), 4);
+    assert!(clusters.iter().any(|node| {
+        node.ancestors()
+            .skip(1)
+            .filter(|parent| parent.attribute("class") == Some("cluster"))
+            .count()
+            == 2
+    }));
+    let nodes: std::collections::BTreeMap<_, _> = document
+        .descendants()
+        .filter(|node| node.attribute("class") == Some("node"))
+        .map(|node| {
+            (
+                node.attribute("data-node-id").unwrap(),
+                node.descendants()
+                    .find(|rect| rect.has_tag_name("rect"))
+                    .unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(nodes.len(), 4);
+    let numeric =
+        |node: roxmltree::Node<'_, '_>, key| node.attribute(key).unwrap().parse::<f64>().unwrap();
+    let edges: Vec<_> = document
         .descendants()
         .filter(|node| node.attribute("class") == Some("edge"))
-    {
-        let id = original_group.attribute("id").unwrap();
-        let rendered_group = rendered_doc
-            .descendants()
-            .find(|node| node.attribute("id") == Some(id))
-            .unwrap();
-        let original_path = original_group
-            .descendants()
-            .find(|node| node.has_tag_name("path"))
-            .unwrap()
-            .attribute("d")
-            .unwrap();
-        let rendered_path = rendered_group
-            .descendants()
-            .find(|node| node.has_tag_name("path"))
-            .unwrap()
-            .attribute("d")
-            .unwrap();
-        if id.starts_with("xtask-dev-edge-") {
-            assert_ne!(original_path, rendered_path);
-            assert!(rendered_path.matches(" L").count() >= 8);
-            assert!(
-                !rendered_group
-                    .descendants()
-                    .any(|node| node.attribute("stroke-dasharray").is_some())
-            );
-        } else {
-            assert_eq!(original_path, rendered_path);
-        }
-        for tag in ["polygon", "text"] {
-            let old: Vec<_> = original_group
-                .descendants()
-                .filter(|node| node.has_tag_name(tag))
-                .map(|node| &original[node.range()])
-                .collect();
-            let new: Vec<_> = rendered_group
-                .descendants()
-                .filter(|node| node.has_tag_name(tag))
-                .map(|node| &rendered[node.range()])
-                .collect();
-            assert_eq!(old, new);
-        }
-    }
+        .collect();
+    assert_eq!(edges.len(), 5);
     assert_eq!(
-        wave::render(&original, &graph.dev_edge_ids(&layout)).unwrap(),
-        rendered
+        edges
+            .iter()
+            .filter(|edge| edge.attribute("data-style") == Some("dev"))
+            .count(),
+        2
     );
+    for edge in edges {
+        let source = nodes[edge.attribute("data-from").unwrap()];
+        let target = nodes[edge.attribute("data-to").unwrap()];
+        let sx = numeric(edge, "data-start-x");
+        let sy = numeric(edge, "data-start-y");
+        let tx = numeric(edge, "data-end-x");
+        let ty = numeric(edge, "data-end-y");
+        assert!((sx - numeric(source, "x") - numeric(source, "width")).abs() < 0.01);
+        assert!((tx - numeric(target, "x")).abs() < 0.01);
+        assert!(
+            sy >= numeric(source, "y") && sy <= numeric(source, "y") + numeric(source, "height")
+        );
+        assert!(
+            ty >= numeric(target, "y") && ty <= numeric(target, "y") + numeric(target, "height")
+        );
+        let path = edge
+            .descendants()
+            .find(|node| node.has_tag_name("path"))
+            .unwrap();
+        assert!(path.attribute("d").unwrap().starts_with('M'));
+        assert!(
+            !edge
+                .descendants()
+                .any(|node| node.attribute("stroke-dasharray").is_some())
+        );
+        let arrow = edge
+            .descendants()
+            .find(|node| node.attribute("class") == Some("arrowhead"))
+            .unwrap();
+        let tip = arrow
+            .attribute("points")
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap();
+        let (tip_x, tip_y) = tip.split_once(',').unwrap();
+        assert!((tip_x.parse::<f64>().unwrap() - tx).abs() < 0.01);
+        assert!((tip_y.parse::<f64>().unwrap() - ty).abs() < 0.01);
+    }
 }

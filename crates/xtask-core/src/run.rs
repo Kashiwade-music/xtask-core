@@ -164,7 +164,7 @@ fn rustc_cfg(config: &Config) -> Result<BTreeSet<String>, String> {
     Ok(cfg)
 }
 
-/// Execute a read-only check or explicitly generate DOT/SVG artifacts.
+/// Execute a read-only check or explicitly generate SVG artifacts.
 pub fn run(config: &Config, command: Command) -> Result<Report, String> {
     let workspace = Workspace::load(&config.root)?;
     if command == Command::Dependencies {

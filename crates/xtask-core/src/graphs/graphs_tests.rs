@@ -72,10 +72,23 @@ fn dependency_kinds_keep_parallel_edges_and_only_dev_is_wavy() {
     assert_eq!(graph.edges[1].label.as_deref(), Some("dev"));
     assert_eq!(layout.edge_styles[&1], EdgeStyle::Dev);
     assert_eq!(layout.edge_styles[&2], EdgeStyle::Unconstrained);
-    let dot = graph.dot_with_layout(&layout).unwrap();
-    assert!(!dot.contains("label=\"normal\""));
-    assert!(dot.contains("label=\"dev\""));
-    assert!(dot.contains("constraint=false"));
+    let request = graph.layout_request(&layout).unwrap();
+    assert_eq!(request.edges.len(), 3);
+    assert!(
+        request
+            .edges
+            .iter()
+            .any(|edge| edge.from == "app" && edge.to == "lib" && edge.label.is_none())
+    );
+    assert!(
+        request
+            .edges
+            .iter()
+            .any(|edge| edge.label.as_deref() == Some("dev"))
+    );
+    assert!(request.edges.iter().any(|edge| edge.from == "lib"
+        && edge.to == "app"
+        && edge.label.as_deref() == Some("build")));
 }
 
 #[test]
@@ -148,16 +161,29 @@ fn three_module_levels_and_parent_child_references_share_one_diagram() {
             })
             .collect(),
     };
-    let dot = graph
-        .dot_with_layout(&Layout {
+    let request = graph
+        .layout_request(&Layout {
             clusters,
             ..Layout::default()
         })
         .unwrap();
-    assert_eq!(dot.matches("subgraph").count(), 3);
-    assert!(dot.contains("\"crate\" -> \"crate::child::leaf\""));
-    assert!(dot.contains("\"crate::child::leaf\" -> \"crate\""));
-    assert!(!dot.contains("\"crate\" -> \"crate::child\""));
+    assert_eq!(
+        request.regions[0].children[0].children[0].id,
+        "crate::child::leaf"
+    );
+    assert_eq!(request.edges.len(), 2);
+    assert!(
+        request
+            .edges
+            .iter()
+            .any(|edge| edge.from == "crate" && edge.to == "crate::child::leaf")
+    );
+    assert!(
+        request
+            .edges
+            .iter()
+            .any(|edge| edge.from == "crate::child::leaf" && edge.to == "crate")
+    );
 }
 
 #[test]

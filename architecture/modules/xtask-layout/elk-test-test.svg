@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="601.160" height="225.000" viewBox="0 0 601.160 225.000" data-layout-engine="ELK" role="img"><title>xtask-layout::elk (test, test): module dependencies</title><rect width="100%" height="100%" fill="white"/><text x="300.580" y="27.300" text-anchor="middle" font-family="Consolas, Noto Sans Mono, monospace" font-size="18.000" fill="#0f172a">xtask-layout::elk (test, test): module dependencies</text><g class="graph" transform="translate(16 42)">
+<g class="cluster" data-region-id="crate" data-parent=""><title>crate</title><rect x="24.000" y="24.000" width="178.200" height="119.000" rx="4" fill="none" stroke="#94a3b8" stroke-width="1"/></g>
+<g class="bridges">
+</g>
+<g class="node" data-node-id="crate"><title>(self)</title><rect x="86.200" y="81.000" width="96.000" height="42.000" rx="2" fill="white" stroke="#334155" stroke-width="1.2"/><text x="134.200" y="106.900" text-anchor="middle" font-family="Consolas, Noto Sans Mono, monospace" font-size="14.000" fill="#0f172a">(self)</text></g>
+<g class="region-label" data-region-id="crate"><rect x="27.000" y="27.000" width="172.200" height="20.000" fill="white"/><text x="113.100" y="41.200" text-anchor="middle" font-family="Consolas, Noto Sans Mono, monospace" font-size="12.000" fill="#0f172a">crate</text></g>
+</g></svg>

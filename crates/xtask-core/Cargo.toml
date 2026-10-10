@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Shared repository rules and Graphviz reports for Rust xtasks"
+description = "Shared repository rules and architecture diagrams for Rust xtasks"
 
 [dependencies]
 xtask-source.workspace = true
@@ -14,6 +14,7 @@ xtask-graph.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+roxmltree = "0.21.1"
 
 [lints]
 workspace = true

@@ -1,9 +1,0 @@
-digraph {
-  graph [label="xtask-core::xtask-core (bin, normal): module dependencies", labelloc="t", rankdir="LR", newrank=true];
-  node [shape="box"];
-  "crate" [label="(self)"];
-  subgraph "cluster_crate" {
-    label="crate";
-    "crate";
-  }
-}

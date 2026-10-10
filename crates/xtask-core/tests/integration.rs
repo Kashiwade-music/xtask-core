@@ -1,5 +1,4 @@
 use std::fs;
-use std::path::Path;
 use std::process::Command as Process;
 
 use xtask_core::{Command, Config, run};
@@ -86,25 +85,24 @@ fn tiny_consumer_calls_the_public_entrypoint_and_reports_invalid_arguments() {
 fn dependency_export_does_not_require_policy_or_module_expansion() {
     let directory = fixture("include!(\"not-available.rs\");", "");
     fs::remove_file(directory.path().join("dev/xtask/policy/workspace.toml")).unwrap();
-    let binary = directory.path().join("missing-dot-executable");
+    let binary = directory.path().join("missing-node-executable");
     let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
         .args(["deps-graph", "--root"])
         .arg(directory.path())
-        .env("XTASK_GRAPHVIZ_DOT", binary)
+        .env("XTASK_NODE", binary)
         .output()
         .unwrap();
     assert!(!output.status.success());
-    let dot = directory.path().join("architecture/crates.dot");
-    assert!(Path::new(&dot).exists());
-    assert!(fs::read_to_string(dot).unwrap().contains("fixture"));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Graphviz"));
+    assert!(!directory.path().join("architecture/crates.svg").exists());
+    assert!(!directory.path().join("architecture/crates.dot").exists());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Node"));
 }
 
 #[test]
 fn graph_export_defaults_to_architecture_with_combined_nested_module_diagrams() {
-    let dot = std::env::var_os("XTASK_GRAPHVIZ_DOT").unwrap_or_else(|| "dot".into());
-    if !Process::new(&dot)
-        .arg("-V")
+    let node = std::env::var_os("XTASK_NODE").unwrap_or_else(|| "node".into());
+    if !Process::new(&node)
+        .arg("--version")
         .output()
         .is_ok_and(|output| output.status.success())
     {
@@ -117,7 +115,7 @@ fn graph_export_defaults_to_architecture_with_combined_nested_module_diagrams() 
     let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
         .args(["graphs", "--root"])
         .arg(directory.path())
-        .env("XTASK_GRAPHVIZ_DOT", dot)
+        .env("XTASK_NODE", node)
         .output()
         .unwrap();
     assert!(
@@ -127,20 +125,41 @@ fn graph_export_defaults_to_architecture_with_combined_nested_module_diagrams() 
     );
     let architecture = directory.path().join("architecture");
     assert!(architecture.join("crates.svg").exists());
+    assert!(!architecture.join("crates.dot").exists());
     for mode in ["normal", "test"] {
         let stem = architecture.join(format!("modules/fixture/fixture-lib-{mode}"));
-        let dot = fs::read_to_string(stem.with_extension("dot")).unwrap();
-        assert_eq!(dot.matches("subgraph").count(), 3);
-        assert!(dot.contains("\"crate\" -> \"crate::middle::leaf\""));
+        assert!(!stem.with_extension("dot").exists());
         let svg = fs::read_to_string(stem.with_extension("svg")).unwrap();
-        assert_eq!(svg.matches("class=\"cluster\"").count(), 3);
-        assert!(svg.contains("class=\"edge\""));
+        let document = roxmltree::Document::parse(&svg).unwrap();
+        assert_eq!(
+            document.root_element().attribute("data-layout-engine"),
+            Some("ELK")
+        );
+        let clusters: Vec<_> = document
+            .descendants()
+            .filter(|node| node.attribute("class") == Some("cluster"))
+            .collect();
+        assert_eq!(clusters.len(), 3);
+        assert!(clusters.iter().any(|node| {
+            node.ancestors()
+                .skip(1)
+                .filter(|parent| parent.attribute("class") == Some("cluster"))
+                .count()
+                == 2
+        }));
+        assert!(
+            document
+                .descendants()
+                .any(|node| node.attribute("class") == Some("edge")
+                    && node.attribute("data-from") == Some("crate")
+                    && node.attribute("data-to") == Some("crate::middle::leaf"))
+        );
     }
     assert_eq!(
         fs::read_dir(architecture.join("modules/fixture"))
             .unwrap()
             .count(),
-        4
+        2
     );
 }
 

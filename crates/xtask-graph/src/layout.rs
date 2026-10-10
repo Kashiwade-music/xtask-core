@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::model::{Edge, Graph, quote};
+use crate::model::{Edge, Graph};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Direction {
@@ -21,7 +21,7 @@ pub enum EdgeStyle {
 #[allow(clippy::derivable_impls)]
 impl Default for Direction {
     fn default() -> Self {
-        Self::TopToBottom
+        Self::LeftToRight
     }
 }
 
@@ -51,84 +51,10 @@ pub struct Layout {
     pub edge_styles: BTreeMap<usize, EdgeStyle>,
 }
 
-impl Graph {
-    pub fn dot_with_layout(&self, layout: &Layout) -> Result<String, String> {
-        let original = self.dot()?;
-        if layout == &Layout::default() {
-            return Ok(original);
-        }
-        validate(self, layout)?;
-        let direction = match layout.direction {
-            Direction::TopToBottom => "TB",
-            Direction::LeftToRight => "LR",
-        };
-        let mut dot = format!(
-            "digraph {{\n  graph [label={}, labelloc=\"t\", rankdir={}, newrank=true];\n  node [shape=\"box\"];\n",
-            quote(&self.title),
-            quote(direction),
-        );
-        let mut nodes: Vec<_> = self.nodes.iter().collect();
-        nodes.sort_by(|a, b| a.id.cmp(&b.id));
-        for node in nodes {
-            dot.push_str(&format!(
-                "  {} [label={}];\n",
-                quote(&node.id),
-                quote(&node.label)
-            ));
-        }
-        let mut clusters: Vec<_> = layout.clusters.iter().collect();
-        clusters.sort_by(|a, b| a.id.cmp(&b.id));
-        for cluster in clusters {
-            emit_cluster(cluster, 1, &mut dot);
-        }
-        for rank in &layout.ranks {
-            let mut rank = rank.clone();
-            rank.sort();
-            dot.push_str("  { rank=same;");
-            for id in rank {
-                dot.push_str(&format!(" {};", quote(&id)));
-            }
-            dot.push_str(" }\n");
-        }
-        for (position, (_, edge, style)) in sorted_edges(self, layout).into_iter().enumerate() {
-            dot.push_str(&format!("  {} -> {}", quote(&edge.from), quote(&edge.to)));
-            let mut attributes = Vec::new();
-            let label = match style {
-                EdgeStyle::Dev => Some(edge.label.as_deref().unwrap_or("dev")),
-                _ => edge.label.as_deref(),
-            };
-            if let Some(label) = label {
-                attributes.push(format!("label={}", quote(label)));
-            }
-            if style != EdgeStyle::Normal {
-                attributes.push("constraint=false".into());
-            }
-            if style == EdgeStyle::Dev {
-                attributes.push(format!(
-                    "id={}",
-                    quote(&format!("xtask-dev-edge-{position}"))
-                ));
-            }
-            if !attributes.is_empty() {
-                dot.push_str(&format!(" [{}]", attributes.join(", ")));
-            }
-            dot.push_str(";\n");
-        }
-        dot.push_str("}\n");
-        Ok(dot)
-    }
-
-    pub(crate) fn dev_edge_ids(&self, layout: &Layout) -> Vec<String> {
-        sorted_edges(self, layout)
-            .into_iter()
-            .enumerate()
-            .filter(|(_, (_, _, style))| *style == EdgeStyle::Dev)
-            .map(|(position, _)| format!("xtask-dev-edge-{position}"))
-            .collect()
-    }
-}
-
-fn sorted_edges<'a>(graph: &'a Graph, layout: &Layout) -> Vec<(usize, &'a Edge, EdgeStyle)> {
+pub(crate) fn sorted_edges<'a>(
+    graph: &'a Graph,
+    layout: &Layout,
+) -> Vec<(usize, &'a Edge, EdgeStyle)> {
     let mut edges: Vec<_> = graph
         .edges
         .iter()
@@ -147,15 +73,23 @@ fn sorted_edges<'a>(graph: &'a Graph, layout: &Layout) -> Vec<(usize, &'a Edge, 
     edges
 }
 
-fn validate(graph: &Graph, layout: &Layout) -> Result<(), String> {
+pub(crate) fn validate(graph: &Graph, layout: &Layout) -> Result<(), String> {
     let ids: BTreeSet<_> = graph.nodes.iter().map(|node| node.id.as_str()).collect();
     for index in layout.edge_styles.keys() {
         if *index >= graph.edges.len() {
             return Err(format!("edge style index {index} is out of bounds"));
         }
     }
-    let mut ranked = BTreeSet::new();
-    for rank in &layout.ranks {
+    let mut ranked = BTreeMap::new();
+    if !layout.ranks.is_empty() {
+        if layout.direction != Direction::LeftToRight {
+            return Err("normal ranks require left-to-right layout with fixed side ports".into());
+        }
+        if !layout.clusters.is_empty() {
+            return Err("normal ranks are supported for flat crate graphs only".into());
+        }
+    }
+    for (rank_index, rank) in layout.ranks.iter().enumerate() {
         if rank.is_empty() {
             return Err("rank groups must not be empty".into());
         }
@@ -163,8 +97,19 @@ fn validate(graph: &Graph, layout: &Layout) -> Result<(), String> {
             if !ids.contains(id.as_str()) {
                 return Err(format!("rank references missing node: {id:?}"));
             }
-            if !ranked.insert(id) {
+            if ranked.insert(id.as_str(), rank_index).is_some() {
                 return Err(format!("node occurs in more than one rank: {id:?}"));
+            }
+        }
+    }
+    if !layout.ranks.is_empty() {
+        if ranked.len() != ids.len() {
+            return Err("every crate node must have a normal rank".into());
+        }
+        for (_, edge, style) in sorted_edges(graph, layout) {
+            if style == EdgeStyle::Normal && ranked[edge.from.as_str()] >= ranked[edge.to.as_str()]
+            {
+                return Err("normal edge violates normal rank order".into());
             }
         }
     }
@@ -199,24 +144,4 @@ fn validate_cluster<'a>(
         validate_cluster(child, nodes, ids, members)?;
     }
     Ok(())
-}
-
-fn emit_cluster(cluster: &Cluster, depth: usize, dot: &mut String) {
-    let indent = "  ".repeat(depth);
-    dot.push_str(&format!(
-        "{indent}subgraph {} {{\n{indent}  label={};\n",
-        quote(&format!("cluster_{}", cluster.id)),
-        quote(&cluster.label)
-    ));
-    let mut nodes: Vec<_> = cluster.nodes.iter().collect();
-    nodes.sort();
-    for node in nodes {
-        dot.push_str(&format!("{indent}  {};\n", quote(node)));
-    }
-    let mut children: Vec<_> = cluster.children.iter().collect();
-    children.sort_by(|a, b| a.id.cmp(&b.id));
-    for child in children {
-        emit_cluster(child, depth + 1, dot);
-    }
-    dot.push_str(&format!("{indent}}}\n"));
 }

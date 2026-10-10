@@ -25,19 +25,28 @@ Rust プロジェクトの xtask として使える共通ルール。
 
 ## SVG書き出しについて
 
-dotで作成し、Graphviz経由でSVGに変換する。
+ELKで配置と配線を計算し、その座標から独自のSVG描画実装で出力します。
+出力ファイルはSVGのみです。
 crate依存図とmodule依存図は、どちらも左から右へ配置します。
+矢印の経路は水平・垂直の線で配線し、SVGでは曲がり角を小さく丸めます。
+矢印は矩形の左右辺から出入りし、上辺・下辺には接続しません。
+線どうしの交差は片方に半円の跨ぎを付け、接続点と区別します。
+devの波線も跨ぎの区間を保ち、共有端点や平行な線の重なりには跨ぎを付けません。
 
 crate依存図はconsumerからproviderへの矢印を描きます。通常依存は実線で、種類のラベルを付けません。
 dev依存は `dev` ラベル付きの波線です。通常依存だけを使い、依存元からの最長距離で階層を決めます。
 複数のcrateが同じproviderを利用する場合は木ではなくDAGになります。
 dev・build依存は階層に影響させません。build依存は `build` ラベル付きの実線です。
 target条件付きの辺には条件も表示します。
+crate図では各階層内の縦配置と、階層間の配置・配線をELKで順に計算します。
+階層を不可視の列として固定するため、dev・build依存を追加してもcrateの所属列は変わりません。
+接続数に応じて矩形の高さを広げ、左右辺の接続点が密集しないようにします。
 
 module依存図は各moduleの領域を親moduleの領域内に入れ子で配置します。
 各領域の `(self)` ノードはそのmodule自身を表し、参照を実線矢印で結びます。
 階層の親子関係は領域の包含で表し、参照と一枚の図にまとめます。
-devの波線はGraphvizで配置したSVGの経路を波形に変換して描きます。
+角の丸め、devの波線、交差点の跨ぎはELKが返す経路に描画処理を加えます。
+SVGを読み直して経路や接続位置を補正する処理は行いません。
 
 ## 構成
 
@@ -47,7 +56,9 @@ devの波線はGraphvizで配置したSVGの経路を波形に変換して描き
 | `xtask-workspace` | Cargo metadata、crate依存、policy、feature解決 |
 | `xtask-source` | Rustの字句解析による物理コード行数とファイル探索 |
 | `xtask-modules` | Rust構文木、モジュール探索、名前解決、循環検出 |
-| `xtask-graph` | 決定的なDOT生成とGraphvizによるSVG変換 |
+| `xtask-graph` | グラフモデル、配置要求の検証、配置と描画の実行 |
+| `xtask-layout` | ELKによる配置・配線、ラベル寸法、座標モデル |
+| `xtask-svg` | 座標からSVGを描画、角の丸め、波線、交差点の跨ぎ |
 
 Kivact / Vexoraft の共通の行数・`visible_to` の意味を引き継ぎ、モジュール解析を追加しています。
 各プロジェクト固有のprelude上限、`dependency_allowlist`、`check-all`、Mermaidの更新検査は含めません。
@@ -111,7 +122,7 @@ cargo xtask graphs
 ```
 
 `check` はpolicy、コード行数、モジュール参照循環を検査し、グラフを書き換えません。
-グラフコマンドはDOTとSVGを明示的に生成します。
+グラフコマンドはSVGを明示的に生成します。
 `deps-graph` はモジュール解析やpolicyを必要とせず、workspace内の直接依存を出力します。
 module系コマンドは解析不能や循環があれば非ゼロ終了します。取得できたグラフは診断用に出力します。
 
@@ -119,10 +130,10 @@ module系コマンドは解析不能や循環があれば非ゼロ終了しま�
 
 ```plaintext
 architecture/
-├─ crates.dot / crates.svg
+├─ crates.svg
 └─ modules/<package>/
-   ├─ <target>-<kind>-normal.dot / .svg
-   └─ <target>-<kind>-test.dot / .svg          # cfg(test) 構成
+   ├─ <target>-<kind>-normal.svg
+   └─ <target>-<kind>-test.svg          # cfg(test) 構成
 ```
 
 各crateのlib・bin・test・bench・example・build scriptを別のcrate rootとして解析します。
@@ -133,8 +144,18 @@ Cargoの `required-features` と `test = false` を反映します。
 文字列開始・終了の区切りや、その行にある他のRustコードは数えます。
 読み取り・字句解析・モジュール探索の失敗を黙って除外しません。
 
-Graphvizの `dot` をPATHに置くか、`XTASK_GRAPHVIZ_DOT` に実行ファイルのパスを設定します。
-Graphviz実行が失敗した場合、DOTと既存のSVGを保持してエラーを返します。
+Node.jsをPATHに置くか、`XTASK_NODE` にNode.js実行ファイルのパスを設定します。
+ELKは固定バージョンの `elkjs 0.12.0` を同梱し、実行時にnpmやネットワークを使用しません。
+同梱ライブラリのライセンスと出典は
+[NOTICE.md](crates/xtask-layout/vendor/elkjs/NOTICE.md) に記載しています。
+Nodeの起動、ELKの配置、SVG描画が失敗した場合、既存のSVGを保持してエラーを返します。
+
+library APIで実行ファイルを明示する場合は `xtask_graph::write_with_node` または
+`write_with_node_and_layout` を利用します。出力パスにはSVGのパスだけを渡します。
+配置要求を取得する場合は `Graph::layout_request` を利用します。
+既定の配線は左右辺に接続する直交経路です。
+`Layout.ranks` は領域を持たない左から右へのcrate図用です。
+module図は `Layout.clusters` に領域の親子関係を渡します。
 
 ## 解析の範囲と設定
 
@@ -190,9 +211,9 @@ module探索のファイル規則は [Rust Reference](https://doc.rust-lang.org/
 cargo test --locked --offline --workspace
 cargo fmt --all -- --check
 cargo clippy --locked --offline --workspace --all-targets -- -D warnings
-cargo xtask check --trust-derive Deserialize --trust-attribute serde
-cargo xtask graphs --trust-derive Deserialize --trust-attribute serde
+cargo xtask check --trust-derive Deserialize --trust-derive Serialize --trust-attribute serde
+cargo xtask graphs --trust-derive Deserialize --trust-derive Serialize --trust-attribute serde
 ```
 
-本workspaceのmetadata構造体はSerdeの `Deserialize` を使うため、自己検査では上記の明示的な仮定を渡します。
+本workspaceのmetadata・座標構造体はSerdeの `Deserialize` / `Serialize` を使うため、自己検査では上記の明示的な仮定を渡します。
 元のKivact / Vexoraft側のxtaskやpolicyは変更しません。利用側で採用したルールだけを移行してください。

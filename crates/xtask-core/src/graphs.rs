@@ -247,11 +247,10 @@ fn safe_name(name: &str) -> String {
 }
 
 fn write(graph: &Graph, layout: &Layout, stem: &Path, report: &mut Report) -> Result<(), String> {
-    let dot = stem.with_extension("dot");
     let svg = stem.with_extension("svg");
-    xtask_graph::write_with_layout(graph, layout, &dot, &svg)?;
+    xtask_graph::write_with_layout(graph, layout, &svg)?;
     report.notes.push(format!("wrote {}", svg.display()));
-    report.artifacts.extend([dot, svg]);
+    report.artifacts.push(svg);
     Ok(())
 }
 

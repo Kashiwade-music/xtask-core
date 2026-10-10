@@ -1,0 +1,2 @@
+# Preserve the vendored ELK bundle bytes and its recorded SHA-256.
+crates/xtask-layout/vendor/elkjs/elk.bundled.js -text -whitespace

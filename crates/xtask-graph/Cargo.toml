@@ -8,8 +8,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-roxmltree = "0.21.1"
-svgtypes = "0.16.1"
+xtask-layout.workspace = true
+xtask-svg.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+roxmltree = "0.21.1"
+serde_json.workspace = true

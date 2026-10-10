@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::quote;
+use std::{ffi::OsStr, fs, process::Command};
 
 fn example() -> Graph {
     Graph {
@@ -30,29 +30,41 @@ fn example() -> Graph {
 }
 
 #[test]
-fn dot_is_deterministic_and_preserves_unicode() {
+fn requests_are_deterministic_and_preserve_unicode() {
     let graph = example();
     let mut reordered = graph.clone();
     reordered.nodes.reverse();
     reordered.edges.reverse();
-    assert_eq!(graph.dot(), reordered.dot());
+    let request = graph.layout_request(&Layout::default()).unwrap();
     assert_eq!(
-        graph.dot().unwrap(),
-        concat!(
-            "digraph {\n",
-            "  graph [label=\"依存関係\", labelloc=\"t\", rankdir=\"TB\"];\n",
-            "  node [shape=\"box\"];\n",
-            "  \"a\" [label=\"first\"];\n",
-            "  \"b\" [label=\"second\"];\n",
-            "  \"a\" -> \"b\" [label=\"uses\"];\n",
-            "  \"b\" -> \"a\";\n",
-            "}\n",
-        )
+        request,
+        reordered.layout_request(&Layout::default()).unwrap()
+    );
+    assert_eq!(request.title, "依存関係");
+    assert_eq!(
+        request
+            .nodes
+            .iter()
+            .map(|node| node.id.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+    assert_eq!(
+        request
+            .edges
+            .iter()
+            .map(|edge| (edge.from.as_str(), edge.to.as_str()))
+            .collect::<Vec<_>>(),
+        [("a", "b"), ("b", "a")]
+    );
+    assert_eq!(
+        serde_json::to_string(&request).unwrap(),
+        serde_json::to_string(&reordered.layout_request(&Layout::default()).unwrap()).unwrap()
     );
 }
 
 #[test]
-fn quotes_cannot_inject_dot_statements() {
+fn arbitrary_labels_and_ids_survive_request_serialization() {
     let value = "日本語\"; evil -> node; \\n\n\r\t";
     let graph = Graph {
         title: value.into(),
@@ -66,50 +78,60 @@ fn quotes_cannot_inject_dot_statements() {
             label: Some(value.into()),
         }],
     };
-    let dot = graph.dot().unwrap();
-    assert_eq!(quote(value), "\"日本語\\\"; evil -> node; \\\\n\\n\\r\t\"");
-    assert_eq!(dot.lines().count(), 6);
-    assert!(dot.contains(&format!(
-        "{} -> {} [label={}]",
-        quote(value),
-        quote(value),
-        quote(value)
-    )));
+    let request = graph.layout_request(&Layout::default()).unwrap();
+    assert_eq!(request.title, value);
+    assert_eq!(request.nodes[0].id, value);
+    assert_eq!(request.nodes[0].label, value);
+    assert_eq!(request.edges[0].from, value);
+    assert_eq!(request.edges[0].to, value);
+    assert_eq!(request.edges[0].label.as_deref(), Some(value));
+    let encoded = serde_json::to_string(&request).unwrap();
+    let decoded: xtask_layout::LayoutRequest = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(request, decoded);
 }
 
 #[test]
 fn rejects_duplicate_and_missing_nodes() {
     let mut graph = example();
     graph.nodes.push(graph.nodes[0].clone());
-    assert!(graph.dot().unwrap_err().contains("duplicate"));
+    assert!(
+        graph
+            .layout_request(&Layout::default())
+            .unwrap_err()
+            .contains("duplicate")
+    );
     graph.nodes.pop();
     graph.edges[0].to = "missing".into();
-    assert!(graph.dot().unwrap_err().contains("missing"));
+    assert!(
+        graph
+            .layout_request(&Layout::default())
+            .unwrap_err()
+            .contains("missing")
+    );
     graph.edges[0].to = "a".into();
     graph.edges[0].from = "missing".into();
-    assert!(graph.dot().unwrap_err().contains("missing"));
+    assert!(
+        graph
+            .layout_request(&Layout::default())
+            .unwrap_err()
+            .contains("missing")
+    );
 }
 
 #[test]
-fn unavailable_graphviz_retains_dot_and_existing_svg() {
+fn unavailable_node_preserves_existing_svg_and_creates_no_extra_outputs() {
     let directory = tempfile::tempdir().unwrap();
-    let dot_path = directory.path().join("output/nodes.dot");
     let svg_path = directory.path().join("old.svg");
     fs::write(&svg_path, "old SVG").unwrap();
-    let error = write_with_dot(
+    let error = write_with_node(
         &example(),
-        &dot_path,
         &svg_path,
-        directory.path().join("missing-dot-executable").as_os_str(),
+        directory.path().join("missing-node-executable").as_os_str(),
     )
     .unwrap_err();
-    assert!(error.contains("XTASK_GRAPHVIZ_DOT"));
-    assert_eq!(
-        fs::read_to_string(dot_path).unwrap(),
-        example().dot().unwrap()
-    );
+    assert!(error.contains("XTASK_NODE"));
     assert_eq!(fs::read_to_string(svg_path).unwrap(), "old SVG");
-    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 2);
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
 }
 
 #[test]
@@ -118,55 +140,43 @@ fn malformed_graph_does_not_write_files() {
     let mut graph = example();
     graph.nodes.clear();
     assert!(
-        write_with_dot(
+        write_with_node(
             &graph,
-            &directory.path().join("nodes.dot"),
             &directory.path().join("nodes.svg"),
-            OsStr::new("dot"),
+            OsStr::new("node"),
         )
         .is_err()
     );
     assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
-    assert!(
-        write_with_dot(
-            &example(),
-            &directory.path().join("same"),
-            &directory.path().join("same"),
-            OsStr::new("dot"),
-        )
-        .unwrap_err()
-        .contains("different")
-    );
 }
 
 #[test]
-fn injected_graphviz_checks_arguments_exit_and_nonempty_output() {
+fn injected_node_checks_arguments_exit_json_and_scene_validity() {
     let directory = tempfile::tempdir().unwrap();
-    let source = directory.path().join("fake_dot.rs");
-    fs::write(
-        &source,
-        r#"
+    let source = directory.path().join("fake_node.rs");
+    fs::write(&source, r#"
+        use std::io::Read;
         fn main() {
             let args: Vec<_> = std::env::args_os().collect();
-            assert_eq!(args.len(), 5);
-            assert_eq!(args[1], "-Tsvg");
-            assert_eq!(args[3], "-o");
-            let dot = std::fs::read_to_string(&args[2]).unwrap();
-            if dot.contains("FAIL") {
-                eprintln!("fixture render error");
+            assert_eq!(args.len(), 3);
+            assert!(std::fs::read_to_string(&args[1]).unwrap().contains("elk"));
+            assert!(std::fs::metadata(&args[2]).unwrap().len() > 0);
+            let mut input = String::new();
+            std::io::stdin().read_to_string(&mut input).unwrap();
+            assert!(input.contains("\"nodes\"") && input.contains("\"direction\""));
+            if input.contains("FAIL") {
+                eprintln!("fixture ELK process error");
                 std::process::exit(7);
             }
-            if dot.contains("EMPTY") { return; }
-            std::fs::write(&args[4], "<svg xmlns='http://www.w3.org/2000/svg'></svg>").unwrap();
+            if input.contains("EMPTY") { return; }
+            if input.contains("INVALID") { println!("not json"); return; }
+            println!("{{\"title\":\"INCOMPLETE\",\"width\":100,\"height\":100,\"nodes\":[],\"regions\":[],\"edges\":[]}}");
         }
-    "#,
-    )
-    .unwrap();
+    "#).unwrap();
     let binary = directory
         .path()
-        .join(format!("fake-dot{}", std::env::consts::EXE_SUFFIX));
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let compilation = Command::new(rustc)
+        .join(format!("fake-node{}", std::env::consts::EXE_SUFFIX));
+    let compilation = Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
         .arg(&source)
         .arg("-o")
         .arg(&binary)
@@ -177,41 +187,60 @@ fn injected_graphviz_checks_arguments_exit_and_nonempty_output() {
         "{}",
         String::from_utf8_lossy(&compilation.stderr)
     );
-    let dot_path = directory.path().join("日本語 space/nodes.dot");
     let svg_path = directory.path().join("日本語 space/nodes.svg");
-    write_with_dot(&example(), &dot_path, &svg_path, binary.as_os_str()).unwrap();
-    let svg = fs::read_to_string(&svg_path).unwrap();
-    assert!(svg.starts_with("<svg"));
-    for (title, expected) in [("FAIL", "fixture render error"), ("EMPTY", "empty SVG")] {
+    fs::create_dir_all(svg_path.parent().unwrap()).unwrap();
+    fs::write(&svg_path, "previous SVG").unwrap();
+    for (title, expected) in [
+        ("FAIL", "fixture ELK process error"),
+        ("EMPTY", "empty"),
+        ("INVALID", "JSON"),
+        ("INCOMPLETE", "scene"),
+    ] {
         let mut graph = example();
         graph.title = title.into();
-        let error = write_with_dot(&graph, &dot_path, &svg_path, binary.as_os_str()).unwrap_err();
-        assert!(error.contains(expected), "{error}");
-        assert_eq!(fs::read_to_string(&svg_path).unwrap(), svg);
-        assert_eq!(fs::read_to_string(&dot_path).unwrap(), graph.dot().unwrap());
+        let error = write_with_node(&graph, &svg_path, binary.as_os_str()).unwrap_err();
+        assert!(
+            error.to_lowercase().contains(&expected.to_lowercase()),
+            "{title}: {error}"
+        );
+        assert_eq!(fs::read_to_string(&svg_path).unwrap(), "previous SVG");
+        assert_eq!(fs::read_dir(svg_path.parent().unwrap()).unwrap().count(), 1);
     }
-    assert_eq!(fs::read_dir(svg_path.parent().unwrap()).unwrap().count(), 2);
 }
 
 #[test]
-fn real_graphviz_when_installed() {
-    let binary = std::env::var_os("XTASK_GRAPHVIZ_DOT").unwrap_or_else(|| "dot".into());
+fn real_elk_when_node_is_installed() {
+    let binary = std::env::var_os("XTASK_NODE").unwrap_or_else(|| "node".into());
     if !Command::new(&binary)
-        .arg("-V")
+        .arg("--version")
         .output()
         .is_ok_and(|output| output.status.success())
     {
-        eprintln!("Graphviz not available; optional integration check skipped");
+        eprintln!("Node not available; optional ELK integration check skipped");
         return;
     }
     let directory = tempfile::tempdir().unwrap();
     let svg_path = directory.path().join("nodes.svg");
-    write_with_dot(
-        &example(),
-        &directory.path().join("nodes.dot"),
-        &svg_path,
-        &binary,
-    )
-    .unwrap();
-    assert!(fs::read_to_string(svg_path).unwrap().contains("<svg"));
+    write_with_node(&example(), &svg_path, &binary).unwrap();
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    let svg = fs::read_to_string(svg_path).unwrap();
+    let document = roxmltree::Document::parse(&svg).unwrap();
+    assert_eq!(
+        document.root_element().attribute("data-layout-engine"),
+        Some("ELK")
+    );
+    assert_eq!(
+        document
+            .descendants()
+            .filter(|node| node.attribute("class") == Some("node"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        document
+            .descendants()
+            .filter(|node| node.attribute("class") == Some("edge"))
+            .count(),
+        2
+    );
 }
