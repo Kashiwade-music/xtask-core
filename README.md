@@ -135,6 +135,7 @@ policyの解析設定全体を、`Config.max_role_chars = Some(n)` は文字数�
 
 - Rust 2018 / 2021 / 2024に対応。通常構成と `cfg(test)` を別々に解析する。
 - `syn` による静的解析のため、型推論やmacro展開を完全には再現しない。未対応の構文・展開は原則エラーとする。
+- 組込みのinert属性・derive helper（`#[default]`）とtool属性（`rustfmt`/`clippy`/`diagnostic`/`rust_analyzer`）は展開なしで扱う。
 - Cargo依存解決は `--locked --offline`。事前にlockfileと依存キャッシュを準備する。
 - SVG配置にはNode.jsが必要。`PATH` または `XTASK_NODE` で指定する。
 - `elkjs 0.12.0` を同梱し、実行時のnpm・ネットワークアクセスは不要。

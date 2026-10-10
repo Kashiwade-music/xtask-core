@@ -320,6 +320,39 @@ fn custom_expansions_require_explicit_trust() {
 }
 
 #[test]
+fn builtin_inert_attributes_and_derive_helpers_need_no_expansion() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "#[derive(Default)] enum E { #[default] A, B } #[windows_subsystem = \"windows\"] fn f() {}",
+        )],
+        AnalysisOptions::default(),
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn tool_attributes_need_no_expansion() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "#[clippy::msrv = \"1.90\"] #[rustfmt::skip] #[rust_analyzer::skip]              #[diagnostic::on_unimplemented(message = \"m\")] trait T {}",
+        )],
+        AnalysisOptions::default(),
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn unknown_attributes_remain_diagnostics() {
+    let result = graph(
+        &[("lib.rs", "#[my_attr] #[other::tool] struct S;")],
+        AnalysisOptions::default(),
+    );
+    assert_eq!(result.diagnostics.len(), 2, "{:?}", result.diagnostics);
+}
+
+#[test]
 fn cfg_disabled_file_has_no_ghost_node_or_edges() {
     let result = graph(
         &[

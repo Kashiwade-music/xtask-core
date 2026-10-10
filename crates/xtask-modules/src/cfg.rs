@@ -172,11 +172,34 @@ pub(crate) fn expansion_diagnostics(
                 | "feature"
                 | "instruction_set"
                 | "target_feature"
-                | "rustfmt::skip"
-        ) && !options.trusted_attributes.contains(&name)
+                | "default"
+                | "global_allocator"
+                | "windows_subsystem"
+                | "panic_handler"
+                | "proc_macro"
+                | "proc_macro_derive"
+                | "proc_macro_attribute"
+                | "debugger_visualizer"
+                | "collapse_debuginfo"
+                | "no_builtins"
+                | "naked"
+        ) && !is_tool_attribute(meta.path())
+            && !options.trusted_attributes.contains(&name)
         {
             diagnostics.push(format!("attribute macro expansion is unsupported: {name}"));
         }
     }
     Ok(diagnostics)
+}
+
+/// Tool attributes (`rustfmt::`, `clippy::`, `diagnostic::`, `rust_analyzer::`)
+/// are inert for module analysis and need no expansion.
+fn is_tool_attribute(path: &syn::Path) -> bool {
+    path.segments.len() > 1
+        && path.segments.first().is_some_and(|segment| {
+            matches!(
+                segment.ident.to_string().as_str(),
+                "rustfmt" | "clippy" | "diagnostic" | "rust_analyzer"
+            )
+        })
 }
