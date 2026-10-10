@@ -19,12 +19,29 @@ pub(crate) fn analyze(
         .collect::<BTreeSet<_>>();
     for source in &sources {
         let owner = &source.module.id;
-        let table = tables.entry(owner.clone()).or_default();
         for item in &source.items {
             let inactive = matches!(item, Item::Mod(module) if !active_modules.contains(&format!("{owner}::{}", module.ident)));
             if inactive {
                 continue;
             }
+            if let Item::Macro(mac) = item
+                && mac.mac.path.is_ident("macro_rules")
+                && mac.attrs.iter().any(|a| a.path().is_ident("macro_export"))
+                && let Some((name, target)) = declaration(item, owner)
+            {
+                // #[macro_export] places the macro at the crate root, wherever it is defined.
+                strong
+                    .entry("crate".into())
+                    .or_default()
+                    .insert(name.clone());
+                tables
+                    .entry("crate".into())
+                    .or_default()
+                    .entry(name)
+                    .or_default()
+                    .insert(target);
+            }
+            let table = tables.entry(owner.clone()).or_default();
             if let Some((name, target)) = declaration(item, owner) {
                 strong
                     .entry(owner.clone())
@@ -45,6 +62,7 @@ pub(crate) fn analyze(
             }
         }
     }
+    let textual = textual_macros(&sources, &active_modules);
     let externs = sources
         .iter()
         .find(|s| s.module.id == "crate")
@@ -100,7 +118,7 @@ pub(crate) fn analyze(
             }
         }
     }
-    let opaque = crate::visitor::opaque_modules(&sources, &tables, options);
+    let opaque = crate::visitor::opaque_modules(&sources, &tables, &textual, options);
     let mut edges = BTreeSet::new();
     let mut diagnostics = BTreeSet::new();
     for source in &sources {
@@ -108,6 +126,7 @@ pub(crate) fn analyze(
         let mut visitor = References {
             module: &source.module.id,
             tables: &tables,
+            textual: &textual,
             options,
             opaque: &opaque,
             scopes: Vec::new(),
@@ -129,4 +148,51 @@ pub(crate) fn analyze(
         cycles,
         diagnostics: diagnostics.into_iter().collect(),
     })
+}
+
+/// `macro_rules!` names in textual scope per module: own definitions plus those
+/// that `#[macro_use] mod child;` adds to its parent. Declaration order is not modeled.
+fn textual_macros(sources: &[Source], active_modules: &BTreeSet<String>) -> Tables {
+    let mut textual = Tables::new();
+    let mut inherited = Vec::<(String, String)>::new();
+    for source in sources {
+        let owner = &source.module.id;
+        let table = textual.entry(owner.clone()).or_default();
+        for item in &source.items {
+            match item {
+                Item::Macro(mac) if mac.mac.path.is_ident("macro_rules") => {
+                    if let Some((name, target)) = declaration(item, owner) {
+                        table.entry(name).or_default().insert(target);
+                    }
+                }
+                Item::Mod(module)
+                    if module.attrs.iter().any(|a| a.path().is_ident("macro_use")) =>
+                {
+                    let child = format!("{owner}::{}", module.ident);
+                    if active_modules.contains(&child) {
+                        inherited.push((owner.clone(), child));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    // Finite monotone fixed point: macros flow through chains of #[macro_use] modules.
+    loop {
+        let mut changed = false;
+        for (parent, child) in &inherited {
+            let additions = textual.get(child).cloned().unwrap_or_default();
+            let table = textual.entry(parent.clone()).or_default();
+            for (name, targets) in additions {
+                let entry = table.entry(name).or_default();
+                let before = entry.len();
+                entry.extend(targets);
+                changed |= entry.len() != before;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    textual
 }

@@ -14,6 +14,8 @@ use syn::{
 pub(crate) struct References<'a> {
     pub(crate) module: &'a str,
     pub(crate) tables: &'a Tables,
+    /// Textual-scope `macro_rules!` names per module.
+    pub(crate) textual: &'a Tables,
     pub(crate) options: &'a AnalysisOptions,
     /// Modules whose trusted crate-local item macros may define items we cannot see.
     pub(crate) opaque: &'a BTreeSet<String>,
@@ -529,6 +531,7 @@ impl<'ast> Visit<'ast> for References<'_> {
                 self.module,
                 &item.mac.path,
                 self.tables,
+                self.textual,
                 Some(&self.symbols()),
             );
             if is_local_macro(&local_macro) {
@@ -555,8 +558,13 @@ impl<'ast> Visit<'ast> for References<'_> {
             .iter()
             .map(|s| s.ident.to_string())
             .collect::<Vec<_>>();
-        let local_macro =
-            local_macro_targets(self.module, &mac.path, self.tables, Some(&self.symbols()));
+        let local_macro = local_macro_targets(
+            self.module,
+            &mac.path,
+            self.tables,
+            self.textual,
+            Some(&self.symbols()),
+        );
         if is_local_macro(&local_macro) {
             self.edge(local_macro);
             if !self
@@ -771,6 +779,7 @@ fn local_macro_targets(
     module: &str,
     path: &syn::Path,
     tables: &Tables,
+    textual: &Tables,
     local: Option<&Symbols>,
 ) -> BTreeSet<Target> {
     let mut parts = path
@@ -781,7 +790,19 @@ fn local_macro_targets(
     if path.leading_colon.is_some() {
         parts.insert(0, String::new());
     }
-    resolve_path(module, &parts, tables, local, Some(Namespace::Macro))
+    let targets = resolve_path(module, &parts, tables, local, Some(Namespace::Macro));
+    if is_local_macro(&targets) || parts.len() != 1 || path.leading_colon.is_some() {
+        return targets;
+    }
+    // Bare names also see textual-scope macro_rules of this module and its ancestors.
+    let mut scope = Some(module);
+    while let Some(current) = scope {
+        if let Some(found) = textual.get(current).and_then(|t| t.get(&parts[0])) {
+            return found.clone();
+        }
+        scope = current.rsplit_once("::").map(|(parent, _)| parent);
+    }
+    targets
 }
 
 fn is_local_macro(targets: &BTreeSet<Target>) -> bool {
@@ -795,6 +816,7 @@ fn is_local_macro(targets: &BTreeSet<Target>) -> bool {
 pub(crate) fn opaque_modules(
     sources: &[loader::Source],
     tables: &Tables,
+    textual: &Tables,
     options: &AnalysisOptions,
 ) -> BTreeSet<String> {
     let mut opaque = BTreeSet::new();
@@ -813,6 +835,7 @@ pub(crate) fn opaque_modules(
                 &source.module.id,
                 &item.mac.path,
                 tables,
+                textual,
                 None,
             )) {
                 opaque.insert(source.module.id.clone());

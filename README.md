@@ -127,6 +127,8 @@ trusted_macros = ["proptest", "prop_assert", "prop_assert_eq"]
 
 `trusted_macros` は呼び出しの書かれたパス（`::` 連結、先頭 `::` なし）に完全一致する function-like macro の展開・tokenを解析しない仮定で、生成・内包される参照はsource-level解析の外になる。macroパス自体の参照は従来どおり解決する。crate内の `macro_rules` の呼出しにも適用され、定義moduleへの参照を記録する。item位置の場合、そのmodule内の未解決名はmoduleへの参照として扱う。
 
+crate内の `macro_rules` の名前解決は、bare名の呼出しでは呼出しmodule・祖先moduleの定義（`#[macro_use] mod` 経由を含む）を定義と呼出しの前後順を見ない近似で探し、`#[macro_export]` は定義moduleによらずcrate rootの名前として扱う。
+
 省略時はhost target・Cargo既定feature・追加cfgなしで解析する。
 `target`、`all_features`、`default_features` も指定できる。役割文字数は `[limits] max_role_chars` で変更する。
 Rust APIは `run(&Config)` で同じ処理を実行する。`Config.analysis = Some(AnalysisSettings { ... })` は

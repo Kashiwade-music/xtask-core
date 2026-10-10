@@ -532,6 +532,98 @@ fn trusted_local_macros_match_macro_export_and_crate_paths_exactly() {
 }
 
 #[test]
+fn textual_scope_macros_resolve_from_child_modules() {
+    let files = [(
+        "lib.rs",
+        r#"
+        macro_rules! ensure { ($e:expr) => { assert!($e) }; }
+        mod user { mod deep { fn f() { ensure!(true); } } }
+    "#,
+    )];
+    let result = graph(&files, trusting(&["ensure"]));
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(
+        edges(&result),
+        BTreeSet::from([("crate::user::deep", "crate")])
+    );
+    let result = graph(&files, AnalysisOptions::default());
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("local macro expansion is unsupported: ensure")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn macro_use_modules_extend_the_parent_textual_scope() {
+    let files = [
+        (
+            "lib.rs",
+            "#[macro_use] mod defs; mod plain { macro_rules! hidden { () => {}; } } mod user { fn f() { ensure!(true); hidden!(); } }",
+        ),
+        (
+            "defs.rs",
+            "macro_rules! ensure { ($e:expr) => { assert!($e) }; }",
+        ),
+    ];
+    let result = graph(&files, trusting(&["ensure", "hidden"]));
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    // Without #[macro_use], `hidden` is not in textual scope and creates no edge.
+    assert_eq!(
+        edges(&result),
+        BTreeSet::from([("crate::user", "crate::defs")])
+    );
+    let result = graph(&files, trusting(&["hidden"]));
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("local macro expansion is unsupported: ensure")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn exported_macros_live_at_the_crate_root_wherever_defined() {
+    let files = [(
+        "lib.rs",
+        r#"
+        mod defs {
+            #[macro_export]
+            macro_rules! ensure { ($e:expr) => { assert!($e) }; }
+            #[macro_export]
+            macro_rules! make { () => { pub fn generated() {} }; }
+        }
+        mod m { crate::make!(); }
+        mod user { fn f() { crate::ensure!(true); crate::m::generated(); } }
+    "#,
+    )];
+    let result = graph(&files, trusting(&["crate::ensure", "crate::make"]));
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(
+        edges(&result),
+        BTreeSet::from([
+            ("crate::m", "crate::defs"),
+            ("crate::user", "crate::defs"),
+            ("crate::user", "crate::m"),
+        ])
+    );
+    let result = graph(&files, AnalysisOptions::default());
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("local macro expansion is unsupported: crate::ensure")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
 fn builtin_inert_attributes_and_derive_helpers_need_no_expansion() {
     let result = graph(
         &[(
