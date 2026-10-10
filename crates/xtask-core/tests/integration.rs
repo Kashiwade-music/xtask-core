@@ -1,8 +1,7 @@
-//! Role: 公開APIとCLIを通した検査、設定切替、SVG出力を検証する。
-use std::fs;
-use std::process::Command as Process;
-
-use xtask_core::{Command, Config, analyze, run};
+//! Role: 単一check、公開API、policy設定、診断とSVG出力の結合を検証する。
+use std::{collections::BTreeSet, fs, process::Command as Process};
+use xtask_core::{Config, analyze, run};
+use xtask_workspace::AnalysisSettings;
 
 fn fixture(source: &str, policy: &str) -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
@@ -19,174 +18,70 @@ fn fixture(source: &str, policy: &str) -> tempfile::TempDir {
         policy,
     )
     .unwrap();
+    generate_lockfile(directory.path());
+    directory
+}
+
+fn generate_lockfile(root: &std::path::Path) {
     assert!(
-        Process::new(cargo())
+        Process::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
             .args(["generate-lockfile", "--offline"])
-            .current_dir(directory.path())
+            .current_dir(root)
             .status()
             .unwrap()
             .success()
     );
-    directory
 }
 
-fn cargo() -> std::ffi::OsString {
-    std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into())
-}
-
-#[test]
-fn read_only_check_reports_code_lines_and_cycles_in_separate_configurations() {
-    let directory = fixture(
-        "mod a { /*! Role: bへの参照を持つ循環の検査対象。 */ pub fn a() { crate::b::b(); } }\nmod b { /*! Role: aへの参照を持つ循環の検査対象。 */ pub fn b() { crate::a::a(); } }\npub fn root() {\n    a::a();\n}\n",
-        "[limits]\nmax_code_lines = 3\n",
-    );
-    let lock = fs::read(directory.path().join("Cargo.lock")).unwrap();
-    let report = run(&Config::new(directory.path()), Command::Check).unwrap();
-    assert!(!report.is_success());
-    assert_eq!(
-        report
-            .errors
-            .iter()
-            .filter(|error| error.contains("reference cycle"))
-            .count(),
-        2
-    );
-    assert!(
-        report
-            .errors
-            .iter()
-            .any(|error| error.contains("5 code lines (limit 3)"))
-    );
-    assert!(report.artifacts.is_empty());
-    assert!(!directory.path().join("architecture").exists());
-    assert_eq!(lock, fs::read(directory.path().join("Cargo.lock")).unwrap());
-}
-
-#[test]
-fn mutually_exclusive_feature_and_test_edges_do_not_form_cycles() {
-    let directory = fixture(
-        "mod a { /*! Role: left選択時にbを参照する。 */ pub fn a() { #[cfg(feature = \"left\")] crate::b::b(); } }\nmod b { /*! Role: left未選択時にaを参照する。 */ pub fn b() { #[cfg(not(feature = \"left\"))] crate::a::a(); } }\n#[cfg(test)] mod tests { /*! Role: テスト構成でaの関数を検証する。 */ #[test] fn smoke() { crate::a::a(); } }\n",
-        "[limits]\nmax_code_lines = 1000\n",
-    );
-    let mut config = Config::new(directory.path());
-    let report = run(&config, Command::Check).unwrap();
-    assert!(report.is_success(), "{:?}", report.errors);
-    config.default_features = false;
-    let report = run(&config, Command::Check).unwrap();
-    assert!(report.is_success(), "{:?}", report.errors);
-}
-
-#[test]
-fn tiny_consumer_calls_the_public_entrypoint_and_reports_invalid_arguments() {
-    let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
-        .args(["check", "--unknown"])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("usage:"));
-}
-
-#[test]
-fn roles_are_mandatory_for_active_modules_and_crate_roots() {
-    let directory = fixture("mod active {}\n#[cfg(any())] mod excluded {}", "");
-    let config = Config::new(directory.path());
-    let report = run(&config, Command::Check).unwrap();
-    assert!(!report.is_success());
-    assert!(
-        report.errors.iter().any(|error| {
-            error.contains("crate::active") && error.contains("missing module role")
-        })
-    );
-    assert!(
-        !report
-            .errors
-            .iter()
-            .any(|error| error.contains("crate::excluded"))
-    );
-    let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
-        .args(["check", "--root"])
-        .arg(directory.path())
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    fs::write(
-        directory.path().join("src/lib.rs"),
-        "mod documented {\n//! Role: 呼び出し対象を提供する。\npub fn run() {}\n}",
-    )
-    .unwrap();
-    let report = run(&config, Command::Check).unwrap();
-    assert!(!report.is_success());
-    assert!(
-        report
-            .errors
-            .iter()
-            .any(|error| { error.contains("(crate)") && error.contains("missing module role") })
-    );
-    assert!(
-        !report
-            .errors
-            .iter()
-            .any(|error| error.contains("crate::documented"))
-    );
-    assert!(!directory.path().join("architecture").exists());
-}
-
-#[test]
-fn dependency_export_does_not_require_policy_or_module_expansion() {
-    let directory = fixture("include!(\"not-available.rs\");", "");
-    fs::remove_file(directory.path().join("dev/xtask/policy/workspace.toml")).unwrap();
-    let binary = directory.path().join("missing-node-executable");
-    let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
-        .args(["deps-graph", "--root"])
-        .arg(directory.path())
-        .env("XTASK_NODE", binary)
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    assert!(!directory.path().join("architecture/crates.svg").exists());
-    assert!(!directory.path().join("architecture/crates.dot").exists());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Node"));
-}
-
-#[test]
-fn graph_export_defaults_to_architecture_with_combined_nested_module_diagrams() {
-    let node = std::env::var_os("XTASK_NODE").unwrap_or_else(|| "node".into());
-    if !Process::new(&node)
+fn available_node() -> Option<std::ffi::OsString> {
+    let binary = std::env::var_os("XTASK_NODE").unwrap_or_else(|| "node".into());
+    Process::new(&binary)
         .arg("--version")
         .output()
         .is_ok_and(|output| output.status.success())
-    {
-        return;
-    }
-    let directory = fixture(
-        "mod middle { /*! Role: leafへの公開窓口を提供する。 */ pub mod leaf { /*! Role: 呼び出し対象の関数を提供する。 */ pub fn f() {} } }\npub fn f() { middle::leaf::f(); }",
-        "",
-    );
-    let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
-        .args(["graphs", "--root"])
+        .then_some(binary)
+}
+
+fn check_cli(directory: &tempfile::TempDir, node: &std::ffi::OsStr) -> std::process::Output {
+    Process::new(env!("CARGO_BIN_EXE_xtask-core"))
+        .args(["check", "--root"])
         .arg(directory.path())
         .env("XTASK_NODE", node)
         .output()
-        .unwrap();
+        .unwrap()
+}
+
+fn module_svg(root: &std::path::Path, mode: &str) -> String {
+    fs::read_to_string(root.join(format!(
+        "architecture/modules/fixture/fixture-lib-{mode}.svg"
+    )))
+    .unwrap()
+}
+
+#[test]
+fn successful_check_alone_generates_crate_and_nested_module_diagrams() {
+    let Some(node) = available_node() else {
+        return;
+    };
+    let directory = fixture(
+        "mod middle { /*! Role: leafへの公開窓口を提供する。 */ pub mod leaf { /*! Role: 呼び出し対象を提供する。 */ pub fn f() {} } }\npub fn f() { middle::leaf::f(); }",
+        "",
+    );
+    let lock = fs::read(directory.path().join("Cargo.lock")).unwrap();
+    let output = check_cli(&directory, &node);
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
     let architecture = directory.path().join("architecture");
-    assert!(architecture.join("crates.svg").exists());
+    let crates = fs::read_to_string(architecture.join("crates.svg")).unwrap();
+    assert!(crates.contains("CLIの検査と図出力を検証する。"));
     assert!(!architecture.join("crates.dot").exists());
-    assert!(
-        fs::read_to_string(architecture.join("crates.svg"))
-            .unwrap()
-            .contains("CLIの検査と図出力を検証する。")
-    );
     for mode in ["normal", "test"] {
-        let stem = architecture.join(format!("modules/fixture/fixture-lib-{mode}"));
-        assert!(!stem.with_extension("dot").exists());
-        let svg = fs::read_to_string(stem.with_extension("svg")).unwrap();
+        let svg = module_svg(directory.path(), mode);
         assert!(svg.contains("leafへの公開窓口を提供する。"));
-        assert!(svg.contains("呼び出し対象の関数を提供する。"));
+        assert!(svg.contains("呼び出し対象を提供する。"));
         let document = roxmltree::Document::parse(&svg).unwrap();
         assert_eq!(
             document.root_element().attribute("data-layout-engine"),
@@ -218,72 +113,278 @@ fn graph_export_defaults_to_architecture_with_combined_nested_module_diagrams() 
             .count(),
         2
     );
+    assert_eq!(lock, fs::read(directory.path().join("Cargo.lock")).unwrap());
 }
 
 #[test]
-fn proc_macro_targets_include_their_builtin_cfg_in_both_modes() {
+fn failed_check_keeps_line_cycle_and_role_diagnostics_and_generates_diagrams() {
+    let Some(node) = available_node() else {
+        return;
+    };
     let directory = fixture(
-        "#[cfg(proc_macro)] mod a { /*! Role: proc_macro構成でbを参照する。 */ pub fn a() { crate::b::b(); } }\n#[cfg(proc_macro)] mod b { /*! Role: proc_macro構成でaを参照する。 */ pub fn b() { crate::a::a(); } }\n",
-        "[limits]\nmax_code_lines = 1000\n",
+        "mod a { pub fn a() { crate::b::b(); } }\nmod b { /*! Role: aへの参照を持つ循環の検査対象。 */ pub fn b() { crate::a::a(); } }\npub fn root() {\n    a::a();\n}\n",
+        "[limits]\nmax_code_lines = 3\n",
     );
-    let manifest = directory.path().join("Cargo.toml");
-    let mut text = fs::read_to_string(&manifest).unwrap();
-    text.push_str("\n[lib]\nproc-macro = true\n");
-    fs::write(manifest, text).unwrap();
-    let report = run(&Config::new(directory.path()), Command::Check).unwrap();
-    assert_eq!(
-        report
-            .errors
-            .iter()
-            .filter(|error| error.contains("reference cycle"))
-            .count(),
-        2,
-        "{:?}",
-        report.errors
+    let output = check_cli(&directory, &node);
+    assert_eq!(output.status.code(), Some(1));
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(errors.matches("reference cycle").count(), 2, "{errors}");
+    assert!(errors.contains("5 code lines (limit 3)"), "{errors}");
+    assert!(
+        errors.contains("crate::a") && errors.contains("missing module role"),
+        "{errors}"
     );
+    assert!(directory.path().join("architecture/crates.svg").exists());
+    for mode in ["normal", "test"] {
+        let svg = module_svg(directory.path(), mode);
+        assert!(svg.contains("crate::a"));
+        assert!(svg.contains("crate::b"));
+    }
+    // An invalid crate-root role must also preserve the drawable dependency DAG.
+    let root = directory.path().join("src/lib.rs");
+    let source = fs::read_to_string(&root).unwrap();
+    fs::write(root, source.split_once('\n').unwrap().1).unwrap();
+    fs::remove_file(directory.path().join("architecture/crates.svg")).unwrap();
+    for mode in ["normal", "test"] {
+        fs::remove_file(directory.path().join(format!(
+            "architecture/modules/fixture/fixture-lib-{mode}.svg"
+        )))
+        .unwrap();
+    }
+    let output = check_cli(&directory, &node);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("(crate)"));
+    assert!(directory.path().join("architecture/crates.svg").exists());
+    assert!(!module_svg(directory.path(), "normal").is_empty());
 }
 
 #[test]
-fn unsupported_editions_are_reported_instead_of_using_the_wrong_path_rules() {
-    let directory = fixture("mod a { /*! Role: edition検査の対象を提供する。 */ }", "");
+fn visibility_errors_do_not_prevent_the_dependency_diagram() {
+    let Some(node) = available_node() else {
+        return;
+    };
+    let directory = fixture(
+        "pub fn run() { provider::run(); }",
+        "[visible_to]\nprovider = []\n",
+    );
+    add_provider(&directory);
+    let output = check_cli(&directory, &node);
+    assert_eq!(output.status.code(), Some(1));
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        errors.contains("fixture")
+            && errors.contains("provider")
+            && errors.contains("visible only"),
+        "{errors}"
+    );
+    let svg = fs::read_to_string(directory.path().join("architecture/crates.svg")).unwrap();
+    let document = roxmltree::Document::parse(&svg).unwrap();
+    assert!(
+        document
+            .descendants()
+            .any(|node| node.attribute("class") == Some("edge")
+                && node.attribute("data-from") == Some("fixture")
+                && node.attribute("data-to") == Some("provider"))
+    );
+    assert!(!module_svg(directory.path(), "normal").is_empty());
+}
+
+fn add_provider(directory: &tempfile::TempDir) {
     let manifest = directory.path().join("Cargo.toml");
-    let text = fs::read_to_string(&manifest)
+    let mut source = fs::read_to_string(&manifest)
         .unwrap()
-        .replace("'2024'", "'2015'");
-    fs::write(manifest, text).unwrap();
-    let report = run(&Config::new(directory.path()), Command::Check).unwrap();
-    assert!(!report.is_success());
-    assert!(
-        report
-            .errors
-            .iter()
-            .any(|error| error.contains("editions") && error.contains("2015"))
-    );
+        .replace("[workspace]", "[workspace]\nmembers = ['provider']");
+    source.push_str("\n[dependencies]\nprovider = { path = 'provider' }\n");
+    fs::write(manifest, source).unwrap();
+    fs::create_dir_all(directory.path().join("provider/src")).unwrap();
+    fs::write(
+        directory.path().join("provider/Cargo.toml"),
+        "[package]\nname = 'provider'\nversion = '0.1.0'\nedition = '2024'\n",
+    )
+    .unwrap();
+    fs::write(
+        directory.path().join("provider/src/lib.rs"),
+        "//! Role: 他crateへの公開関数を提供する。\npub fn run() {}\n",
+    )
+    .unwrap();
+    generate_lockfile(directory.path());
 }
 
 #[test]
-fn disabled_unit_test_targets_do_not_add_test_configuration() {
+fn early_analysis_and_file_errors_do_not_hide_other_checks_or_the_crate_diagram() {
     let directory = fixture(
-        "#[cfg(test)] mod tests { /*! Role: テスト構成で生成ソースを読み込む。 */ include!(\"generated.rs\"); }",
-        "",
+        "pub fn run() { provider::run(); }",
+        "[limits]\nmax_code_lines = 3\n[analysis]\ntarget = 'nonexistent-xtask-target'\n[visible_to]\nprovider = []\n",
     );
-    let manifest = directory.path().join("Cargo.toml");
-    let mut text = fs::read_to_string(&manifest).unwrap();
-    text.push_str("\n[lib]\ntest = false\n");
-    fs::write(manifest, text).unwrap();
-    let report = run(&Config::new(directory.path()), Command::Check).unwrap();
-    assert!(report.is_success(), "{:?}", report.errors);
+    add_provider(&directory);
+    // Both files are deliberately undeclared: conventional source discovery
+    // must check them even though module analysis cannot reach either one.
+    fs::write(directory.path().join("src/a.rs"), "pub fn bad( {\n").unwrap();
+    fs::write(
+        directory.path().join("src/z.rs"),
+        "pub fn one() {}\npub fn two() {}\npub fn three() {}\npub fn four() {}\n",
+    )
+    .unwrap();
+    let node = available_node();
+    let binary = node.clone().unwrap_or_else(|| {
+        directory
+            .path()
+            .join("missing-node-executable")
+            .into_os_string()
+    });
+    let output = check_cli(&directory, &binary);
+    assert_eq!(output.status.code(), Some(1));
+    let errors = String::from_utf8_lossy(&output.stderr);
+    for expected in [
+        "module analysis",
+        "nonexistent-xtask-target",
+        "a.rs",
+        "cannot tokenize Rust source",
+        "z.rs",
+        "4 code lines (limit 3)",
+        "visible only",
+    ] {
+        assert!(errors.contains(expected), "{expected}: {errors}");
+    }
+    if node.is_some() {
+        let svg = fs::read_to_string(directory.path().join("architecture/crates.svg")).unwrap();
+        assert!(svg.contains("fixture"));
+        assert!(svg.contains("provider"));
+    }
+}
+
+#[test]
+fn diagram_runtime_failure_does_not_discard_check_diagnostics() {
+    let directory = fixture(
+        "mod a { pub fn a() { crate::b::b(); } }\nmod b { /*! Role: aを参照する。 */ pub fn b() { crate::a::a(); } }\npub fn root() {\na::a();\n}\n",
+        "[limits]\nmax_code_lines = 3\n",
+    );
+    let output = check_cli(
+        &directory,
+        directory.path().join("missing-node-executable").as_os_str(),
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let errors = String::from_utf8_lossy(&output.stderr);
+    for expected in [
+        "reference cycle",
+        "5 code lines (limit 3)",
+        "missing module role",
+        "Node",
+    ] {
+        assert!(errors.contains(expected), "{expected}: {errors}");
+    }
+    assert!(!directory.path().join("architecture/crates.svg").exists());
+}
+
+#[test]
+fn help_succeeds_and_old_commands_and_flags_are_rejected() {
+    for arguments in [vec!["--help"], vec!["-h"], vec!["check", "--help"]] {
+        let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
+            .args(&arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("check"));
+    }
+    for args in [
+        vec!["help"],
+        vec!["deps-graph"],
+        vec!["modules-graph"],
+        vec!["graphs"],
+        vec!["check", "--features", "left"],
+        vec!["check", "--cfg", "custom"],
+        vec!["check", "--max-role-chars", "160"],
+        vec!["check", "--no-tests"],
+        vec!["check", "--policy", "policy.toml"],
+        vec!["check", "--output", "diagrams"],
+        vec!["check", "--target", "target"],
+        vec!["check", "--all-features"],
+        vec!["check", "--no-default-features"],
+        vec!["check", "--trust-attribute", "preserve"],
+        vec!["check", "--trust-derive", "Custom"],
+        vec!["check", "--root"],
+    ] {
+        let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
+            .args(&args)
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("usage:"));
+    }
+}
+
+#[test]
+fn policy_analysis_is_used_and_api_analysis_replaces_all_of_it() {
+    let directory = fixture(
+        "#[preserve] struct S;\nmod a { /*! Role: left構成でbを参照する。 */ pub fn a() { #[cfg(feature=\"left\")] crate::b::b(); } }\nmod b { /*! Role: left未選択時にaを参照する。 */ pub fn b() { #[cfg(not(feature=\"left\"))] crate::a::a(); } }\n#[cfg(custom)] mod selected { /*! Role: policyで選択される。 */ }",
+        "[analysis]\ndefault_features = false\ncfg = ['custom']\ntrusted_attributes = ['preserve']\n",
+    );
+    let mut config = Config::new(directory.path());
+    let policy = analyze(&config).unwrap();
+    assert!(policy.report.is_success(), "{:?}", policy.report.errors);
+    assert_eq!(policy.targets.len(), 2);
     assert!(
-        report
-            .notes
+        policy.targets[0]
+            .graph
+            .modules
             .iter()
-            .any(|note| note.contains("1 target/configuration graphs"))
+            .any(|module| module.id == "crate::selected")
     );
+    assert!(
+        policy.targets[0]
+            .graph
+            .edges
+            .iter()
+            .any(|edge| edge.from == "crate::b" && edge.to == "crate::a")
+    );
+    assert!(!directory.path().join("architecture").exists());
+    config.analysis = Some(AnalysisSettings::default());
+    let overridden = analyze(&config).unwrap();
+    assert!(
+        overridden
+            .report
+            .errors
+            .iter()
+            .any(|error| error.contains("preserve"))
+    );
+    assert!(overridden.targets.iter().all(|target| {
+        target
+            .graph
+            .modules
+            .iter()
+            .all(|module| module.id != "crate::selected")
+    }));
+    assert!(
+        overridden.targets[0]
+            .graph
+            .edges
+            .iter()
+            .any(|edge| edge.from == "crate::a" && edge.to == "crate::b")
+    );
+    config.analysis = Some(AnalysisSettings {
+        trusted_attributes: BTreeSet::from(["preserve".into()]),
+        ..Default::default()
+    });
+    let overridden = analyze(&config).unwrap();
+    assert!(
+        overridden.report.is_success(),
+        "{:?}",
+        overridden.report.errors
+    );
+    if available_node().is_some() {
+        let report = run(&config).unwrap();
+        assert!(report.is_success(), "{:?}", report.errors);
+        assert_eq!(report.artifacts.len(), 3);
+    }
 }
 
 fn long_role_fixture(policy: &str) -> tempfile::TempDir {
     let directory = fixture("", policy);
-    // Replace the fixture's ordinary root role, rather than adding a duplicate.
+    // Replace the fixture's root Role rather than adding a second declaration.
     fs::write(
         directory.path().join("src/lib.rs"),
         format!(
@@ -295,201 +396,349 @@ fn long_role_fixture(policy: &str) -> tempfile::TempDir {
     .unwrap();
     fs::write(
         directory.path().join("src/external.rs"),
-        format!("//! Role: {}\npub fn run() {{}}\n", "外".repeat(90)),
+        format!("//! Role: {}\npub fn run() {{}}\n", "外".repeat(90),),
     )
     .unwrap();
     directory
 }
 
-fn available_node() -> Option<std::ffi::OsString> {
-    let binary = std::env::var_os("XTASK_NODE").unwrap_or_else(|| "node".into());
-    Process::new(&binary)
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-        .then_some(binary)
-}
-
 #[test]
-fn policy_role_limit_reaches_checks_analysis_and_combined_graph_exports() {
+fn role_limits_reach_analysis_and_all_check_diagrams_with_api_precedence() {
     let directory = long_role_fixture("");
     let mut config = Config::new(directory.path());
-    config.tests = false;
-    let report = run(&config, Command::Check).unwrap();
-    for module in ["(crate)", "crate::external", "crate::inline"] {
+    let default = analyze(&config).unwrap();
+    for id in ["(crate)", "crate::external", "crate::inline"] {
         assert!(
-            report
+            default
+                .report
                 .errors
                 .iter()
-                .any(|error| error.contains(module) && error.contains("80")),
-            "{module}: {:?}",
-            report.errors
+                .any(|error| error.contains(id) && error.contains("80")),
+            "{id}: {:?}",
+            default.report.errors
         );
     }
     fs::write(&config.policy, "[limits]\nmax_role_chars = 160\n").unwrap();
-    let report = run(&config, Command::Check).unwrap();
-    assert!(report.is_success(), "{:?}", report.errors);
-    let analysis = analyze(&config).unwrap();
-    assert!(analysis.report.is_success(), "{:?}", analysis.report.errors);
-    assert_eq!(analysis.targets.len(), 1);
-    for (id, description) in [
-        ("crate", "根".repeat(90)),
-        ("crate::external", "外".repeat(90)),
-        ("crate::inline", "内".repeat(90)),
-    ] {
-        assert!(analysis.targets[0].graph.modules.iter().any(|module| {
-            module.id == id && module.role.as_deref() == Some(description.as_str())
-        }));
+    let expanded = analyze(&config).unwrap();
+    assert!(expanded.report.is_success(), "{:?}", expanded.report.errors);
+    for target in &expanded.targets {
+        for (id, role) in [
+            ("crate", "根".repeat(90)),
+            ("crate::external", "外".repeat(90)),
+            ("crate::inline", "内".repeat(90)),
+        ] {
+            assert!(
+                target
+                    .graph
+                    .modules
+                    .iter()
+                    .any(|module| module.id == id && module.role.as_deref() == Some(role.as_str()))
+            );
+        }
     }
-    let Some(node) = available_node() else {
-        return;
-    };
-    let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
-        .args(["graphs", "--root"])
-        .arg(directory.path())
-        .arg("--no-tests")
-        .env("XTASK_NODE", node)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let architecture = directory.path().join("architecture");
-    let crates = fs::read_to_string(architecture.join("crates.svg")).unwrap();
-    assert!(crates.contains(&"根".repeat(90)));
-    let modules =
-        fs::read_to_string(architecture.join("modules/fixture/fixture-lib-normal.svg")).unwrap();
-    for role in ["根".repeat(90), "外".repeat(90), "内".repeat(90)] {
-        assert!(modules.contains(&role), "module graph lost role: {role}");
-    }
-}
-
-#[test]
-fn explicit_api_role_limit_overrides_policy_in_checks_and_analysis() {
-    let directory = long_role_fixture("[limits]\nmax_role_chars = 160\n");
-    let mut config = Config::new(directory.path());
-    config.tests = false;
     config.max_role_chars = Some(80);
-    let report = run(&config, Command::Check).unwrap();
-    assert!(!report.is_success());
-    assert!(report.errors.iter().any(|error| error.contains("80")));
-    let analysis = analyze(&config).unwrap();
-    assert!(!analysis.report.is_success());
+    assert!(!analyze(&config).unwrap().report.is_success());
+    if available_node().is_some() {
+        config.max_role_chars = None;
+        let report = run(&config).unwrap();
+        assert!(report.is_success(), "{:?}", report.errors);
+        assert_eq!(report.artifacts.len(), 3);
+        let crates = fs::read_to_string(directory.path().join("architecture/crates.svg")).unwrap();
+        assert!(crates.contains(&"根".repeat(90)));
+        for mode in ["normal", "test"] {
+            let svg = module_svg(directory.path(), mode);
+            for role in ["根".repeat(90), "外".repeat(90), "内".repeat(90)] {
+                assert!(svg.contains(&role), "missing role {role}");
+            }
+        }
+    }
     fs::write(&config.policy, "[limits]\nmax_role_chars = 80\n").unwrap();
     config.max_role_chars = Some(160);
-    let report = run(&config, Command::Check).unwrap();
-    assert!(report.is_success(), "{:?}", report.errors);
-    let analysis = analyze(&config).unwrap();
-    assert!(analysis.report.is_success(), "{:?}", analysis.report.errors);
+    assert!(analyze(&config).unwrap().report.is_success());
+    if available_node().is_some() {
+        let report = run(&config).unwrap();
+        assert!(report.is_success(), "{:?}", report.errors);
+    }
 }
 
 #[test]
-fn cli_role_limit_can_narrow_and_expand_the_policy_limit() {
-    let directory = long_role_fixture("[limits]\nmax_role_chars = 160\n");
-    let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
-        .args(["check", "--root"])
-        .arg(directory.path())
-        .args(["--no-tests", "--max-role-chars", "80"])
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("80"));
-    fs::write(
-        directory.path().join("dev/xtask/policy/workspace.toml"),
-        "[limits]\nmax_role_chars = 80\n",
-    )
-    .unwrap();
-    let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
-        .args(["check", "--root"])
-        .arg(directory.path())
-        .args(["--no-tests", "--max-role-chars", "160"])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-#[test]
-fn absent_policy_keeps_analysis_and_graph_defaults_and_allows_overrides() {
+fn analysis_is_output_free_and_policy_optional_but_check_requires_policy() {
     let directory = long_role_fixture("");
     let mut config = Config::new(directory.path());
-    config.tests = false;
     fs::remove_file(&config.policy).unwrap();
-    let analysis = analyze(&config).unwrap();
-    assert!(!analysis.report.is_success());
-    assert!(
-        analysis
-            .report
-            .errors
-            .iter()
-            .any(|error| error.contains("80"))
-    );
+    assert!(!analyze(&config).unwrap().report.is_success());
     config.max_role_chars = Some(160);
-    let analysis = analyze(&config).unwrap();
-    assert!(analysis.report.is_success(), "{:?}", analysis.report.errors);
-    // Checks still require a policy even when the role limit is explicit.
-    assert!(run(&config, Command::Check).is_err());
-    let Some(node) = available_node() else {
-        return;
-    };
-    for command in ["deps-graph", "modules-graph"] {
-        let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
-            .args([command, "--root"])
-            .arg(directory.path())
-            .arg("--no-tests")
-            .env("XTASK_NODE", &node)
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(1), "{command}");
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("80"),
-            "{command}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
-            .args([command, "--root"])
-            .arg(directory.path())
-            .args(["--no-tests", "--max-role-chars", "160"])
-            .env("XTASK_NODE", &node)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{command}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-}
-
-#[test]
-fn invalid_role_limits_are_rejected_at_cli_policy_and_api_boundaries() {
-    for value in ["0", "-1", "invalid"] {
-        let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
-            .args(["check", "--max-role-chars", value])
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(2), "{value}");
-        assert!(String::from_utf8_lossy(&output.stderr).contains("max-role-chars"));
-    }
-    let directory = long_role_fixture("");
-    let mut config = Config::new(directory.path());
-    config.tests = false;
+    assert!(analyze(&config).unwrap().report.is_success());
+    assert!(!directory.path().join("architecture").exists());
+    assert!(run(&config).is_err());
     for value in ["0", "-1", "'invalid'"] {
         fs::write(
             &config.policy,
             format!("[limits]\nmax_role_chars = {value}\n"),
         )
         .unwrap();
-        assert!(run(&config, Command::Check).is_err(), "{value}");
+        assert!(run(&config).is_err(), "{value}");
         assert!(analyze(&config).is_err(), "{value}");
     }
     fs::write(&config.policy, "").unwrap();
     config.max_role_chars = Some(0);
-    assert!(run(&config, Command::Check).is_err());
+    assert!(run(&config).is_err());
     assert!(analyze(&config).is_err());
+}
+
+#[test]
+fn active_modules_require_their_own_roles_and_cfg_excluded_modules_do_not() {
+    let directory = fixture("mod active {}\n#[cfg(any())] mod excluded {}", "");
+    let config = Config::new(directory.path());
+    let analysis = analyze(&config).unwrap();
+    assert!(
+        analysis
+            .report
+            .errors
+            .iter()
+            .any(|error| error.contains("crate::active") && error.contains("missing module role"))
+    );
+    assert!(
+        analysis
+            .report
+            .errors
+            .iter()
+            .all(|error| !error.contains("crate::excluded"))
+    );
+    fs::write(
+        directory.path().join("src/lib.rs"),
+        "mod documented {\n//! Role: 呼び出し対象を提供する。\npub fn run() {}\n}",
+    )
+    .unwrap();
+    let analysis = analyze(&config).unwrap();
+    assert!(
+        analysis
+            .report
+            .errors
+            .iter()
+            .any(|error| error.contains("(crate)") && error.contains("missing module role"))
+    );
+    assert!(
+        analysis
+            .report
+            .errors
+            .iter()
+            .all(|error| !error.contains("crate::documented"))
+    );
+}
+
+#[test]
+fn proc_macro_cfg_is_present_in_both_modes_and_cargo_test_false_is_respected() {
+    let directory = fixture(
+        "#[cfg(proc_macro)] mod a { /*! Role: bを参照する。 */ pub fn a() { crate::b::b(); } }\n#[cfg(proc_macro)] mod b { /*! Role: aを参照する。 */ pub fn b() { crate::a::a(); } }",
+        "",
+    );
+    let manifest = directory.path().join("Cargo.toml");
+    let original = fs::read_to_string(&manifest).unwrap();
+    fs::write(&manifest, format!("{original}\n[lib]\nproc-macro = true\n")).unwrap();
+    let analysis = analyze(&Config::new(directory.path())).unwrap();
+    assert_eq!(
+        analysis
+            .report
+            .errors
+            .iter()
+            .filter(|error| error.contains("reference cycle"))
+            .count(),
+        2
+    );
+    fs::write(&manifest, format!("{original}\n[lib]\ntest = false\n")).unwrap();
+    fs::write(directory.path().join("src/lib.rs"), "//! Role: 通常構成の解析を検証する。\n#[cfg(test)] mod tests { /*! Role: テスト構成で生成ソースを読み込む。 */ include!(\"generated.rs\"); }").unwrap();
+    let analysis = analyze(&Config::new(directory.path())).unwrap();
+    assert!(analysis.report.is_success(), "{:?}", analysis.report.errors);
+    assert_eq!(analysis.targets.len(), 1);
+    assert!(!analysis.targets[0].test);
+}
+
+#[test]
+fn unsupported_editions_are_reported_instead_of_using_wrong_path_rules() {
+    let directory = fixture("", "");
+    let manifest = directory.path().join("Cargo.toml");
+    let source = fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("'2024'", "'2015'");
+    fs::write(manifest, source).unwrap();
+    let analysis = analyze(&Config::new(directory.path())).unwrap();
+    assert!(
+        analysis
+            .report
+            .errors
+            .iter()
+            .any(|error| error.contains("editions") && error.contains("2015"))
+    );
+}
+
+#[test]
+fn policy_output_paths_and_api_overrides_resolve_from_the_repository_root() {
+    let Some(node) = available_node() else {
+        return;
+    };
+    let directory = fixture("pub fn run() {}", "output = 'docs/architecture diagrams'\n");
+    let mut config = Config::new(directory.path());
+    assert_eq!(config.output, None);
+    let output = check_cli(&directory, &node);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let relative = directory.path().join("docs/architecture diagrams");
+    for file in [
+        "crates.svg",
+        "modules/fixture/fixture-lib-normal.svg",
+        "modules/fixture/fixture-lib-test.svg",
+    ] {
+        assert!(relative.join(file).exists(), "{file}");
+    }
+    assert!(!directory.path().join("architecture").exists());
+    let absolute = directory.path().join("absolute policy diagrams");
+    let value = absolute
+        .to_string_lossy()
+        .replace('\\', "/")
+        .replace('"', "\\\"");
+    fs::write(&config.policy, format!("output = \"{value}\"\n")).unwrap();
+    let report = run(&config).unwrap();
+    assert!(report.is_success(), "{:?}", report.errors);
+    assert_eq!(report.artifacts.len(), 3);
+    assert!(
+        report
+            .artifacts
+            .iter()
+            .all(|path| path.starts_with(&absolute))
+    );
+    config.output = Some("api relative diagrams".into());
+    let report = run(&config).unwrap();
+    assert!(report.is_success(), "{:?}", report.errors);
+    assert!(
+        report
+            .artifacts
+            .iter()
+            .all(|path| path.starts_with(directory.path().join("api relative diagrams")))
+    );
+    let override_absolute = directory.path().join("api absolute diagrams");
+    config.output = Some(override_absolute.clone());
+    let report = run(&config).unwrap();
+    assert!(report.is_success(), "{:?}", report.errors);
+    assert!(
+        report
+            .artifacts
+            .iter()
+            .all(|path| path.starts_with(&override_absolute))
+    );
+}
+
+fn immutable_snapshot(
+    root: &std::path::Path,
+    files: &[&str],
+) -> Vec<(std::path::PathBuf, Vec<u8>, std::time::SystemTime)> {
+    files
+        .iter()
+        .map(|name| {
+            let path = root.join(name);
+            let bytes = fs::read(&path).unwrap();
+            let modified = fs::metadata(&path).unwrap().modified().unwrap();
+            (path, bytes, modified)
+        })
+        .collect()
+}
+
+#[test]
+fn no_write_runs_every_rule_without_node_or_filesystem_mutation() {
+    for violation in [false, true] {
+        let source = if violation {
+            "mod a { pub fn a() { crate::b::b(); } }\nmod b { /*! Role: aを参照する。 */ pub fn b() { crate::a::a(); } }\npub fn root() {\na::a(); provider::run();\n}\n"
+        } else {
+            "pub fn run() {}"
+        };
+        let mut policy =
+            "output = 'never created/output dir'\n[limits]\nmax_code_lines = 3\n".to_string();
+        if violation {
+            policy.push_str("[visible_to]\nprovider = []\n");
+        }
+        let directory = fixture(source, &policy);
+        if violation {
+            add_provider(&directory);
+        }
+        fs::create_dir_all(directory.path().join("architecture/modules/fixture")).unwrap();
+        fs::write(
+            directory.path().join("architecture/crates.svg"),
+            "existing crate SVG sentinel",
+        )
+        .unwrap();
+        fs::write(
+            directory
+                .path()
+                .join("architecture/modules/fixture/fixture-lib-normal.svg"),
+            "existing module SVG sentinel",
+        )
+        .unwrap();
+        let mut files = vec![
+            "src/lib.rs",
+            "Cargo.toml",
+            "Cargo.lock",
+            "dev/xtask/policy/workspace.toml",
+            "architecture/crates.svg",
+            "architecture/modules/fixture/fixture-lib-normal.svg",
+        ];
+        if violation {
+            files.extend(["provider/Cargo.toml", "provider/src/lib.rs"]);
+        }
+        let before = immutable_snapshot(directory.path(), &files);
+        let mut config = Config::new(directory.path());
+        config.no_write = true;
+        let report = run(&config).unwrap();
+        assert_eq!(report.is_success(), !violation, "{:?}", report.errors);
+        assert!(report.artifacts.is_empty());
+        if violation {
+            for expected in [
+                "reference cycle",
+                "missing module role",
+                "5 code lines (limit 3)",
+                "visible only",
+            ] {
+                assert!(
+                    report.errors.iter().any(|error| error.contains(expected)),
+                    "{expected}: {:?}",
+                    report.errors
+                );
+            }
+        }
+        let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
+            .args(["check", "--root"])
+            .arg(directory.path())
+            .arg("--no-write")
+            .env(
+                "XTASK_NODE",
+                directory
+                    .path()
+                    .join("nonexistent-node-must-not-be-launched"),
+            )
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(if violation { 1 } else { 0 }),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("Node"));
+        assert_eq!(before, immutable_snapshot(directory.path(), &files));
+        assert!(!directory.path().join("never created").exists());
+        assert!(
+            !directory
+                .path()
+                .join("architecture/modules/fixture/fixture-lib-test.svg")
+                .exists()
+        );
+        assert_eq!(
+            fs::read_dir(directory.path().join("architecture/modules/fixture"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
 }

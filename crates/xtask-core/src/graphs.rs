@@ -14,9 +14,15 @@ pub(crate) fn dependencies(
     report: &mut Report,
     max_role_chars: usize,
 ) -> Result<(), String> {
-    let roles = crate_roles(workspace, max_role_chars)?;
+    let roles = crate_roles(workspace, max_role_chars, report);
     let (graph, layout) = dependency_graph(workspace, &roles)?;
-    write(&graph, &layout, &config.output.join("crates"), report)
+    write(
+        &graph,
+        &layout,
+        &config.output_dir().join("crates"),
+        report,
+        config.no_write,
+    )
 }
 
 fn primary_target(package: &Package) -> Result<&Target, String> {
@@ -58,21 +64,29 @@ fn primary_target(package: &Package) -> Result<&Target, String> {
 fn crate_roles(
     workspace: &Workspace,
     max_role_chars: usize,
-) -> Result<BTreeMap<String, String>, String> {
+    report: &mut Report,
+) -> BTreeMap<String, String> {
     workspace
         .packages
         .iter()
         .map(|package| {
-            let target = primary_target(package)?;
-            let role = xtask_modules::crate_role_with_limit(&target.src_path, max_role_chars)
-                .map_err(|error| {
-                    format!(
-                        "package `{}` ({}): {error}",
-                        package.name,
-                        target.src_path.display()
+            let role = primary_target(package)
+                .and_then(|target| {
+                    xtask_modules::crate_role_with_limit(&target.src_path, max_role_chars).map_err(
+                        |error| {
+                            format!(
+                                "package `{}` ({}): {error}",
+                                package.name,
+                                target.src_path.display()
+                            )
+                        },
                     )
-                })?;
-            Ok((package.name.clone(), role))
+                })
+                .unwrap_or_else(|error| {
+                    report.errors.push(error);
+                    "[役割未記載]".into()
+                });
+            (package.name.clone(), role)
         })
         .collect()
 }
@@ -202,52 +216,85 @@ pub(crate) fn modules(
     report: &mut Report,
 ) -> Result<(), String> {
     for target in targets {
-        let graph = Graph {
-            title: format!(
-                "{}::{} ({}, {}): module dependencies",
+        if let Err(error) = module_diagram(config, target, report) {
+            let source = target
+                .graph
+                .modules
+                .iter()
+                .filter(|module| module.parent.is_none())
+                .min_by(|left, right| left.file.cmp(&right.file))
+                .or_else(|| target.graph.modules.first())
+                .map_or_else(
+                    || "<no module source>".into(),
+                    |module| module.file.display().to_string(),
+                );
+            report.errors.push(format!(
+                "module diagram {}::{} ({}, {}, {source}): {error}",
                 target.package,
                 target.target,
                 target.kind,
                 if target.test { "test" } else { "normal" }
-            ),
-            nodes: target
-                .graph
-                .modules
-                .iter()
-                .map(|module| Node {
-                    id: module.id.clone(),
-                    label: "(self)".into(),
-                })
-                .collect(),
-            edges: target
-                .graph
-                .edges
-                .iter()
-                .map(|edge| Edge {
-                    from: edge.from.clone(),
-                    to: edge.to.clone(),
-                    label: None,
-                })
-                .collect(),
-        };
-        let layout = Layout {
-            direction: Direction::LeftToRight,
-            clusters: module_clusters(&target.graph)?,
-            ..Layout::default()
-        };
-        let directory = config
-            .output
-            .join("modules")
-            .join(safe_name(&target.package));
-        let name = format!(
-            "{}-{}-{}",
-            safe_name(&target.target),
-            safe_name(&target.kind),
-            if target.test { "test" } else { "normal" }
-        );
-        write(&graph, &layout, &directory.join(name), report)?;
+            ));
+        }
     }
     Ok(())
+}
+
+fn module_diagram(
+    config: &Config,
+    target: &TargetGraph,
+    report: &mut Report,
+) -> Result<(), String> {
+    let graph = Graph {
+        title: format!(
+            "{}::{} ({}, {}): module dependencies",
+            target.package,
+            target.target,
+            target.kind,
+            if target.test { "test" } else { "normal" }
+        ),
+        nodes: target
+            .graph
+            .modules
+            .iter()
+            .map(|module| Node {
+                id: module.id.clone(),
+                label: "(self)".into(),
+            })
+            .collect(),
+        edges: target
+            .graph
+            .edges
+            .iter()
+            .map(|edge| Edge {
+                from: edge.from.clone(),
+                to: edge.to.clone(),
+                label: None,
+            })
+            .collect(),
+    };
+    let layout = Layout {
+        direction: Direction::LeftToRight,
+        clusters: module_clusters(&target.graph)?,
+        ..Layout::default()
+    };
+    let directory = config
+        .output_dir()
+        .join("modules")
+        .join(safe_name(&target.package));
+    let name = format!(
+        "{}-{}-{}",
+        safe_name(&target.target),
+        safe_name(&target.kind),
+        if target.test { "test" } else { "normal" }
+    );
+    write(
+        &graph,
+        &layout,
+        &directory.join(name),
+        report,
+        config.no_write,
+    )
 }
 
 fn module_clusters(graph: &ModuleGraph) -> Result<Vec<Cluster>, String> {
@@ -330,8 +377,21 @@ fn safe_name(name: &str) -> String {
         .collect()
 }
 
-fn write(graph: &Graph, layout: &Layout, stem: &Path, report: &mut Report) -> Result<(), String> {
+fn write(
+    graph: &Graph,
+    layout: &Layout,
+    stem: &Path,
+    report: &mut Report,
+    no_write: bool,
+) -> Result<(), String> {
     let svg = stem.with_extension("svg");
+    if no_write {
+        graph.layout_request(layout)?;
+        report
+            .notes
+            .push(format!("validated {} (no-write)", svg.display()));
+        return Ok(());
+    }
     xtask_graph::write_with_layout(graph, layout, &svg)?;
     report.notes.push(format!("wrote {}", svg.display()));
     report.artifacts.push(svg);

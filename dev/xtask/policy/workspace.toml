@@ -1,5 +1,11 @@
+output = "architecture"
+
 [limits]
 max_code_lines = 1000
+
+[analysis]
+trusted_attributes = ["serde"]
+trusted_derives = ["Deserialize", "Serialize"]
 
 [visible_to]
 xtask-source = ["xtask-core"]

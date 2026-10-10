@@ -276,7 +276,13 @@ fn crate_roles_read_only_primary_root_and_report_package_file_context() {
         target("app", "bin", &binary),
         target("library", "rlib", &library),
     ];
-    let roles = crate_roles(&workspace, xtask_modules::DEFAULT_MAX_ROLE_CHARS).unwrap();
+    let mut report = Report::default();
+    let roles = crate_roles(
+        &workspace,
+        xtask_modules::DEFAULT_MAX_ROLE_CHARS,
+        &mut report,
+    );
+    assert!(report.is_success());
     assert_eq!(roles["app"], "共通の公開機能を提供する");
     let (graph, _) = dependency_graph(&workspace, &roles).unwrap();
     assert_eq!(graph.nodes[0].label, "app\n共通の公開機能を提供する");
@@ -285,10 +291,191 @@ fn crate_roles_read_only_primary_root_and_report_package_file_context() {
         "//! Role: \npub fn invalid_role() {}\n",
     ] {
         std::fs::write(&library, source).unwrap();
-        let error = crate_roles(&workspace, xtask_modules::DEFAULT_MAX_ROLE_CHARS).unwrap_err();
+        let mut report = Report::default();
+        let roles = crate_roles(
+            &workspace,
+            xtask_modules::DEFAULT_MAX_ROLE_CHARS,
+            &mut report,
+        );
+        assert_eq!(roles["app"], "[役割未記載]");
+        assert_eq!(report.errors.len(), 1);
+        assert!(!report.is_success());
+        let (graph, _) = dependency_graph(&workspace, &roles).unwrap();
+        assert_eq!(graph.nodes[0].label, "app\n[役割未記載]");
+        let error = &report.errors[0];
         assert!(
             error.contains("package `app`") && error.contains("lib.rs"),
             "{error}"
         );
     }
+}
+
+#[test]
+fn crate_roles_keep_every_package_when_primary_targets_are_missing() {
+    let workspace = workspace(&["first", "later"], &[("first", "later", "normal")]);
+    let mut report = Report::default();
+    let roles = crate_roles(
+        &workspace,
+        xtask_modules::DEFAULT_MAX_ROLE_CHARS,
+        &mut report,
+    );
+    assert_eq!(roles.len(), 2);
+    assert!(roles.values().all(|role| role == "[役割未記載]"));
+    assert_eq!(report.errors.len(), 2);
+    assert!(report.errors[0].contains("first") && report.errors[0].contains("Cargo.toml"));
+    assert!(report.errors[1].contains("later") && report.errors[1].contains("no primary"));
+    let (graph, layout) = dependency_graph(&workspace, &roles).unwrap();
+    assert_eq!(graph.nodes.len(), 2);
+    assert_eq!(graph.edges.len(), 1);
+    assert_eq!(layout.ranks, vec![vec!["first"], vec!["later"]]);
+}
+
+#[test]
+fn module_diagrams_keep_errors_and_continue_to_later_targets() {
+    let binary = std::env::var_os("XTASK_NODE").unwrap_or_else(|| "node".into());
+    if !std::process::Command::new(&binary)
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        eprintln!("Node unavailable; optional module-diagram continuation test skipped");
+        return;
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let config = Config::new(directory.path());
+    let mut malformed = modules(&[("crate::bad", Some("missing"))]);
+    malformed.modules[0].file = directory.path().join("bad.rs");
+    let mut bad_edge = modules(&[]);
+    bad_edge.edges.push(Reference {
+        from: "absent".into(),
+        to: "missing".into(),
+    });
+    let targets = vec![
+        TargetGraph {
+            package: "app".into(),
+            target: "bad".into(),
+            kind: "lib".into(),
+            test: false,
+            graph: malformed,
+        },
+        TargetGraph {
+            package: "app".into(),
+            target: "bad-edge".into(),
+            kind: "lib".into(),
+            test: true,
+            graph: bad_edge,
+        },
+        TargetGraph {
+            package: "app".into(),
+            target: "good".into(),
+            kind: "bin".into(),
+            test: false,
+            graph: modules(&[]),
+        },
+    ];
+    let mut report = Report::default();
+    super::modules(&config, &targets, &mut report).unwrap();
+    assert_eq!(report.errors.len(), 2);
+    assert!(
+        report.errors[0].contains("app::bad")
+            && report.errors[0].contains("bad.rs")
+            && report.errors[0].contains("missing parent")
+    );
+    assert!(
+        report.errors[1].contains("app::bad-edge")
+            && report.errors[1].contains("test")
+            && report.errors[1].contains("missing node")
+    );
+    let expected = config.output_dir().join("modules/app/good-bin-normal.svg");
+    assert_eq!(report.artifacts.as_slice(), std::slice::from_ref(&expected));
+    assert!(std::fs::read_to_string(&expected).unwrap().contains("<svg"));
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|note| note.contains("good-bin-normal.svg"))
+    );
+    assert!(
+        !config
+            .output_dir()
+            .join("modules/app/bad-lib-normal.svg")
+            .exists()
+    );
+    assert!(
+        !config
+            .output_dir()
+            .join("modules/app/bad-edge-lib-test.svg")
+            .exists()
+    );
+}
+
+#[test]
+fn no_write_validates_graphs_without_creating_outputs_or_artifacts() {
+    let directory = tempfile::tempdir().unwrap();
+    let blocker = directory.path().join("not-a-directory");
+    std::fs::write(&blocker, "existing data").unwrap();
+    let stem = blocker.join("graph");
+    let mut report = Report::default();
+    write(
+        &Graph::default(),
+        &Layout::default(),
+        &stem,
+        &mut report,
+        true,
+    )
+    .unwrap();
+    assert!(report.artifacts.is_empty());
+    assert_eq!(report.notes.len(), 1);
+    assert!(report.notes[0].contains("validated") && report.notes[0].contains("(no-write)"));
+    assert_eq!(std::fs::read_to_string(&blocker).unwrap(), "existing data");
+    let invalid = Graph {
+        edges: vec![Edge {
+            from: "missing".into(),
+            to: "absent".into(),
+            label: None,
+        }],
+        ..Graph::default()
+    };
+    let untouched = directory.path().join("uncreated").join("bad");
+    assert!(
+        write(&invalid, &Layout::default(), &untouched, &mut report, true)
+            .unwrap_err()
+            .contains("missing node")
+    );
+    assert!(!untouched.parent().unwrap().exists());
+    assert!(report.artifacts.is_empty());
+    assert_eq!(report.notes.len(), 1);
+}
+
+#[test]
+fn no_write_modules_preserve_errors_and_validate_later_targets() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut config = Config::new(directory.path());
+    config.no_write = true;
+    let targets = vec![
+        TargetGraph {
+            package: "app".into(),
+            target: "bad".into(),
+            kind: "lib".into(),
+            test: false,
+            graph: modules(&[("crate", Some("missing"))]),
+        },
+        TargetGraph {
+            package: "app".into(),
+            target: "good".into(),
+            kind: "lib".into(),
+            test: false,
+            graph: modules(&[]),
+        },
+    ];
+    let mut report = Report::default();
+    super::modules(&config, &targets, &mut report).unwrap();
+    assert_eq!(report.errors.len(), 1);
+    assert!(report.errors[0].contains("missing parent"));
+    assert!(report.artifacts.is_empty());
+    assert_eq!(report.notes.len(), 1);
+    assert!(
+        report.notes[0].contains("good-lib-normal.svg") && report.notes[0].contains("(no-write)")
+    );
+    assert!(!config.output_dir().exists());
 }

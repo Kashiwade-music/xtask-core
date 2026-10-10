@@ -51,6 +51,8 @@ xtask = "run --package xtask --"
 **`dev/xtask/policy/workspace.toml`**
 
 ```toml
+output = "architecture"
+
 [limits]
 max_code_lines = 1000
 max_role_chars = 80
@@ -79,19 +81,20 @@ mod config {
 外部ファイルのmoduleはファイル先頭に記述する。`mod name;` 側の外側ドキュメントでは代用できない。
 
 説明は1文字以上、設定上限以下。同等の `/*! Role: ... */` や `#![doc = "Role: ..."]` も使用できる。
+未記載・不正な役割は図で `[役割未記載]` と表示し、検査エラーとして報告する。
 
 ## コマンド
 
 ```sh
-cargo xtask check           # ルール検査
-cargo xtask deps-graph      # crate依存図
-cargo xtask modules-graph   # module階層・参照図
-cargo xtask graphs          # 全SVG生成
+cargo xtask check
 ```
 
-`check` はSVGを変更しない。module解析に失敗・循環があれば非ゼロ終了する。
+`check` 一つでコード行数・依存制限・役割宣言・module参照循環を検査し、crate依存図と全module図を生成する。
+検査違反があっても生成可能な図は出力し、診断をまとめて非ゼロ終了する。図の生成に失敗した場合もエラーとする。
+通常構成とCargoで有効なテスト構成は毎回解析する。
 
-SVGの出力先は既定で `architecture/`。
+SVGの出力先はpolicyのトップレベル `output` で指定する。省略時は `architecture/`。
+相対パスはリポジトリルート基準で、絶対パスも使用できる（例：`output = "docs/architecture"`）。
 
 ```text
 architecture/
@@ -101,14 +104,32 @@ architecture/
     └── <target>-<kind>-test.svg
 ```
 
-主なオプション：
+CIでは `--no-write` でファイルを変更せずに検査できる。
+全ルールと図の構造を検査し、SVG生成・書き込みを省くためNode.jsは不要。既存SVGとの差分検査は行わない。
+別リポジトリを指定する場合は `--root` を使用する。
 
-- `--all-features` / `--no-default-features` / `--features`：feature指定
-- `--target` / `--cfg`：target・cfg指定
-- `--no-tests`：テスト構成を省略
-- `--root` / `--policy` / `--output`：パス変更
-- `--max-role-chars`：役割文字数の上限を上書き
-- `--trust-attribute` / `--trust-derive`：既知のmacro展開を信頼
+```sh
+cargo xtask check --root ../other-repo
+cargo xtask check --no-write
+cargo xtask check --help
+```
+
+target・feature・cfgや既知macroの解析設定は、policyファイルの `[analysis]` に記述する。
+
+```toml
+[analysis]
+features = ["app/feature"]
+cfg = ["custom_cfg"]
+trusted_attributes = ["serde"]
+trusted_derives = ["Deserialize", "Serialize"]
+```
+
+省略時はhost target・Cargo既定feature・追加cfgなしで解析する。
+`target`、`all_features`、`default_features` も指定できる。役割文字数は `[limits] max_role_chars` で変更する。
+Rust APIは `run(&Config)` で同じ処理を実行する。`Config.analysis = Some(AnalysisSettings { ... })` は
+policyの解析設定全体を、`Config.max_role_chars = Some(n)` は文字数上限を上書きする。
+`Config.output = Some(path)` はpolicyの出力先を上書きし、`Config.no_write = true` はCIと同じ検査を行う。
+出力不要の解析だけを行う場合はRust APIの `analyze(&Config)` を使用する。
 
 ## 解析・実行上の注意
 
@@ -124,6 +145,5 @@ architecture/
 cargo test --locked --offline --workspace
 cargo fmt --all -- --check
 cargo clippy --locked --offline --workspace --all-targets -- -D warnings
-cargo xtask check --trust-derive Deserialize --trust-derive Serialize --trust-attribute serde
-cargo xtask graphs --trust-derive Deserialize --trust-derive Serialize --trust-attribute serde
+cargo xtask check
 ```

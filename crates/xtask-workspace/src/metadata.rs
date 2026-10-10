@@ -202,6 +202,7 @@ impl Workspace {
                 "--format-version",
                 "1",
                 "--no-deps",
+                "--locked",
                 "--offline",
             ])
             .current_dir(root)

@@ -1,10 +1,10 @@
-//! Role: Cargo依存の同一性、feature解決、制限値と可視性ポリシーを検証する。
+//! Role: Cargo依存の同一性、feature解決、SVG出力先・解析設定・制限値・可視性を検証する。
 use std::collections::BTreeMap;
 use std::fs;
 
 use serde_json::json;
 
-use crate::{Package, Policy, Workspace};
+use crate::{AnalysisSettings, Package, Policy, Workspace};
 
 fn fixture() -> tempfile::TempDir {
     let fixture_root =
@@ -222,6 +222,142 @@ fn role_character_limit_rejects_zero_negative_and_non_integer_values() {
     let mut policy = Policy::default();
     policy.limits.max_role_chars = 0;
     assert!(policy.validate().unwrap_err().contains("max_role_chars"));
+}
+
+#[test]
+fn analysis_settings_default_to_host_with_cargo_default_features() {
+    let expected = AnalysisSettings {
+        target: None,
+        features: vec![],
+        all_features: false,
+        default_features: true,
+        cfg: vec![],
+        trusted_attributes: Default::default(),
+        trusted_derives: Default::default(),
+    };
+    assert_eq!(AnalysisSettings::default(), expected);
+    assert_eq!(Policy::default().analysis, expected);
+    for text in ["", "[analysis]\n", "[limits]\nmax_code_lines=20\n"] {
+        assert_eq!(Policy::from_toml(text).unwrap().analysis, expected);
+    }
+    let policy = Policy::from_toml("[analysis]\nfeatures=['app/feature']\n").unwrap();
+    assert_eq!(policy.analysis.features, ["app/feature"]);
+    assert!(policy.analysis.default_features);
+    assert!(!policy.analysis.all_features);
+    assert!(policy.analysis.target.is_none());
+}
+
+#[test]
+fn analysis_settings_parse_cargo_cfg_and_trusted_expansions_with_other_rules() {
+    let policy = Policy::from_toml(concat!(
+        "[analysis]\ntarget='x86_64-pc-windows-msvc'\n",
+        "features=['app/left','right']\nall_features=true\ndefault_features=false\n",
+        "cfg=['custom','platform=\"demo\"']\n",
+        "trusted_attributes=['macro_lib::second','macro_lib::first','macro_lib::second']\n",
+        "trusted_derives=['derive_lib::Marker']\n",
+        "[limits]\nmax_code_lines=25\nmax_role_chars=160\n",
+        "[visible_to]\ncore=['app*']\n"
+    ))
+    .unwrap();
+    assert_eq!(
+        policy.analysis,
+        AnalysisSettings {
+            target: Some("x86_64-pc-windows-msvc".into()),
+            features: vec!["app/left".into(), "right".into()],
+            all_features: true,
+            default_features: false,
+            cfg: vec!["custom".into(), "platform=\"demo\"".into()],
+            trusted_attributes: ["macro_lib::first".into(), "macro_lib::second".into()].into(),
+            trusted_derives: ["derive_lib::Marker".into()].into(),
+        }
+    );
+    assert_eq!(policy.limits.max_code_lines, 25);
+    assert_eq!(policy.limits.max_role_chars, 160);
+    assert!(policy.visible("core", "app-shell"));
+}
+
+#[test]
+fn analysis_settings_reject_unknown_fields_and_incorrect_types() {
+    for setting in [
+        "tests=false",
+        "unknown=[]",
+        "target=42",
+        "target=['host']",
+        "features='left'",
+        "features=[1]",
+        "all_features=1",
+        "default_features='false'",
+        "cfg='custom'",
+        "cfg=[true]",
+        "trusted_attributes='macro_lib::attr'",
+        "trusted_attributes=[1]",
+        "trusted_derives=true",
+        "trusted_derives=[false]",
+    ] {
+        let text = format!("[analysis]\n{setting}\n");
+        assert!(Policy::from_toml(&text).is_err(), "accepted {text}");
+    }
+    assert!(Policy::from_toml("analysis=[]\n").is_err());
+}
+
+#[test]
+fn svg_output_defaults_with_and_without_other_policy_tables() {
+    let expected = std::path::Path::new("architecture");
+    assert_eq!(Policy::default().output, expected);
+    for text in [
+        "",
+        "[limits]\nmax_role_chars=160\n",
+        "[analysis]\nfeatures=['left']\n",
+        "[visible_to]\ncore=['app*']\n",
+        "[limits]\nmax_code_lines=25\n[analysis]\ndefault_features=false\n[visible_to]\ncore=[]\n",
+    ] {
+        assert_eq!(Policy::from_toml(text).unwrap().output, expected);
+    }
+}
+
+#[test]
+fn svg_output_accepts_relative_absolute_and_space_containing_paths() {
+    for path in [
+        "docs/architecture",
+        "docs/SVG output",
+        " docs/architecture ",
+    ] {
+        let policy = Policy::from_toml(&format!("output='{path}'\n")).unwrap();
+        assert_eq!(policy.output, std::path::Path::new(path));
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let absolute = directory.path().join("SVG output");
+    assert!(absolute.is_absolute());
+    let policy = Policy::from_toml(&format!(
+        "output='{}'\n[limits]\nmax_role_chars=160\n[analysis]\nall_features=true\n[visible_to]\ncore=['app*']\n",
+        absolute.display()
+    )).unwrap();
+    assert_eq!(policy.output, absolute);
+    assert_eq!(policy.limits.max_role_chars, 160);
+    assert!(policy.analysis.all_features);
+    assert!(policy.visible("core", "app-shell"));
+}
+
+#[test]
+fn svg_output_rejects_blank_paths_wrong_types_and_unknown_fields() {
+    for text in [
+        "output=''\n",
+        "output='  '\n",
+        "output=\"\\t\\n \"\n",
+        "output=12\n",
+        "output=true\n",
+        "output=[]\n",
+        "output=['architecture']\n",
+        "[output]\npath='architecture'\n",
+        "output='architecture'\nunknown=true\n",
+    ] {
+        assert!(Policy::from_toml(text).is_err(), "accepted {text}");
+    }
+    let policy = Policy {
+        output: "\t ".into(),
+        ..Policy::default()
+    };
+    assert!(policy.validate().unwrap_err().contains("output"));
 }
 
 #[test]

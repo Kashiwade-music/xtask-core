@@ -2,97 +2,85 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use crate::{Command, Config, run};
+use crate::{Config, run};
 
-const USAGE: &str = "usage: xtask <check|deps-graph|modules-graph|graphs> [--root PATH] [--policy PATH] [--output PATH] [--max-role-chars N] [--target TRIPLE] [--features LIST] [--all-features] [--no-default-features] [--cfg VALUE] [--no-tests] [--trust-attribute PATH] [--trust-derive PATH]";
+const USAGE: &str =
+    "usage: xtask check [--root PATH] [--no-write] [--help|-h]\n       xtask --help|-h";
 
-/// Parse command-line arguments, excluding the executable name.
+/// Parse arguments excluding the executable name. Help also yields a valid
+/// configuration; the CLI entrypoint displays usage before invoking the check.
 pub fn parse_args(
     root: impl AsRef<Path>,
     arguments: impl IntoIterator<Item = String>,
-) -> Result<(Config, Command), String> {
+) -> Result<Config, String> {
     let mut arguments = arguments.into_iter();
-    let command = match arguments.next().as_deref() {
-        Some("check") => Command::Check,
-        Some("deps-graph") => Command::Dependencies,
-        Some("modules-graph") => Command::Modules,
-        Some("graphs") => Command::Graphs,
-        _ => return Err(USAGE.into()),
-    };
     let mut config = Config::new(root);
-    let mut policy = None;
-    let mut output = None;
+    match arguments.next().as_deref() {
+        Some("check") => {}
+        Some("--help" | "-h") => {
+            if let Some(argument) = arguments.next() {
+                return Err(format!(
+                    "unexpected argument `{argument}` after help\n{USAGE}"
+                ));
+            }
+            return Ok(config);
+        }
+        Some(command) => return Err(format!("unknown command `{command}`\n{USAGE}")),
+        None => return Err(format!("missing command `check`\n{USAGE}")),
+    }
+    let mut root_seen = false;
+    let mut help_seen = false;
+    let mut no_write = false;
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--root" => {
-                config = Config {
-                    root: value(&mut arguments, &argument)?.into(),
-                    ..config
+                if root_seen {
+                    return Err(format!("duplicate --root option\n{USAGE}"));
                 }
+                let value = arguments
+                    .next()
+                    .filter(|value| !value.is_empty() && !value.starts_with('-'))
+                    .ok_or_else(|| format!("--root requires a path\n{USAGE}"))?;
+                config = Config::new(value);
+                root_seen = true;
             }
-            "--policy" => policy = Some(value(&mut arguments, &argument)?),
-            "--output" => output = Some(value(&mut arguments, &argument)?),
-            "--max-role-chars" => {
-                let limit = value(&mut arguments, &argument)?;
-                config.max_role_chars = Some(
-                    limit
-                        .parse::<usize>()
-                        .ok()
-                        .filter(|limit| *limit > 0)
-                        .ok_or_else(|| {
-                            format!("{argument} requires a positive integer\n{USAGE}")
-                        })?,
-                );
+            "--help" | "-h" => {
+                if help_seen {
+                    return Err(format!("duplicate help option\n{USAGE}"));
+                }
+                help_seen = true;
             }
-            "--target" => config.target = Some(value(&mut arguments, &argument)?),
-            "--features" => config.features.extend(
-                value(&mut arguments, &argument)?
-                    .split([',', ' '])
-                    .filter(|name| !name.is_empty())
-                    .map(str::to_owned),
-            ),
-            "--cfg" => config.cfg.push(value(&mut arguments, &argument)?),
-            "--trust-attribute" => {
-                config
-                    .trusted_attributes
-                    .insert(value(&mut arguments, &argument)?);
+            "--no-write" => {
+                if no_write {
+                    return Err(format!("duplicate --no-write option\n{USAGE}"));
+                }
+                no_write = true;
             }
-            "--trust-derive" => {
-                config
-                    .trusted_derives
-                    .insert(value(&mut arguments, &argument)?);
-            }
-            "--all-features" => config.all_features = true,
-            "--no-default-features" => config.default_features = false,
-            "--no-tests" => config.tests = false,
             _ => return Err(format!("unknown argument `{argument}`\n{USAGE}")),
         }
     }
-    config.policy = config
-        .root
-        .join(policy.unwrap_or_else(|| "dev/xtask/policy/workspace.toml".into()));
-    config.output = config
-        .root
-        .join(output.unwrap_or_else(|| "architecture".into()));
-    Ok((config, command))
-}
-
-fn value(arguments: &mut impl Iterator<Item = String>, option: &str) -> Result<String, String> {
-    arguments
-        .next()
-        .ok_or_else(|| format!("{option} requires a value\n{USAGE}"))
+    config.no_write = no_write;
+    Ok(config)
 }
 
 /// Entrypoint for the consumer's tiny `dev/xtask/src/main.rs`.
 pub fn main(root: impl AsRef<Path>) -> ExitCode {
-    let (config, command) = match parse_args(root, std::env::args().skip(1)) {
+    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    let config = match parse_args(root, arguments.clone()) {
         Ok(parsed) => parsed,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::from(2);
         }
     };
-    let report = match run(&config, command) {
+    if arguments
+        .iter()
+        .any(|argument| matches!(argument.as_str(), "--help" | "-h"))
+    {
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
+    let report = match run(&config) {
         Ok(report) => report,
         Err(error) => {
             eprintln!("error: {error}");
@@ -116,60 +104,131 @@ pub fn main(root: impl AsRef<Path>) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    //! Role: CLI引数の検証と、パス・feature設定の反映を検証する。
-
+    //! Role: checkだけのCLI、既定設定、root再設定とヘルプ引数を検証する。
     use super::*;
 
     #[test]
-    fn root_overrides_rebase_default_paths_and_features_accumulate() {
-        let args = [
-            "check",
-            "--root",
-            "repo",
-            "--features",
-            "one,two",
-            "--features",
-            "three",
-            "--no-default-features",
-        ];
-        let (config, command) = parse_args("old", args.map(str::to_owned)).unwrap();
-        assert_eq!(command, Command::Check);
-        assert_eq!(config.output, Path::new("repo/architecture"));
+    fn check_uses_default_configuration() {
+        let config = parse_args("repo", ["check".into()]).unwrap();
+        assert_eq!(config.root, Path::new("repo"));
         assert_eq!(
             config.policy,
             Path::new("repo/dev/xtask/policy/workspace.toml")
         );
-        assert_eq!(config.features, ["one", "two", "three"]);
-        assert!(!config.default_features);
+        assert_eq!(config.output, None);
+        assert!(!config.no_write);
+        assert_eq!(config.max_role_chars, None);
+        assert!(config.analysis.is_none());
     }
 
     #[test]
-    fn bad_arguments_return_usage_errors() {
-        for args in [
-            vec![],
-            vec!["check", "--output"],
-            vec!["check", "--typo"],
-            vec!["check", "--max-role-chars"],
-            vec!["check", "--max-role-chars", "0"],
-            vec!["check", "--max-role-chars", "-1"],
-            vec!["check", "--max-role-chars", "many"],
-            vec!["check", "--max-role-chars", "9999999999999999999999999999"],
-            vec!["nope"],
+    fn root_override_recreates_configuration_and_default_paths() {
+        let config = parse_args("old", ["check", "--root", "repo"].map(str::to_owned)).unwrap();
+        assert_eq!(config.root, Path::new("repo"));
+        assert_eq!(config.output, None);
+        assert!(!config.no_write);
+        assert_eq!(
+            config.policy,
+            Path::new("repo/dev/xtask/policy/workspace.toml")
+        );
+    }
+
+    #[test]
+    fn no_write_survives_root_override_in_either_order() {
+        for arguments in [
+            vec!["check", "--no-write", "--root", "repo"],
+            vec!["check", "--root", "repo", "--no-write"],
         ] {
-            assert!(parse_args(".", args.into_iter().map(str::to_owned)).is_err());
+            let config = parse_args("old", arguments.into_iter().map(str::to_owned)).unwrap();
+            assert!(config.no_write);
+            assert_eq!(config.root, Path::new("repo"));
+            assert_eq!(
+                config.policy,
+                Path::new("repo/dev/xtask/policy/workspace.toml")
+            );
+            assert_eq!(config.output, None);
+        }
+        assert!(
+            parse_args("old", ["check", "--no-write"].map(str::to_owned))
+                .unwrap()
+                .no_write
+        );
+    }
+
+    #[test]
+    fn duplicate_no_write_returns_usage_error() {
+        for arguments in [
+            vec!["check", "--no-write", "--no-write"],
+            vec!["check", "--no-write", "--root", "repo", "--no-write"],
+        ] {
+            let error = parse_args("old", arguments.into_iter().map(str::to_owned)).unwrap_err();
+            assert!(error.contains("duplicate --no-write"));
+            assert!(error.contains(USAGE));
         }
     }
 
     #[test]
-    fn role_limit_overrides_survive_root_changes_and_accept_values_above_default() {
-        let (default, _) = parse_args(".", ["check".into()]).unwrap();
-        assert_eq!(default.max_role_chars, None);
-        let (config, _) = parse_args(
-            ".",
-            ["graphs", "--max-role-chars", "160", "--root", "repo"].map(str::to_owned),
+    fn removed_commands_and_options_are_rejected() {
+        for command in ["deps-graph", "modules-graph", "graphs", "nope"] {
+            let error = parse_args(".", [command.to_owned()]).unwrap_err();
+            assert!(error.contains("unknown command"));
+            assert!(error.contains(USAGE));
+        }
+        for option in [
+            "--policy",
+            "--output",
+            "--max-role-chars",
+            "--target",
+            "--features",
+            "--all-features",
+            "--no-default-features",
+            "--cfg",
+            "--no-tests",
+            "--trust-attribute",
+            "--trust-derive",
+        ] {
+            let error = parse_args(".", ["check", option].map(str::to_owned)).unwrap_err();
+            assert!(error.contains("unknown argument"));
+            assert!(error.contains(USAGE));
+        }
+    }
+
+    #[test]
+    fn missing_and_surplus_arguments_return_usage_errors() {
+        for arguments in [
+            vec![],
+            vec!["check", "--root"],
+            vec!["check", "--root", "--help"],
+            vec!["check", "--root", ""],
+            vec!["check", "extra"],
+            vec!["check", "--typo"],
+            vec!["check", "--root", "one", "--root", "two"],
+            vec!["--help", "extra"],
+            vec!["check", "--help", "--help"],
+            vec!["check", "--no-write", "true"],
+        ] {
+            let error = parse_args(".", arguments.into_iter().map(str::to_owned)).unwrap_err();
+            assert!(error.contains(USAGE));
+        }
+    }
+
+    #[test]
+    fn help_is_accepted_on_its_own_or_with_check() {
+        for arguments in [
+            vec!["--help"],
+            vec!["-h"],
+            vec!["check", "--help"],
+            vec!["check", "-h"],
+        ] {
+            let config =
+                parse_args("not-present", arguments.into_iter().map(str::to_owned)).unwrap();
+            assert_eq!(config.root, Path::new("not-present"));
+        }
+        let config = parse_args(
+            "old",
+            ["check", "--help", "--root", "repo"].map(str::to_owned),
         )
         .unwrap();
-        assert_eq!(config.max_role_chars, Some(160));
         assert_eq!(config.root, Path::new("repo"));
     }
 }

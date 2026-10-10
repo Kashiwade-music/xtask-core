@@ -1,4 +1,4 @@
-//! Role: workspace情報とリポジトリ固有の可視性ポリシーを公開する。
+//! Role: workspace情報とリポジトリ固有の解析条件・制限・可視性設定を公開する。
 //! Cargo workspace declarations and the shared visibility policy.
 //!
 //! Edges include every declared normal, development, build, and target-specific
@@ -12,6 +12,6 @@ mod policy;
 #[cfg(test)]
 mod tests;
 
-pub use policy::{Limits, Policy};
+pub use policy::{AnalysisSettings, Limits, Policy};
 
 pub use model::{Dependency, Package, Target, Workspace};
