@@ -219,6 +219,28 @@ fn dev_is_dotted_with_label_and_protected_true_arc() {
     assert_eq!(halo.attribute("stroke-dasharray"), None);
 }
 
+fn bridge_dashes(scene: &Scene) -> Vec<Option<String>> {
+    let output = render(scene).unwrap();
+    let document = roxmltree::Document::parse(&output).unwrap();
+    document
+        .descendants()
+        .filter(|node| node.attribute("class") == Some("bridge"))
+        .map(|node| node.attribute("stroke-dasharray").map(str::to_owned))
+        .collect()
+}
+
+#[test]
+fn bridge_dash_follows_the_style_of_the_edge_that_jumps() {
+    // In the fixture, edge `h` jumps over edge `v`.
+    let mut scene = fixture();
+    scene.edges[1].style = EdgeStyle::Dev;
+    assert_eq!(bridge_dashes(&scene), vec![None]);
+    scene.edges[0].style = EdgeStyle::Dev;
+    assert_eq!(bridge_dashes(&scene), vec![Some("0 3.5".to_owned())]);
+    scene.edges[1].style = EdgeStyle::Normal;
+    assert_eq!(bridge_dashes(&scene), vec![Some("0 3.5".to_owned())]);
+}
+
 #[test]
 fn renderer_rejects_invalid_scene_and_vertical_box_ports() {
     let mut scene = fixture();
