@@ -1,4 +1,4 @@
-//! Role: SVGの階層・接続・波線・交差ジャンプと不正な形状を検証する。
+//! Role: SVGの階層・接続・点線・交差ジャンプと不正な形状を検証する。
 use xtask_layout::{EdgeStyle, Point, Scene, SceneEdge, SceneLabel, SceneNode, SceneRegion};
 
 use super::crossings::crossings;
@@ -153,7 +153,7 @@ fn nested_regions_escape_text_and_share_wrapped_line_measurements() {
 }
 
 #[test]
-fn dev_has_real_waves_label_and_protected_true_arc() {
+fn dev_is_dotted_with_label_and_protected_true_arc() {
     let mut scene = fixture();
     scene.edges[0].style = EdgeStyle::Dev;
     scene.edges[0].label = Some(SceneLabel {
@@ -172,23 +172,51 @@ fn dev_has_real_waves_label_and_protected_true_arc() {
             node.attribute("class") == Some("edge") && node.attribute("data-edge-id") == Some("h")
         })
         .unwrap();
-    let data = edge
+    let route = edge
         .descendants()
         .find(|node| node.has_tag_name("path"))
-        .unwrap()
-        .attribute("d")
         .unwrap();
+    assert_eq!(route.attribute("stroke-dasharray"), Some("0 3.5"));
+    assert_eq!(route.attribute("stroke-linecap"), Some("round"));
+    let data = route.attribute("d").unwrap();
     assert!(data.starts_with("M40.000,80.000"));
     assert!(data.ends_with(" L260.000,80.000"));
-    assert!(data.matches(" L").count() > 100);
     assert!(data.contains(" A"));
+    // Same geometry as a normal edge: a handful of L/A commands, no wave.
+    assert!(data.matches(" L").count() <= 2);
+    assert!(!data.contains(",78."));
+    assert!(!data.contains(",82."));
+    let normal_output = render(&fixture()).unwrap();
+    let normal_document = roxmltree::Document::parse(&normal_output).unwrap();
+    let normal_route = normal_document
+        .descendants()
+        .find(|node| {
+            node.attribute("class") == Some("edge") && node.attribute("data-edge-id") == Some("h")
+        })
+        .unwrap()
+        .descendants()
+        .find(|node| node.has_tag_name("path"))
+        .unwrap();
+    assert_eq!(normal_route.attribute("d"), Some(data));
+    assert_eq!(normal_route.attribute("stroke-dasharray"), None);
+    assert_eq!(normal_route.attribute("stroke-linecap"), None);
     assert!(
         document
             .descendants()
             .any(|node| node.has_tag_name("text") && node.text() == Some("dev"))
     );
-    assert!(data.contains(",78."));
-    assert!(data.contains(",82."));
+    let bridges: Vec<_> = document
+        .descendants()
+        .filter(|node| node.attribute("class") == Some("bridge"))
+        .collect();
+    assert_eq!(bridges.len(), 1);
+    assert_eq!(bridges[0].attribute("stroke-dasharray"), Some("0 3.5"));
+    assert_eq!(bridges[0].attribute("stroke-linecap"), Some("round"));
+    let halo = document
+        .descendants()
+        .find(|node| node.attribute("class") == Some("bridge-halo"))
+        .unwrap();
+    assert_eq!(halo.attribute("stroke-dasharray"), None);
 }
 
 #[test]
@@ -279,7 +307,7 @@ fn geometry_path(points: &[(f64, f64)], group: usize) -> Path {
         .iter()
         .map(|&(x, y)| GeometryPoint { x, y })
         .collect();
-    route::build(&points, group, false).unwrap()
+    route::build(&points, group).unwrap()
 }
 
 fn corner_path(second: bool, group: usize) -> Path {
@@ -306,7 +334,6 @@ fn corner_path(second: bool, group: usize) -> Path {
         .collect();
     Path {
         group,
-        dev: false,
         segments: vec![
             Segment {
                 start: p[0],
@@ -344,15 +371,13 @@ fn dense_crossings_shrink_bridges_and_preserve_point_order() {
 }
 
 #[test]
-fn curve_crossings_trim_q_exactly_and_keep_dev_arc() {
-    let mut paths = vec![corner_path(false, 0), corner_path(true, 1)];
+fn curve_crossings_trim_q_exactly_and_keep_arc() {
+    let paths = vec![corner_path(false, 0), corner_path(true, 1)];
     let jumps = crossings(&paths, &[]);
     assert_eq!(jumps[0].len(), 1);
     let output = drawing::draw(&paths[0], &jumps[0]).unwrap();
     assert_eq!(output.matches(" A").count(), 1);
     assert_eq!(output.matches(" Q").count(), 2);
-    paths[0].dev = true;
-    let output = drawing::draw(&paths[0], &jumps[0]).unwrap();
     assert!(output.starts_with("M0.000,0.000"));
     assert!(output.ends_with(" L50.000,40.000"));
     assert!(output.contains(" A"));
@@ -364,7 +389,6 @@ fn both_internal_joins_and_neighboring_crossings_are_not_lost_or_duplicated() {
     let first = corner_path(false, 0);
     let second = Path {
         group: 1,
-        dev: false,
         segments: vec![
             Segment {
                 start: p(44.0, -40.0),
@@ -422,7 +446,6 @@ fn tangential_curves_and_repeated_curve_geometry_have_no_false_bridge() {
     let p = |x, y| GeometryPoint { x, y };
     let path = |start, control, end, group| Path {
         group,
-        dev: false,
         segments: vec![Segment {
             start,
             end,

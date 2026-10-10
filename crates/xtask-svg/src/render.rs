@@ -13,6 +13,8 @@ use super::route::{self, Point};
 
 const STROKE: &str = "#475569";
 const EPSILON: f64 = 0.00001;
+/// Dev edges reuse the normal geometry and are drawn as a row of round dots.
+const DOTTED: &str = " stroke-dasharray=\"0 3.5\" stroke-linecap=\"round\"";
 
 /// Present ELK's absolute geometry as a standalone SVG.
 ///
@@ -55,7 +57,7 @@ pub fn render(scene: &Scene) -> Result<String, String> {
                     y: point.y,
                 })
                 .collect();
-            route::build(&points, index, edge.style == EdgeStyle::Dev)
+            route::build(&points, index)
         })
         .collect::<Result<Vec<_>, _>>()?;
     let obstacles = obstacles(scene);
@@ -74,18 +76,19 @@ pub fn render(scene: &Scene) -> Result<String, String> {
             .map(|point| format!("{:.3},{:.3}", point.x, point.y))
             .collect::<Vec<_>>()
             .join(" ");
-        write!(output, "<g class=\"edge\" data-points=\"{points}\" data-edge-id=\"{}\" data-from=\"{}\" data-to=\"{}\" data-style=\"{style}\" data-start-x=\"{:.3}\" data-start-y=\"{:.3}\" data-end-x=\"{:.3}\" data-end-y=\"{:.3}\"><title>{} → {}</title><path class=\"route\" fill=\"none\" stroke=\"{STROKE}\" stroke-width=\"1.3\" d=\"{}\"/>", xml(&edge.id),xml(&edge.from),xml(&edge.to),first.x,first.y,last.x,last.y,xml(&edge.from),xml(&edge.to),drawing::draw(path,jumps)?).unwrap();
+        write!(output, "<g class=\"edge\" data-points=\"{points}\" data-edge-id=\"{}\" data-from=\"{}\" data-to=\"{}\" data-style=\"{style}\" data-start-x=\"{:.3}\" data-start-y=\"{:.3}\" data-end-x=\"{:.3}\" data-end-y=\"{:.3}\"><title>{} → {}</title><path class=\"route\" fill=\"none\" stroke=\"{STROKE}\" stroke-width=\"1.3\"{} d=\"{}\"/>", xml(&edge.id),xml(&edge.from),xml(&edge.to),first.x,first.y,last.x,last.y,xml(&edge.from),xml(&edge.to),dash(edge),drawing::draw(path,jumps)?).unwrap();
         arrow(&mut output, edge);
         output.push_str("</g>\n");
     }
     // The background halo must paint after every edge, otherwise a later
     // underpass would cross the semicircle again.
     output.push_str("<g class=\"bridges\">\n");
-    for (path, jumps) in paths.iter().zip(&jumps) {
+    for ((edge, path), jumps) in edges.iter().zip(&paths).zip(&jumps) {
+        let attributes = dash(edge);
         for jump in jumps {
             let data = drawing::arc(path, *jump);
             let halo = 1.3 + (drawing::radius(path, *jump) * 1.5).min(3.0);
-            writeln!(output, "<path class=\"bridge-halo\" d=\"{data}\" fill=\"none\" stroke=\"white\" stroke-width=\"{halo:.3}\" stroke-linecap=\"round\"/><path class=\"bridge\" d=\"{data}\" fill=\"none\" stroke=\"{STROKE}\" stroke-width=\"1.3\"/>").unwrap();
+            writeln!(output, "<path class=\"bridge-halo\" d=\"{data}\" fill=\"none\" stroke=\"white\" stroke-width=\"{halo:.3}\" stroke-linecap=\"round\"/><path class=\"bridge\" d=\"{data}\" fill=\"none\" stroke=\"{STROKE}\" stroke-width=\"1.3\"{attributes}/>").unwrap();
         }
     }
     output.push_str("</g>\n");
@@ -132,6 +135,14 @@ pub fn render(scene: &Scene) -> Result<String, String> {
     }
     output.push_str("</g></svg>\n");
     Ok(output)
+}
+
+fn dash(edge: &SceneEdge) -> &'static str {
+    if edge.style == EdgeStyle::Dev {
+        DOTTED
+    } else {
+        ""
+    }
 }
 
 fn regions_layer(

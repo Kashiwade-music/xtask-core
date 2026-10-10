@@ -2,7 +2,7 @@
 const EPSILON: f64 = 0.000001;
 
 /// Round only existing orthogonal turns; never reroute an ELK edge.
-pub(crate) fn build(points: &[Point], group: usize, dev: bool) -> Result<Path, String> {
+pub(crate) fn build(points: &[Point], group: usize) -> Result<Path, String> {
     if points.len() < 2
         || points
             .iter()
@@ -78,11 +78,7 @@ pub(crate) fn build(points: &[Point], group: usize, dev: bool) -> Result<Path, S
         control: None,
         straight: true,
     });
-    Ok(Path {
-        segments,
-        group,
-        dev,
-    })
+    Ok(Path { segments, group })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -112,7 +108,6 @@ impl Point {
 pub(crate) struct Path {
     pub(crate) segments: Vec<Segment>,
     pub(crate) group: usize,
-    pub(crate) dev: bool,
 }
 
 #[derive(Clone, Debug)]

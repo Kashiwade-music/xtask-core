@@ -271,10 +271,9 @@ fn real_elk_nested_regions_side_ports_and_dev_styles() {
             .find(|node| node.has_tag_name("path"))
             .unwrap();
         assert!(path.attribute("d").unwrap().starts_with('M'));
-        assert!(
-            !edge
-                .descendants()
-                .any(|node| node.attribute("stroke-dasharray").is_some())
+        assert_eq!(
+            path.attribute("stroke-dasharray").is_some(),
+            edge.attribute("data-style") == Some("dev")
         );
         let arrow = edge
             .descendants()

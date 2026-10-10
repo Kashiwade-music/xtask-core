@@ -1,4 +1,4 @@
-//! Role: 線分と曲線から通常線・波線・半円ジャンプのSVGパスを生成する。
+//! Role: 線分と曲線から通常線・半円ジャンプのSVGパスを生成する。
 use super::crossings::Jump;
 use super::route::{Path, Point, Segment, point, tangent};
 use std::fmt::Write;
@@ -26,12 +26,8 @@ pub(crate) fn normal(segments: &[Segment]) -> String {
     output
 }
 
-fn append_chunk(output: &mut String, segments: &[Segment], dev: bool) -> Result<(), String> {
-    let geometry = if dev {
-        super::wave::draw(segments)?
-    } else {
-        normal(segments)
-    };
+fn append_chunk(output: &mut String, segments: &[Segment]) -> Result<(), String> {
+    let geometry = normal(segments);
     if output.is_empty() {
         output.push_str(&geometry);
     } else {
@@ -46,11 +42,7 @@ fn append_chunk(output: &mut String, segments: &[Segment], dev: bool) -> Result<
 
 pub(crate) fn draw(path: &Path, jumps: &[Jump]) -> Result<String, String> {
     if jumps.is_empty() {
-        return if path.dev {
-            super::wave::draw(&path.segments)
-        } else {
-            Ok(normal(&path.segments))
-        };
+        return Ok(normal(&path.segments));
     }
     let mut output = String::new();
     let mut bridges: Vec<_> = jumps.iter().map(|jump| geometry(path, *jump)).collect();
@@ -62,7 +54,7 @@ pub(crate) fn draw(path: &Path, jumps: &[Jump]) -> Result<String, String> {
     });
     let mut cursor = Location { segment: 0, t: 0.0 };
     for bridge in bridges {
-        append_chunk(&mut output, &range(path, cursor, bridge.from), path.dev)?;
+        append_chunk(&mut output, &range(path, cursor, bridge.from))?;
         let sweep = bridge.sweep;
         write!(
             output,
@@ -82,7 +74,6 @@ pub(crate) fn draw(path: &Path, jumps: &[Jump]) -> Result<String, String> {
                 t: 1.0,
             },
         ),
-        path.dev,
     )?;
     Ok(output)
 }
