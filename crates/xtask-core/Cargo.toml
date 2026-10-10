@@ -1,0 +1,19 @@
+[package]
+name = "xtask-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared repository rules and Graphviz reports for Rust xtasks"
+
+[dependencies]
+xtask-source.workspace = true
+xtask-workspace.workspace = true
+xtask-modules.workspace = true
+xtask-graph.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

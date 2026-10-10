@@ -1,0 +1,15 @@
+digraph {
+  graph [label="Workspace crate dependencies (consumer -> provider)", labelloc="t", rankdir="LR", newrank=true];
+  node [shape="box"];
+  "xtask-core" [label="xtask-core"];
+  "xtask-graph" [label="xtask-graph"];
+  "xtask-modules" [label="xtask-modules"];
+  "xtask-source" [label="xtask-source"];
+  "xtask-workspace" [label="xtask-workspace"];
+  { rank=same; "xtask-core"; }
+  { rank=same; "xtask-graph"; "xtask-modules"; "xtask-source"; "xtask-workspace"; }
+  "xtask-core" -> "xtask-graph";
+  "xtask-core" -> "xtask-modules";
+  "xtask-core" -> "xtask-source";
+  "xtask-core" -> "xtask-workspace";
+}

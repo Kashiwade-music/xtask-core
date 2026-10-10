@@ -1,0 +1,12 @@
+[package]
+name = "xtask-modules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+syn.workspace = true
+proc-macro2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

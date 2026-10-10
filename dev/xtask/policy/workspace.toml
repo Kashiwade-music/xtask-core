@@ -1,0 +1,8 @@
+[limits]
+max_code_lines = 1000
+
+[visible_to]
+xtask-source = ["xtask-core"]
+xtask-workspace = ["xtask-core"]
+xtask-modules = ["xtask-core"]
+xtask-graph = ["xtask-core"]

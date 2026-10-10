@@ -1,0 +1,45 @@
+digraph {
+  graph [label="xtask-core::xtask_core (lib, normal): module dependencies", labelloc="t", rankdir="LR", newrank=true];
+  node [shape="box"];
+  "crate" [label="(self)"];
+  "crate::cli" [label="(self)"];
+  "crate::config" [label="(self)"];
+  "crate::graphs" [label="(self)"];
+  "crate::model" [label="(self)"];
+  "crate::run" [label="(self)"];
+  subgraph "cluster_crate" {
+    label="crate";
+    "crate";
+    subgraph "cluster_crate::cli" {
+      label="crate::cli";
+      "crate::cli";
+    }
+    subgraph "cluster_crate::config" {
+      label="crate::config";
+      "crate::config";
+    }
+    subgraph "cluster_crate::graphs" {
+      label="crate::graphs";
+      "crate::graphs";
+    }
+    subgraph "cluster_crate::model" {
+      label="crate::model";
+      "crate::model";
+    }
+    subgraph "cluster_crate::run" {
+      label="crate::run";
+      "crate::run";
+    }
+  }
+  "crate" -> "crate::cli";
+  "crate" -> "crate::config";
+  "crate" -> "crate::model";
+  "crate" -> "crate::run";
+  "crate::cli" -> "crate::config";
+  "crate::cli" -> "crate::run";
+  "crate::graphs" -> "crate::config";
+  "crate::graphs" -> "crate::model";
+  "crate::run" -> "crate::config";
+  "crate::run" -> "crate::graphs";
+  "crate::run" -> "crate::model";
+}

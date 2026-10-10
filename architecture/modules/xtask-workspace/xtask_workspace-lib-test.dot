@@ -1,0 +1,35 @@
+digraph {
+  graph [label="xtask-workspace::xtask_workspace (lib, test): module dependencies", labelloc="t", rankdir="LR", newrank=true];
+  node [shape="box"];
+  "crate" [label="(self)"];
+  "crate::metadata" [label="(self)"];
+  "crate::model" [label="(self)"];
+  "crate::policy" [label="(self)"];
+  "crate::tests" [label="(self)"];
+  subgraph "cluster_crate" {
+    label="crate";
+    "crate";
+    subgraph "cluster_crate::metadata" {
+      label="crate::metadata";
+      "crate::metadata";
+    }
+    subgraph "cluster_crate::model" {
+      label="crate::model";
+      "crate::model";
+    }
+    subgraph "cluster_crate::policy" {
+      label="crate::policy";
+      "crate::policy";
+    }
+    subgraph "cluster_crate::tests" {
+      label="crate::tests";
+      "crate::tests";
+    }
+  }
+  "crate" -> "crate::model";
+  "crate" -> "crate::policy";
+  "crate::metadata" -> "crate::model";
+  "crate::model" -> "crate::policy";
+  "crate::tests" -> "crate::model";
+  "crate::tests" -> "crate::policy";
+}

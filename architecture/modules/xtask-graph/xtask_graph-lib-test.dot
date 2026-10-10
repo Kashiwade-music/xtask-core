@@ -1,0 +1,50 @@
+digraph {
+  graph [label="xtask-graph::xtask_graph (lib, test): module dependencies", labelloc="t", rankdir="LR", newrank=true];
+  node [shape="box"];
+  "crate" [label="(self)"];
+  "crate::layout" [label="(self)"];
+  "crate::layout_tests" [label="(self)"];
+  "crate::model" [label="(self)"];
+  "crate::tests" [label="(self)"];
+  "crate::wave" [label="(self)"];
+  "crate::wave::tests" [label="(self)"];
+  subgraph "cluster_crate" {
+    label="crate";
+    "crate";
+    subgraph "cluster_crate::layout" {
+      label="crate::layout";
+      "crate::layout";
+    }
+    subgraph "cluster_crate::layout_tests" {
+      label="crate::layout_tests";
+      "crate::layout_tests";
+    }
+    subgraph "cluster_crate::model" {
+      label="crate::model";
+      "crate::model";
+    }
+    subgraph "cluster_crate::tests" {
+      label="crate::tests";
+      "crate::tests";
+    }
+    subgraph "cluster_crate::wave" {
+      label="crate::wave";
+      "crate::wave";
+      subgraph "cluster_crate::wave::tests" {
+        label="crate::wave::tests";
+        "crate::wave::tests";
+      }
+    }
+  }
+  "crate" -> "crate::layout";
+  "crate" -> "crate::model";
+  "crate" -> "crate::wave";
+  "crate::layout" -> "crate::model";
+  "crate::layout_tests" -> "crate";
+  "crate::layout_tests" -> "crate::layout";
+  "crate::layout_tests" -> "crate::model";
+  "crate::layout_tests" -> "crate::wave";
+  "crate::tests" -> "crate";
+  "crate::tests" -> "crate::model";
+  "crate::wave::tests" -> "crate::wave";
+}

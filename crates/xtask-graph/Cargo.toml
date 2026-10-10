@@ -1,0 +1,15 @@
+[package]
+name = "xtask-graph"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+roxmltree = "0.21.1"
+svgtypes = "0.16.1"
+
+[dev-dependencies]
+tempfile.workspace = true
