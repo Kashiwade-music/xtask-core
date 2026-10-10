@@ -26,7 +26,7 @@ pub(crate) fn analyze(
             }
             if let Item::Macro(mac) = item
                 && mac.mac.path.is_ident("macro_rules")
-                && mac.attrs.iter().any(|a| a.path().is_ident("macro_export"))
+                && has_attribute(&mac.attrs, options, "macro_export")
                 && let Some((name, target)) = declaration(item, owner)
             {
                 // #[macro_export] places the macro at the crate root, wherever it is defined.
@@ -62,7 +62,7 @@ pub(crate) fn analyze(
             }
         }
     }
-    let textual = textual_macros(&sources, &active_modules);
+    let textual = textual_macros(&sources, &active_modules, options);
     let externs = sources
         .iter()
         .find(|s| s.module.id == "crate")
@@ -152,7 +152,11 @@ pub(crate) fn analyze(
 
 /// `macro_rules!` names in textual scope per module: own definitions plus those
 /// that `#[macro_use] mod child;` adds to its parent. Declaration order is not modeled.
-fn textual_macros(sources: &[Source], active_modules: &BTreeSet<String>) -> Tables {
+fn textual_macros(
+    sources: &[Source],
+    active_modules: &BTreeSet<String>,
+    options: &AnalysisOptions,
+) -> Tables {
     let mut textual = Tables::new();
     let mut inherited = Vec::<(String, String)>::new();
     for source in sources {
@@ -165,9 +169,7 @@ fn textual_macros(sources: &[Source], active_modules: &BTreeSet<String>) -> Tabl
                         table.entry(name).or_default().insert(target);
                     }
                 }
-                Item::Mod(module)
-                    if module.attrs.iter().any(|a| a.path().is_ident("macro_use")) =>
-                {
+                Item::Mod(module) if has_attribute(&module.attrs, options, "macro_use") => {
                     let child = format!("{owner}::{}", module.ident);
                     if active_modules.contains(&child) {
                         inherited.push((owner.clone(), child));
@@ -195,4 +197,11 @@ fn textual_macros(sources: &[Source], active_modules: &BTreeSet<String>) -> Tabl
         }
     }
     textual
+}
+
+/// Whether the attribute is present after `cfg_attr` expansion. The loader has already
+/// validated these attributes, so an expansion error cannot occur here.
+fn has_attribute(attrs: &[syn::Attribute], options: &AnalysisOptions, name: &str) -> bool {
+    crate::cfg::effective(attrs, options)
+        .is_ok_and(|metas| metas.iter().any(|meta| meta.path().is_ident(name)))
 }

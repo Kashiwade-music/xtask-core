@@ -624,6 +624,120 @@ fn exported_macros_live_at_the_crate_root_wherever_defined() {
 }
 
 #[test]
+fn crate_root_item_macro_makes_unresolved_crate_paths_references_to_the_root() {
+    let files = [(
+        "lib.rs",
+        r#"
+        macro_rules! make { () => { pub fn generated() {} }; }
+        make!();
+        mod user { fn f() { crate::generated(); } }
+    "#,
+    )];
+    let result = graph(&files, trusting(&["make"]));
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(edges(&result), BTreeSet::from([("crate::user", "crate")]));
+}
+
+#[test]
+fn macro_use_chains_cross_several_modules() {
+    let files = [
+        (
+            "lib.rs",
+            "#[macro_use] mod a; mod user { fn f() { ensure!(true); } }",
+        ),
+        ("a.rs", "#[macro_use] mod b;"),
+        ("a/b.rs", "#[macro_use] mod c;"),
+        (
+            "a/b/c.rs",
+            "macro_rules! ensure { ($e:expr) => { assert!($e) }; }",
+        ),
+    ];
+    let result = graph(&files, trusting(&["ensure"]));
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(
+        edges(&result),
+        BTreeSet::from([("crate::user", "crate::a::b::c")])
+    );
+}
+
+#[test]
+fn cfg_disabled_macro_definitions_are_not_in_textual_scope() {
+    let files = [(
+        "lib.rs",
+        r#"
+        #[cfg(off)] #[macro_use] mod off { macro_rules! from_mod { () => {}; } }
+        #[cfg(off)] macro_rules! from_item { () => {}; }
+        mod user { fn f() { from_mod!(); from_item!(); } }
+    "#,
+    )];
+    let result = graph(&files, trusting(&["from_mod", "from_item"]));
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(result.edges.is_empty(), "{:?}", result.edges);
+    let result = graph(&files, AnalysisOptions::default());
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .all(|d| !d.contains("local macro expansion")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn nearest_textual_scope_definition_wins() {
+    let files = [(
+        "lib.rs",
+        r#"
+        macro_rules! pick { () => {}; }
+        mod near { macro_rules! pick { () => {}; } mod user { fn f() { pick!(); } } }
+        mod far { fn f() { pick!(); } }
+    "#,
+    )];
+    let result = graph(&files, trusting(&["pick"]));
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(
+        edges(&result),
+        BTreeSet::from([
+            ("crate::far", "crate"),
+            ("crate::near::user", "crate::near")
+        ])
+    );
+}
+
+#[test]
+fn cfg_attr_can_supply_macro_use_and_macro_export() {
+    let files = [
+        (
+            "lib.rs",
+            r#"
+        #[cfg_attr(on, macro_use)] mod used;
+        mod exporter {
+            #[cfg_attr(on, macro_export)]
+            macro_rules! exported { () => {}; }
+        }
+        mod user { fn f() { scoped!(); crate::exported!(); } }
+    "#,
+        ),
+        ("used.rs", "macro_rules! scoped { () => {}; }"),
+    ];
+    let mut options = trusting(&["scoped", "crate::exported"]);
+    options.cfg.insert("on".into());
+    let result = graph(&files, options);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(
+        edges(&result),
+        BTreeSet::from([
+            ("crate::user", "crate::exporter"),
+            ("crate::user", "crate::used")
+        ])
+    );
+    // Without the cfg, neither attribute applies and no local macro is found.
+    let result = graph(&files, trusting(&["scoped", "crate::exported"]));
+    assert!(result.edges.is_empty(), "{:?}", result.edges);
+}
+
+#[test]
 fn builtin_inert_attributes_and_derive_helpers_need_no_expansion() {
     let result = graph(
         &[(
