@@ -100,6 +100,7 @@ pub(crate) fn analyze(
             }
         }
     }
+    let opaque = crate::visitor::opaque_modules(&sources, &tables, options);
     let mut edges = BTreeSet::new();
     let mut diagnostics = BTreeSet::new();
     for source in &sources {
@@ -108,6 +109,7 @@ pub(crate) fn analyze(
             module: &source.module.id,
             tables: &tables,
             options,
+            opaque: &opaque,
             scopes: Vec::new(),
             namespace: Namespace::Type,
             edges: &mut edges,

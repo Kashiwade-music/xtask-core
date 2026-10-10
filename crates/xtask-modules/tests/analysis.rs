@@ -360,6 +360,177 @@ fn trusted_macros_skip_expansion_diagnostics_only_on_exact_path() {
     );
 }
 
+fn trusting(names: &[&str]) -> AnalysisOptions {
+    let mut options = AnalysisOptions::default();
+    for name in names {
+        options.trusted_macros.insert((*name).into());
+    }
+    options
+}
+
+#[test]
+fn untrusted_local_macro_calls_keep_their_diagnostic() {
+    let files = [(
+        "lib.rs",
+        "macro_rules! ensure { ($e:expr) => { assert!($e) }; } mod user { fn f() { ensure!(true); } } fn g() { ensure!(true); }",
+    )];
+    let result = graph(&files, AnalysisOptions::default());
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("local macro expansion is unsupported: ensure")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn trusted_local_expression_macro_records_edge_to_definition_module() {
+    let files = [(
+        "lib.rs",
+        "mod defs { macro_rules! ensure { ($e:expr) => { assert!($e) }; } pub(crate) use ensure; } mod user { use crate::defs::ensure; fn f() { ensure!(true); } }",
+    )];
+    let result = graph(&files, trusting(&["ensure"]));
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(edges(&result).contains(&("crate::user", "crate::defs")));
+    let untrusted = graph(&files, AnalysisOptions::default());
+    assert!(!untrusted.diagnostics.is_empty());
+    // Only the exact written path is trusted.
+    let other = graph(&files, trusting(&["crate::defs::ensure"]));
+    assert!(!other.diagnostics.is_empty(), "{:?}", other.diagnostics);
+}
+
+#[test]
+fn trusted_local_macro_matches_in_statement_type_and_pattern_positions() {
+    let files = [(
+        "lib.rs",
+        "mod defs { macro_rules! m { () => { u8 }; } pub(crate) use m; } mod user { use crate::defs::m; fn f(_: m!()) { m!(); let m!() = 1u8; } }",
+    )];
+    let result = graph(&files, trusting(&["m"]));
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(edges(&result).contains(&("crate::user", "crate::defs")));
+    assert!(
+        !graph(&files, AnalysisOptions::default())
+            .diagnostics
+            .is_empty()
+    );
+}
+
+#[test]
+fn trusted_local_item_macro_names_are_references_to_its_module() {
+    let files = [(
+        "lib.rs",
+        r#"
+        mod defs { macro_rules! make { () => { pub fn generated() {} }; } pub(crate) use make; }
+        mod m { use crate::defs::make; make!(); }
+        mod user { fn f() { crate::m::generated(); } }
+        mod uses { use crate::m::generated; fn f() { generated(); } }
+        mod inner { use crate::m; fn f() { m::generated(); } }
+        mod selfcall {
+            use crate::defs::make;
+            make!();
+            fn f() { self::generated(); crate::selfcall::generated(); }
+        }
+    "#,
+    )];
+    let result = graph(&files, trusting(&["make"]));
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(
+        edges(&result),
+        BTreeSet::from([
+            ("crate::inner", "crate::m"),
+            ("crate::m", "crate::defs"),
+            ("crate::selfcall", "crate::defs"),
+            ("crate::user", "crate::m"),
+            ("crate::uses", "crate::m"),
+        ])
+    );
+}
+
+#[test]
+fn unresolved_names_stay_diagnostic_outside_opaque_modules_and_when_untrusted() {
+    let files = [(
+        "lib.rs",
+        r#"
+        mod defs { macro_rules! make { () => { pub fn generated() {} }; } pub(crate) use make; }
+        mod m { use crate::defs::make; make!(); }
+        mod other { pub fn real() {} }
+        mod user { fn f() { crate::other::generated(); } }
+    "#,
+    )];
+    let result = graph(&files, trusting(&["make"]));
+    assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+    assert!(result.diagnostics[0].contains("crate::other::generated"));
+
+    // (d) Untrusted item-position macros keep both their diagnostic and unresolved paths.
+    let result = graph(&files, AnalysisOptions::default());
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("item macro expansion is unsupported: make")),
+        "{:?}",
+        result.diagnostics
+    );
+    let files = [(
+        "lib.rs",
+        r#"
+        mod defs { macro_rules! make { () => { pub fn generated() {} }; } pub(crate) use make; }
+        mod m { use crate::defs::make; make!(); }
+        mod user { fn f() { crate::m::generated(); } }
+    "#,
+    )];
+    let result = graph(&files, AnalysisOptions::default());
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("unresolved explicit local path: crate::m::generated")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn trusted_local_item_macro_records_edge_to_definition_module() {
+    let files = [(
+        "lib.rs",
+        "mod defs { macro_rules! make { () => { fn g() {} }; } pub(crate) use make; } mod m { use crate::defs::make; make!(); }",
+    )];
+    let result = graph(&files, trusting(&["make"]));
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(edges(&result).contains(&("crate::m", "crate::defs")));
+}
+
+#[test]
+fn trusted_local_macros_match_macro_export_and_crate_paths_exactly() {
+    let files = [(
+        "lib.rs",
+        r#"
+        #[macro_export]
+        macro_rules! ensure { ($e:expr) => { assert!($e) }; }
+        #[macro_export]
+        macro_rules! make { () => { pub fn generated() {} }; }
+        mod m { crate::make!(); }
+        mod user { fn f() { crate::ensure!(true); crate::m::generated(); } }
+    "#,
+    )];
+    let result = graph(&files, trusting(&["crate::ensure", "crate::make"]));
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(
+        edges(&result),
+        BTreeSet::from([
+            ("crate::m", "crate"),
+            ("crate::user", "crate"),
+            ("crate::user", "crate::m"),
+        ])
+    );
+    // Bare names do not match the written `crate::` path.
+    let result = graph(&files, trusting(&["ensure", "make"]));
+    assert!(!result.diagnostics.is_empty());
+}
+
 #[test]
 fn builtin_inert_attributes_and_derive_helpers_need_no_expansion() {
     let result = graph(

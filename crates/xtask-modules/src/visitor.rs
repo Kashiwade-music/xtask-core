@@ -15,6 +15,8 @@ pub(crate) struct References<'a> {
     pub(crate) module: &'a str,
     pub(crate) tables: &'a Tables,
     pub(crate) options: &'a AnalysisOptions,
+    /// Modules whose trusted crate-local item macros may define items we cannot see.
+    pub(crate) opaque: &'a BTreeSet<String>,
     pub(crate) scopes: Vec<Symbols>,
     pub(crate) namespace: Namespace,
     pub(crate) edges: &'a mut BTreeSet<Reference>,
@@ -116,6 +118,43 @@ impl References<'_> {
             }
         }
     }
+    /// Opaque modules that a path unresolved in the symbol tables passes through.
+    fn opaque_owners(&self, parts: &[String]) -> BTreeSet<String> {
+        let symbols = self.symbols();
+        let mut owners = BTreeSet::new();
+        for k in 1..parts.len() {
+            if parts[k] == "super" {
+                continue;
+            }
+            for target in resolve_path(
+                self.module,
+                &parts[..k],
+                self.tables,
+                Some(&symbols),
+                Some(Namespace::Type),
+            ) {
+                if let Target::Module(owner) = target
+                    && self.opaque.contains(&owner)
+                    && !self
+                        .tables
+                        .get(&owner)
+                        .is_some_and(|table| table.contains_key(&parts[k]))
+                {
+                    owners.insert(owner);
+                }
+            }
+        }
+        owners
+    }
+    /// Treat an unresolved name in an opaque module as a reference to that module.
+    /// Returns whether the path was absorbed, so no unresolved-path diagnostic applies.
+    fn opaque_reference(&mut self, parts: &[String]) -> bool {
+        let owners = self.opaque_owners(parts);
+        for owner in &owners {
+            self.edge(BTreeSet::from([Target::Module(owner.clone())]));
+        }
+        !owners.is_empty()
+    }
     fn shadow(&mut self, ident: &syn::Ident) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(ident.to_string(), BTreeSet::new());
@@ -179,6 +218,7 @@ impl References<'_> {
                     .path
                     .first()
                     .is_some_and(|p| matches!(p.as_str(), "crate" | "self" | "super"))
+                && !self.opaque_reference(&import.path)
             {
                 self.diagnostics.insert(format!(
                     "{}: unresolved explicit local import: {}",
@@ -309,7 +349,9 @@ impl<'ast> Visit<'ast> for References<'_> {
                 Some(&self.symbols()),
                 Some(self.namespace),
             );
-            if targets.is_empty()
+            if targets.is_empty() && self.opaque_reference(&parts) {
+                // Names defined by a trusted local item macro belong to its module.
+            } else if targets.is_empty()
                 && parts
                     .first()
                     .is_some_and(|p| matches!(p.as_str(), "crate" | "self" | "super"))
@@ -483,6 +525,15 @@ impl<'ast> Visit<'ast> for References<'_> {
             .trusted_macros
             .contains(&macro_path_text(&item.mac.path))
         {
+            let local_macro = local_macro_targets(
+                self.module,
+                &item.mac.path,
+                self.tables,
+                Some(&self.symbols()),
+            );
+            if is_local_macro(&local_macro) {
+                self.edge(local_macro);
+            }
             return;
         }
         self.diagnostics.insert(format!(
@@ -504,27 +555,21 @@ impl<'ast> Visit<'ast> for References<'_> {
             .iter()
             .map(|s| s.ident.to_string())
             .collect::<Vec<_>>();
-        let mut resolution_parts = parts.clone();
-        if mac.path.leading_colon.is_some() {
-            resolution_parts.insert(0, String::new());
-        }
-        let local_macro = resolve_path(
-            self.module,
-            &resolution_parts,
-            self.tables,
-            Some(&self.symbols()),
-            Some(Namespace::Macro),
-        );
-        if local_macro
-            .iter()
-            .any(|target| matches!(target, Target::Item(_, Namespace::Macro)))
-        {
+        let local_macro =
+            local_macro_targets(self.module, &mac.path, self.tables, Some(&self.symbols()));
+        if is_local_macro(&local_macro) {
             self.edge(local_macro);
-            self.diagnostics.insert(format!(
-                "{}: local macro expansion is unsupported: {}",
-                self.module,
-                parts.join("::")
-            ));
+            if !self
+                .options
+                .trusted_macros
+                .contains(&macro_path_text(&mac.path))
+            {
+                self.diagnostics.insert(format!(
+                    "{}: local macro expansion is unsupported: {}",
+                    self.module,
+                    parts.join("::")
+                ));
+            }
             return;
         }
         let previous_namespace = self.namespace;
@@ -719,4 +764,60 @@ fn macro_path_text(path: &syn::Path) -> String {
         .map(|s| s.ident.to_string())
         .collect::<Vec<_>>()
         .join("::")
+}
+
+/// Targets a macro invocation path resolves to in the macro namespace.
+fn local_macro_targets(
+    module: &str,
+    path: &syn::Path,
+    tables: &Tables,
+    local: Option<&Symbols>,
+) -> BTreeSet<Target> {
+    let mut parts = path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect::<Vec<_>>();
+    if path.leading_colon.is_some() {
+        parts.insert(0, String::new());
+    }
+    resolve_path(module, &parts, tables, local, Some(Namespace::Macro))
+}
+
+fn is_local_macro(targets: &BTreeSet<Target>) -> bool {
+    targets
+        .iter()
+        .any(|target| matches!(target, Target::Item(_, Namespace::Macro)))
+}
+
+/// Modules containing a trusted item-position invocation of a crate-local macro.
+/// Its expansion may define items, so unresolved names there are references to the module.
+pub(crate) fn opaque_modules(
+    sources: &[loader::Source],
+    tables: &Tables,
+    options: &AnalysisOptions,
+) -> BTreeSet<String> {
+    let mut opaque = BTreeSet::new();
+    for source in sources {
+        for item in &source.items {
+            let Item::Macro(item) = item else { continue };
+            if item.mac.path.is_ident("macro_rules")
+                || !options
+                    .trusted_macros
+                    .contains(&macro_path_text(&item.mac.path))
+                || !matches!(cfg::enabled(&item.attrs, options), Ok(true))
+            {
+                continue;
+            }
+            if is_local_macro(&local_macro_targets(
+                &source.module.id,
+                &item.mac.path,
+                tables,
+                None,
+            )) {
+                opaque.insert(source.module.id.clone());
+            }
+        }
+    }
+    opaque
 }

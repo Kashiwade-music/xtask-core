@@ -125,7 +125,7 @@ trusted_derives = ["Deserialize", "Serialize"]
 trusted_macros = ["proptest", "prop_assert", "prop_assert_eq"]
 ```
 
-`trusted_macros` は呼び出しの書かれたパス（`::` 連結、先頭 `::` なし）に完全一致する function-like macro の展開・tokenを解析しない仮定で、生成・内包される参照はsource-level解析の外になる。macroパス自体の参照は従来どおり解決する。
+`trusted_macros` は呼び出しの書かれたパス（`::` 連結、先頭 `::` なし）に完全一致する function-like macro の展開・tokenを解析しない仮定で、生成・内包される参照はsource-level解析の外になる。macroパス自体の参照は従来どおり解決する。crate内の `macro_rules` の呼出しにも適用され、定義moduleへの参照を記録する。item位置の場合、そのmodule内の未解決名はmoduleへの参照として扱う。
 
 省略時はhost target・Cargo既定feature・追加cfgなしで解析する。
 `target`、`all_features`、`default_features` も指定できる。役割文字数は `[limits] max_role_chars` で変更する。
