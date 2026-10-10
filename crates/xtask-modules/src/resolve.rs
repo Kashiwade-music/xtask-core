@@ -1,3 +1,4 @@
+//! Role: 宣言と再公開の名前解決を収束させ、参照と循環を解析する。
 use crate::{
     AnalysisOptions, ModuleGraph, components::components, loader::Source, symbols::*,
     visitor::References,
@@ -102,6 +103,7 @@ pub(crate) fn analyze(
     let mut edges = BTreeSet::new();
     let mut diagnostics = BTreeSet::new();
     for source in &sources {
+        diagnostics.extend(source.role_diagnostics.iter().cloned());
         let mut visitor = References {
             module: &source.module.id,
             tables: &tables,

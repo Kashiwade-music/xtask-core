@@ -1,3 +1,4 @@
+//! Role: SVGの階層・接続・波線・交差ジャンプと不正な形状を検証する。
 use xtask_layout::{EdgeStyle, Point, Scene, SceneEdge, SceneLabel, SceneNode, SceneRegion};
 
 use super::crossings::crossings;

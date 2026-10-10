@@ -1,3 +1,4 @@
+//! Role: 型・値の名前空間で宣言、import、再公開とパス解決を扱う。
 use std::collections::{BTreeMap, BTreeSet};
 use syn::{Item, UseTree};
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]

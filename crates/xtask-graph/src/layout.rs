@@ -1,3 +1,4 @@
+//! Role: 配置方向・rank・階層・線種を定義し、グラフとの整合性を検証する。
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::{Edge, Graph};

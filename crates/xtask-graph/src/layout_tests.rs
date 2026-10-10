@@ -1,3 +1,4 @@
+//! Role: 配置設定の検証と、実ELKの階層・線種・左右接続を検証する。
 use super::*;
 use std::{fs, process::Command};
 

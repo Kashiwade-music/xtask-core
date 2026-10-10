@@ -1,3 +1,4 @@
+//! Role: 組み込みELKをNodeで実行し、配置結果の読込みと検証を行う。
 use crate::model::{LayoutRequest, Scene};
 use crate::prepare;
 use crate::validate;

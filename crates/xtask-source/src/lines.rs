@@ -1,3 +1,4 @@
+//! Role: Rustの字句と物理行からコメント・文字列内部を除くコード行数を数える。
 use proc_macro2::{Delimiter, Span, TokenStream, TokenTree};
 use std::collections::BTreeSet;
 

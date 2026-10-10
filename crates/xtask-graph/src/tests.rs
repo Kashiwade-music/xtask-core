@@ -1,3 +1,4 @@
+//! Role: 配置要求の決定性、文字列保持、SVG出力と失敗時の保護を検証する。
 use super::*;
 use std::{ffi::OsStr, fs, process::Command};
 

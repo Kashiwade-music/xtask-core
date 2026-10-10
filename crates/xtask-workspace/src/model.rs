@@ -1,3 +1,4 @@
+//! Role: workspaceのパッケージ・依存を表現し、featureと可視性を検証する。
 use crate::policy::{self, Policy};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;

@@ -1,4 +1,5 @@
-use crate::{AnalysisOptions, Module, cfg};
+//! Role: cfgとpath属性に従ってモジュールのソースと有効な構文を読み込む。
+use crate::{AnalysisOptions, Module, cfg, role};
 use std::{
     collections::BTreeSet,
     fs,
@@ -10,6 +11,7 @@ pub(crate) struct Source {
     pub module: Module,
     pub items: Vec<Item>,
     pub attrs: Vec<Attribute>,
+    pub role_diagnostics: Vec<String>,
 }
 
 pub(crate) fn attrs(item: &Item) -> &[Attribute] {
@@ -106,6 +108,8 @@ impl Loader<'_> {
             base,
             inline,
         } = context;
+        let (role, role_diagnostics) =
+            role::extract(&attributes, &file, &id, self.options.max_role_chars);
         let mut active = Vec::new();
         for item in items {
             if !cfg::enabled(attrs(&item), self.options)? {
@@ -183,9 +187,15 @@ impl Loader<'_> {
             active.push(item);
         }
         self.sources.push(Source {
-            module: Module { id, file, parent },
+            module: Module {
+                id,
+                file,
+                parent,
+                role,
+            },
             items: active,
             attrs: attributes,
+            role_diagnostics,
         });
         Ok(())
     }

@@ -1,3 +1,4 @@
+//! Role: Rustソースを探索し、ファイルごとのコード行数の制限を検査する。
 //! Rust source discovery and physical code-line limits.
 //!
 //! Comments and literal contents do not count. Literal opening and closing

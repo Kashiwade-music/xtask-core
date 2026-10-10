@@ -1,3 +1,4 @@
+//! Role: 検査レポートと、target・cfg別のモジュール解析結果を表現する。
 use std::path::PathBuf;
 
 use xtask_modules::ModuleGraph;

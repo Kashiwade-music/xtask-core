@@ -1,6 +1,7 @@
+//! Role: crate依存のrankとstyle、モジュールの階層変換を検証する。
 use super::*;
 use xtask_modules::{Module, Reference};
-use xtask_workspace::{Dependency, Package};
+use xtask_workspace::{Dependency, Package, Target};
 
 fn workspace(names: &[&str], edges: &[(&str, &str, &str)]) -> Workspace {
     Workspace {
@@ -66,7 +67,12 @@ fn dependency_kinds_keep_parallel_edges_and_only_dev_is_wavy() {
             ("lib", "app", "build"),
         ],
     );
-    let (graph, layout) = dependency_graph(&workspace).unwrap();
+    let roles = BTreeMap::from([
+        ("app".into(), "アプリケーションを起動する".into()),
+        ("lib".into(), "共通機能を提供する".into()),
+    ]);
+    let (graph, layout) = dependency_graph(&workspace, &roles).unwrap();
+    assert_eq!(graph.nodes[0].label, "app\nアプリケーションを起動する");
     assert_eq!(graph.edges.len(), 3);
     assert_eq!(graph.edges[0].label, None);
     assert_eq!(graph.edges[1].label.as_deref(), Some("dev"));
@@ -109,6 +115,7 @@ fn modules(entries: &[(&str, Option<&str>)]) -> ModuleGraph {
                 id: (*id).into(),
                 parent: parent.map(str::to_owned),
                 file: "lib.rs".into(),
+                role: Some(format!("{id} の役割")),
             })
             .collect(),
         edges: Vec::new(),
@@ -137,6 +144,11 @@ fn three_module_levels_and_parent_child_references_share_one_diagram() {
     let clusters = module_clusters(&modules).unwrap();
     assert_eq!(clusters.len(), 1);
     assert_eq!(clusters[0].id, "crate");
+    assert_eq!(clusters[0].label, "crate\ncrate の役割");
+    assert_eq!(
+        clusters[0].children[0].children[0].label,
+        "crate::child::leaf\ncrate::child::leaf の役割"
+    );
     assert_eq!(
         clusters[0].children[0].children[0].nodes,
         ["crate::child::leaf"]
@@ -196,4 +208,87 @@ fn malformed_module_hierarchies_fail_instead_of_omitting_regions() {
         assert!(module_clusters(&modules(&entries)).is_err());
     }
     assert!(module_clusters(&modules(&[])).unwrap().is_empty());
+}
+
+fn target(name: &str, kind: &str, path: &Path) -> Target {
+    Target {
+        name: name.into(),
+        kind: vec![kind.into()],
+        src_path: path.into(),
+        required_features: vec![],
+        test: true,
+        edition: "2024".into(),
+    }
+}
+
+#[test]
+fn primary_target_prefers_library_then_package_binary_and_lexical_names() {
+    let mut workspace = workspace(&["app"], &[]);
+    let package = &mut workspace.packages[0];
+    package.targets = vec![
+        target("z", "bin", Path::new("z.rs")),
+        target("app", "bin", Path::new("main.rs")),
+        target("a", "bin", Path::new("a.rs")),
+    ];
+    assert_eq!(primary_target(package).unwrap().name, "app");
+    package
+        .targets
+        .push(target("other", "lib", Path::new("lib.rs")));
+    assert_eq!(primary_target(package).unwrap().name, "other");
+    package.targets.reverse();
+    assert_eq!(primary_target(package).unwrap().name, "other");
+    package
+        .targets
+        .retain(|target| target.name != "other" && target.name != "app");
+    assert_eq!(primary_target(package).unwrap().name, "a");
+    package.targets = vec![target("bench", "bench", Path::new("bench.rs"))];
+    let error = primary_target(package).unwrap_err();
+    assert!(error.contains("app") && error.contains("Cargo.toml") && error.contains("no primary"));
+}
+
+#[test]
+fn diagrams_keep_partial_modules_and_reject_missing_crate_roles() {
+    let mut graph = modules(&[("crate", None), ("crate::child", Some("crate"))]);
+    graph.modules[1].role = None;
+    let clusters = module_clusters(&graph).unwrap();
+    assert_eq!(clusters[0].children[0].label, "crate::child\n[役割未記載]");
+    let workspace = workspace(&["app"], &[]);
+    assert!(
+        dependency_graph(&workspace, &BTreeMap::new())
+            .unwrap_err()
+            .contains("app")
+    );
+}
+
+#[test]
+fn crate_roles_read_only_primary_root_and_report_package_file_context() {
+    let directory = tempfile::tempdir().unwrap();
+    let library = directory.path().join("lib.rs");
+    let binary = directory.path().join("main.rs");
+    std::fs::write(
+        &library,
+        "//! Role: 共通の公開機能を提供する\nmod missing;\ninclude!(\"unknown.rs\");\n",
+    )
+    .unwrap();
+    std::fs::write(&binary, "fn main() {}\n").unwrap();
+    let mut workspace = workspace(&["app"], &[]);
+    workspace.packages[0].targets = vec![
+        target("app", "bin", &binary),
+        target("library", "rlib", &library),
+    ];
+    let roles = crate_roles(&workspace, xtask_modules::DEFAULT_MAX_ROLE_CHARS).unwrap();
+    assert_eq!(roles["app"], "共通の公開機能を提供する");
+    let (graph, _) = dependency_graph(&workspace, &roles).unwrap();
+    assert_eq!(graph.nodes[0].label, "app\n共通の公開機能を提供する");
+    for source in [
+        "pub fn missing_role() {}\n",
+        "//! Role: \npub fn invalid_role() {}\n",
+    ] {
+        std::fs::write(&library, source).unwrap();
+        let error = crate_roles(&workspace, xtask_modules::DEFAULT_MAX_ROLE_CHARS).unwrap_err();
+        assert!(
+            error.contains("package `app`") && error.contains("lib.rs"),
+            "{error}"
+        );
+    }
 }

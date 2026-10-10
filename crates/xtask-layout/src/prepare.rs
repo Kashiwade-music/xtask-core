@@ -1,9 +1,13 @@
+//! Role: 文字を折り返して寸法を計算し、ELKへ渡す配置要求を準備する。
 use crate::model::{
     Direction, EdgeRequest, LINE_HEIGHT, LayoutRequest, NODE_FONT_SIZE, REGION_FONT_SIZE,
     REGION_LINE_HEIGHT, TITLE_FONT_SIZE,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
+
+const LABEL_MAX_WIDTH: f64 = 320.0;
+const REGION_LABEL_MAX_WIDTH: f64 = 200.0;
 
 #[derive(Serialize)]
 pub(crate) struct Prepared {
@@ -55,7 +59,7 @@ pub(crate) fn request(request: &LayoutRequest) -> Prepared {
         .nodes
         .iter()
         .map(|node| {
-            let metrics = measure(&node.label, NODE_FONT_SIZE, LINE_HEIGHT);
+            let metrics = measure(&node.label, NODE_FONT_SIZE, LINE_HEIGHT, LABEL_MAX_WIDTH);
             let degree = incoming
                 .get(node.id.as_str())
                 .copied()
@@ -99,9 +103,12 @@ pub(crate) fn request(request: &LayoutRequest) -> Prepared {
     let label_metrics = edges
         .iter()
         .filter_map(|edge| {
-            edge.label
-                .as_ref()
-                .map(|label| (edge.id.clone(), measure(label, NODE_FONT_SIZE, LINE_HEIGHT)))
+            edge.label.as_ref().map(|label| {
+                (
+                    edge.id.clone(),
+                    measure(label, NODE_FONT_SIZE, LINE_HEIGHT, LABEL_MAX_WIDTH),
+                )
+            })
         })
         .collect();
     Prepared {
@@ -121,7 +128,12 @@ pub(crate) fn request(request: &LayoutRequest) -> Prepared {
 }
 
 fn region(input: &crate::model::RegionRequest) -> PreparedRegion {
-    let metrics = measure(&input.label, REGION_FONT_SIZE, REGION_LINE_HEIGHT);
+    let metrics = measure(
+        &input.label,
+        REGION_FONT_SIZE,
+        REGION_LINE_HEIGHT,
+        REGION_LABEL_MAX_WIDTH,
+    );
     let mut children: Vec<_> = input.children.iter().map(region).collect();
     children.sort_by(|a, b| a.id.cmp(&b.id));
     let mut nodes = input.nodes.clone();
@@ -137,14 +149,14 @@ fn region(input: &crate::model::RegionRequest) -> PreparedRegion {
     }
 }
 
-fn measure(text: &str, font: f64, line_height: f64) -> Metrics {
+fn measure(text: &str, font: f64, line_height: f64, max_width: f64) -> Metrics {
     let mut lines = Vec::new();
     for input in text.split('\n') {
         let mut line = String::new();
         let mut width = 0.0;
         for character in input.chars() {
             let next = advance(character, font);
-            if width + next > 320.0 && !line.is_empty() {
+            if width + next > max_width && !line.is_empty() {
                 lines.push(std::mem::take(&mut line));
                 width = 0.0;
             }

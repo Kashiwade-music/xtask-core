@@ -1,3 +1,4 @@
+//! Role: グラフのノード・参照を定義し、識別子と接続先を検証する。
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

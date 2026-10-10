@@ -1,3 +1,4 @@
+//! Role: Cargo依存の同一性、feature解決、制限値と可視性ポリシーを検証する。
 use std::collections::BTreeMap;
 use std::fs;
 
@@ -169,6 +170,7 @@ fn visibility_checks_stale_providers_consumers_and_all_declared_edges() {
 fn policy_defaults_and_patterns_and_unknown_fields_are_strict() {
     let policy = Policy::from_toml("[visible_to]\ncore=['app*']\nprivate=[]\n").unwrap();
     assert_eq!(policy.limits.max_code_lines, 1000);
+    assert_eq!(policy.limits.max_role_chars, 80);
     assert!(policy.visible("open", "anything"));
     assert!(policy.visible("core", "app"));
     assert!(policy.visible("core", "app-shell"));
@@ -186,6 +188,40 @@ fn policy_defaults_and_patterns_and_unknown_fields_are_strict() {
         assert!(Policy::from_toml(invalid).is_err(), "accepted {invalid}");
     }
     assert!(Policy::load(std::path::Path::new("missing-policy.toml")).is_err());
+}
+
+#[test]
+fn role_character_limit_defaults_and_accepts_any_positive_setting() {
+    assert_eq!(crate::Limits::default().max_role_chars, 80);
+    assert_eq!(Policy::default().limits.max_role_chars, 80);
+    for text in ["", "[limits]\n", "[limits]\nmax_code_lines=25\n"] {
+        assert_eq!(Policy::from_toml(text).unwrap().limits.max_role_chars, 80);
+    }
+    for limit in [1, 8, 80, 160, 1000] {
+        let policy = Policy::from_toml(&format!("[limits]\nmax_role_chars={limit}\n")).unwrap();
+        assert_eq!(policy.limits.max_role_chars, limit);
+        assert_eq!(policy.limits.max_code_lines, 1000);
+    }
+    let policy = Policy::from_toml(
+        "[limits]\nmax_code_lines=20\nmax_role_chars=160\n[visible_to]\ncore=['app*']\n",
+    )
+    .unwrap();
+    assert_eq!(policy.limits.max_code_lines, 20);
+    assert_eq!(policy.limits.max_role_chars, 160);
+    assert!(policy.visible("core", "app-shell"));
+    assert!(!policy.visible("core", "other"));
+    assert!(Policy::from_toml("[limits]\nmax_code_lines=1001\nmax_role_chars=160\n").is_err());
+}
+
+#[test]
+fn role_character_limit_rejects_zero_negative_and_non_integer_values() {
+    for value in ["0", "-1", "1.5", "'80'", "true", "[]"] {
+        let text = format!("[limits]\nmax_role_chars={value}\n");
+        assert!(Policy::from_toml(&text).is_err(), "accepted {text}");
+    }
+    let mut policy = Policy::default();
+    policy.limits.max_role_chars = 0;
+    assert!(policy.validate().unwrap_err().contains("max_role_chars"));
 }
 
 #[test]

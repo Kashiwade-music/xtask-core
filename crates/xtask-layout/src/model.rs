@@ -1,3 +1,4 @@
+//! Role: 配置要求・配置結果と文字寸法に用いる共通定数を定義する。
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

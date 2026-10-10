@@ -1,3 +1,4 @@
+//! Role: Cargoの宣言・解決情報からworkspaceの依存とfeatureを取得する。
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -1,9 +1,10 @@
+//! Role: crate依存とモジュール階層・参照をSVG出力用のグラフへ変換する。
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use xtask_graph::{Cluster, Direction, Edge, EdgeStyle, Graph, Layout, Node};
 use xtask_modules::ModuleGraph;
-use xtask_workspace::Workspace;
+use xtask_workspace::{Package, Target, Workspace};
 
 use crate::{Config, Report, TargetGraph};
 
@@ -11,22 +12,94 @@ pub(crate) fn dependencies(
     config: &Config,
     workspace: &Workspace,
     report: &mut Report,
+    max_role_chars: usize,
 ) -> Result<(), String> {
-    let (graph, layout) = dependency_graph(workspace)?;
+    let roles = crate_roles(workspace, max_role_chars)?;
+    let (graph, layout) = dependency_graph(workspace, &roles)?;
     write(&graph, &layout, &config.output.join("crates"), report)
 }
 
-fn dependency_graph(workspace: &Workspace) -> Result<(Graph, Layout), String> {
+fn primary_target(package: &Package) -> Result<&Target, String> {
+    let library = |target: &&Target| {
+        target.kind.iter().any(|kind| {
+            matches!(
+                kind.as_str(),
+                "lib" | "rlib" | "staticlib" | "cdylib" | "dylib" | "proc-macro"
+            )
+        })
+    };
+    package
+        .targets
+        .iter()
+        .filter(library)
+        .min_by(|left, right| {
+            (&left.name, &left.src_path, &left.kind).cmp(&(
+                &right.name,
+                &right.src_path,
+                &right.kind,
+            ))
+        })
+        .or_else(|| {
+            package
+                .targets
+                .iter()
+                .filter(|target| target.kind.iter().any(|kind| kind == "bin"))
+                .min_by_key(|target| (target.name != package.name, &target.name, &target.src_path))
+        })
+        .ok_or_else(|| {
+            format!(
+                "package `{}` ({}): no primary library or binary target for crate role",
+                package.name,
+                package.manifest_path.display()
+            )
+        })
+}
+
+fn crate_roles(
+    workspace: &Workspace,
+    max_role_chars: usize,
+) -> Result<BTreeMap<String, String>, String> {
+    workspace
+        .packages
+        .iter()
+        .map(|package| {
+            let target = primary_target(package)?;
+            let role = xtask_modules::crate_role_with_limit(&target.src_path, max_role_chars)
+                .map_err(|error| {
+                    format!(
+                        "package `{}` ({}): {error}",
+                        package.name,
+                        target.src_path.display()
+                    )
+                })?;
+            Ok((package.name.clone(), role))
+        })
+        .collect()
+}
+
+fn dependency_graph(
+    workspace: &Workspace,
+    roles: &BTreeMap<String, String>,
+) -> Result<(Graph, Layout), String> {
     let graph = Graph {
         title: "Workspace crate dependencies (consumer -> provider)".into(),
         nodes: workspace
             .packages
             .iter()
-            .map(|package| Node {
-                id: package.name.clone(),
-                label: package.name.clone(),
+            .map(|package| {
+                Ok(Node {
+                    id: package.name.clone(),
+                    label: format!(
+                        "{}\n{}",
+                        package.name,
+                        roles.get(&package.name).ok_or_else(|| format!(
+                            "package `{}` has no crate role",
+                            package.name
+                        ))?
+                    ),
+                })
             })
-            .collect(),
+            .collect::<Result<_, String>>()?,
         edges: workspace
             .edges
             .iter()
@@ -184,6 +257,16 @@ fn module_clusters(graph: &ModuleGraph) -> Result<Vec<Cluster>, String> {
         .iter()
         .map(|module| module.id.as_str())
         .collect();
+    let roles: BTreeMap<_, _> = graph
+        .modules
+        .iter()
+        .map(|module| {
+            (
+                module.id.as_str(),
+                module.role.as_deref().unwrap_or("[役割未記載]"),
+            )
+        })
+        .collect();
     if ids.len() != graph.modules.len() {
         return Err("duplicate module IDs in hierarchy".into());
     }
@@ -205,18 +288,19 @@ fn module_clusters(graph: &ModuleGraph) -> Result<Vec<Cluster>, String> {
     fn build(
         id: &str,
         children: &BTreeMap<Option<&str>, Vec<&str>>,
+        roles: &BTreeMap<&str, &str>,
         visited: &mut usize,
     ) -> Cluster {
         *visited += 1;
         Cluster {
             id: id.into(),
-            label: id.into(),
+            label: format!("{id}\n{}", roles[id]),
             nodes: vec![id.into()],
             children: children
                 .get(&Some(id))
                 .into_iter()
                 .flatten()
-                .map(|child| build(child, children, visited))
+                .map(|child| build(child, children, roles, visited))
                 .collect(),
         }
     }
@@ -225,7 +309,7 @@ fn module_clusters(graph: &ModuleGraph) -> Result<Vec<Cluster>, String> {
         .get(&None)
         .into_iter()
         .flatten()
-        .map(|root| build(root, &children, &mut visited))
+        .map(|root| build(root, &children, &roles, &mut visited))
         .collect();
     // Each module has exactly one parent: a parent cycle cannot be reached from a root.
     if visited != ids.len() {

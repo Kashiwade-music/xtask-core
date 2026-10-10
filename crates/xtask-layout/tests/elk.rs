@@ -1,6 +1,8 @@
+//! Role: 実ELKの配置・接続・rankと、実行失敗の診断を検証する。
 use std::process::Command;
 use xtask_layout::{
-    Direction, EdgeRequest, EdgeStyle, LayoutRequest, NodeRequest, layout_with_node,
+    Direction, EdgeRequest, EdgeStyle, LayoutRequest, NodeRequest, REGION_FONT_SIZE,
+    REGION_LINE_HEIGHT, RegionRequest, layout_with_node,
 };
 
 fn edge(id: &str, from: &str, to: &str, style: EdgeStyle) -> EdgeRequest {
@@ -177,5 +179,91 @@ fn real_elk_allocates_space_for_dense_native_and_ranked_ports() {
             .collect();
         ports.sort_by(f64::total_cmp);
         assert!(ports.windows(2).all(|pair| pair[1] - pair[0] >= 15.99));
+    }
+}
+
+#[test]
+fn real_elk_places_wrapped_region_headers_above_self_without_a_side_column() {
+    let binary = std::env::var_os("XTASK_NODE").unwrap_or_else(|| "node".into());
+    if !Command::new(&binary)
+        .arg("--version")
+        .output()
+        .is_ok_and(|result| result.status.success())
+    {
+        eprintln!("Node unavailable; optional real ELK region-header test skipped");
+        return;
+    }
+    let leaf = RegionRequest {
+        id: "crate::leaf".into(),
+        label: format!(
+            "crate::leaf\n{}",
+            "日本語の長い役割説明を読みやすく折り返して表示する。".repeat(3)
+        ),
+        nodes: vec!["leaf-self".into()],
+        children: vec![],
+    };
+    let mut request = LayoutRequest {
+        title: "Region headers".into(),
+        direction: Direction::LeftToRight,
+        nodes: vec![NodeRequest {
+            id: "leaf-self".into(),
+            label: "(self)".into(),
+        }],
+        regions: vec![leaf.clone()],
+        edges: vec![],
+        ranks: vec![],
+    };
+    for nested in [false, true] {
+        if nested {
+            request.nodes.push(NodeRequest {
+                id: "root-self".into(),
+                label: "(self)".into(),
+            });
+            request.regions = vec![RegionRequest {
+                id: "crate".into(),
+                label: "crate\n親領域の役割".into(),
+                nodes: vec!["root-self".into()],
+                children: vec![leaf.clone()],
+            }];
+        }
+        let scene = layout_with_node(&request, &binary).unwrap();
+        let region = scene
+            .regions
+            .iter()
+            .find(|region| region.id == "crate::leaf")
+            .unwrap();
+        let node = scene
+            .nodes
+            .iter()
+            .find(|node| node.id == "leaf-self")
+            .unwrap();
+        assert!(region.lines.len() > 3);
+        assert_eq!(region.lines.concat(), leaf.label.replace('\n', ""));
+        for line in &region.lines {
+            let width: f64 = line
+                .chars()
+                .map(|character| REGION_FONT_SIZE * if character.is_ascii() { 0.62 } else { 1.05 })
+                .sum();
+            assert!(width <= 200.001, "header line exceeds 200px: {line:?}");
+        }
+        // The 200px header shares the node's horizontal area instead of creating
+        // an additional side column; only the 20px left/right padding is needed.
+        assert!(region.width <= 240.001, "leaf width {}", region.width);
+        assert!(region.width >= node.width + 39.999);
+        assert!(node.y >= region.y + region.lines.len() as f64 * REGION_LINE_HEIGHT + 19.999);
+        assert!(
+            node.x >= region.x + 19.999 && node.x + node.width <= region.x + region.width - 19.999
+        );
+        assert!(node.y + node.height <= region.y + region.height - 19.999);
+        assert_eq!(region.parent.as_deref(), nested.then_some("crate"));
+        if nested {
+            let parent = scene
+                .regions
+                .iter()
+                .find(|region| region.id == "crate")
+                .unwrap();
+            assert!(region.y >= parent.y + parent.lines.len() as f64 * REGION_LINE_HEIGHT + 19.999);
+            assert!(region.x >= parent.x && region.x + region.width <= parent.x + parent.width);
+        }
     }
 }

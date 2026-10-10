@@ -1,3 +1,4 @@
+//! Role: グラフをELKで配置し、既存の成果物を保護しながらSVGを出力する。
 //! Deterministic diagram requests and direct ELK-backed SVG export.
 
 use std::ffi::OsStr;

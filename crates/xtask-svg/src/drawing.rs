@@ -1,3 +1,4 @@
+//! Role: 線分と曲線から通常線・波線・半円ジャンプのSVGパスを生成する。
 use super::crossings::Jump;
 use super::route::{Path, Point, Segment, point, tangent};
 use std::fmt::Write;

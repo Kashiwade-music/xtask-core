@@ -1,7 +1,8 @@
+//! Role: Cargo・Rust設定を解決し、共通ルールの検査と図の出力を統括する。
 use std::collections::BTreeSet;
 use std::process;
 
-use xtask_modules::AnalysisOptions;
+use xtask_modules::{AnalysisOptions, DEFAULT_MAX_ROLE_CHARS};
 use xtask_workspace::{Policy, Workspace};
 
 use crate::{Analysis, Command, Config, Report, TargetGraph, graphs};
@@ -9,11 +10,41 @@ use crate::{Analysis, Command, Config, Report, TargetGraph, graphs};
 /// Analyze active Cargo features and Rust target cfg. Unit-test configurations
 /// are separate graphs, so mutually exclusive production/test edges never merge.
 pub fn analyze(config: &Config) -> Result<Analysis, String> {
+    let policy = load_policy(config, false)?;
+    let max_role_chars = role_limit(config, policy.as_ref())?;
     let workspace = Workspace::load(&config.root)?;
-    analyze_workspace(config, workspace)
+    analyze_workspace(config, workspace, max_role_chars)
 }
 
-fn analyze_workspace(config: &Config, workspace: Workspace) -> Result<Analysis, String> {
+fn load_policy(config: &Config, required: bool) -> Result<Option<Policy>, String> {
+    if required
+        || config
+            .policy
+            .try_exists()
+            .map_err(|error| format!("{}: {error}", config.policy.display()))?
+    {
+        Policy::load(&config.policy).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+fn role_limit(config: &Config, policy: Option<&Policy>) -> Result<usize, String> {
+    let limit = config
+        .max_role_chars
+        .or_else(|| policy.map(|policy| policy.limits.max_role_chars))
+        .unwrap_or(DEFAULT_MAX_ROLE_CHARS);
+    if limit == 0 {
+        return Err("max_role_chars must be a positive integer".into());
+    }
+    Ok(limit)
+}
+
+fn analyze_workspace(
+    config: &Config,
+    workspace: Workspace,
+    max_role_chars: usize,
+) -> Result<Analysis, String> {
     let resolved = Workspace::resolved_features(
         &config.root,
         &config.features,
@@ -100,6 +131,7 @@ fn analyze_workspace(config: &Config, workspace: Workspace) -> Result<Analysis, 
                     features: features.clone(),
                     trusted_attributes: config.trusted_attributes.clone(),
                     trusted_derives: config.trusted_derives.clone(),
+                    max_role_chars,
                 };
                 let context = format!(
                     "{}::{} ({kind}{})",
@@ -166,19 +198,21 @@ fn rustc_cfg(config: &Config) -> Result<BTreeSet<String>, String> {
 
 /// Execute a read-only check or explicitly generate SVG artifacts.
 pub fn run(config: &Config, command: Command) -> Result<Report, String> {
+    let policy = load_policy(config, command == Command::Check)?;
+    let max_role_chars = role_limit(config, policy.as_ref())?;
     let workspace = Workspace::load(&config.root)?;
     if command == Command::Dependencies {
         let mut report = Report::default();
-        graphs::dependencies(config, &workspace, &mut report)?;
+        graphs::dependencies(config, &workspace, &mut report, max_role_chars)?;
         return Ok(report);
     }
-    let mut analysis = analyze_workspace(config, workspace)?;
+    let mut analysis = analyze_workspace(config, workspace, max_role_chars)?;
     if command == Command::Check {
-        let policy = Policy::load(&config.policy)?;
+        let policy = policy.as_ref().ok_or("check requires a policy")?;
         analysis
             .report
             .errors
-            .extend(analysis.workspace.check_visibility(&policy));
+            .extend(analysis.workspace.check_visibility(policy));
         let mut files = BTreeSet::new();
         for package in &analysis.workspace.packages {
             let directory = package
@@ -212,7 +246,12 @@ pub fn run(config: &Config, command: Command) -> Result<Report, String> {
     } else {
         graphs::modules(config, &analysis.targets, &mut analysis.report)?;
         if command == Command::Graphs {
-            graphs::dependencies(config, &analysis.workspace, &mut analysis.report)?;
+            graphs::dependencies(
+                config,
+                &analysis.workspace,
+                &mut analysis.report,
+                max_role_chars,
+            )?;
         }
     }
     analysis.report.notes.push(format!(

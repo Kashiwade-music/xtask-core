@@ -1,3 +1,4 @@
+//! Role: 直交経路を接続位置を保った角丸形状へ変換し、幾何計算を提供する。
 const EPSILON: f64 = 0.000001;
 
 /// Round only existing orthogonal turns; never reroute an ELK edge.

@@ -1,3 +1,4 @@
+//! Role: serde_jsonのjsonマクロからRust式を抽出する構文を解析する。
 //! serde_json::json! grammar: object/array containers plus Rust expression values.
 use proc_macro2::TokenStream;
 use syn::{

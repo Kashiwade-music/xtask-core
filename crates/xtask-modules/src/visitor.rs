@@ -1,3 +1,4 @@
+//! Role: 有効なRust構文を走査し、名前解決済みのモジュール参照を収集する。
 use crate::{
     ast, cfg, loader,
     model::{AnalysisOptions, Reference},

@@ -1,3 +1,4 @@
+//! Role: リポジトリのパス・feature・cfgと実行コマンドを定義する。
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -7,6 +8,9 @@ pub struct Config {
     pub root: PathBuf,
     pub policy: PathBuf,
     pub output: PathBuf,
+    /// Override the policy's role-description limit in Unicode characters.
+    /// `None` uses the policy value, or 80 when no policy is available.
+    pub max_role_chars: Option<usize>,
     /// Rust target triple. `None` uses the host compiler's configuration.
     pub target: Option<String>,
     /// Feature names or `package/feature` selections.
@@ -30,6 +34,7 @@ impl Config {
             policy: root.join("dev/xtask/policy/workspace.toml"),
             output: root.join("architecture"),
             root,
+            max_role_chars: None,
             target: None,
             features: Vec::new(),
             all_features: false,

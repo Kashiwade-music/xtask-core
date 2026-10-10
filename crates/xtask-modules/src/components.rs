@@ -1,3 +1,4 @@
+//! Role: モジュール参照の強連結成分を求め、循環を検出する。
 use crate::Reference;
 use std::collections::{BTreeMap, BTreeSet};
 pub(crate) fn components(nodes: Vec<String>, edges: &[Reference]) -> Vec<Vec<String>> {

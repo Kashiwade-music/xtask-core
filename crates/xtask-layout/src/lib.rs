@@ -1,3 +1,4 @@
+//! Role: ELKによるレイアウト要求と配置結果の公開APIを提供する。
 //! ELK owns node placement and orthogonal edge routes; SVG decoration is separate.
 
 mod model;

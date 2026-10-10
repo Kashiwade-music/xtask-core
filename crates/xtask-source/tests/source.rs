@@ -1,3 +1,4 @@
+//! Role: コード行数の計測、ソース探索、読み取り失敗の扱いを検証する。
 use std::fs;
 use xtask_source::{check_files, code_line_count, rust_files};
 

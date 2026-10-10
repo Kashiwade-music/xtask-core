@@ -22,6 +22,66 @@ Rust プロジェクトの xtask として使える共通ルール。
 - `visible_to`: 当該crateに依存できるcrateの許可リスト検査
 - 各crate内モジュールの階層構造と参照構造のSVG書き出し
 - 各crate内モジュールの参照構造の循環禁止
+- 各crate root・moduleに短い役割宣言を必須とし、SVGへ表示
+
+## 役割の必須書式
+
+crate rootと各moduleの内側ドキュメントに、次の1行を必ず記述します。
+
+```rust
+//! Role: リポジトリ共通の検査と図の出力を統括する。
+
+mod config {
+    //! Role: パス・feature・cfgなどの実行設定を定義する。
+}
+```
+
+外部ファイルのmoduleでは、そのファイルの先頭に記述します。
+`mod name;` の宣言側に付けた外側ドキュメントでは代用できません。
+lib・bin・test・bench・example・build scriptの各crate rootにも必要です。
+
+`Role: ` は大文字の `R` とコロン後の半角スペースを含む固定の接頭辞です。
+説明は前後の空白を除いて1～設定上限のUnicode文字とし、1行に収めます。上限の既定値は80です。
+制御文字は使用できません。同じmoduleに宣言を複数書くこともエラーです。
+普通のコメントや文字列は宣言として扱いません。
+同じ内容の1行の `/*! Role: 説明 */` や `#![doc = "Role: 説明"]` も受け付けます。
+`cfg_attr` やmacroで生成する宣言は採用せず、ソース上の静的な宣言を必須とします。
+通常のドキュメントは役割宣言とは別の行に併記できます。
+
+`check` とmodule図の生成では、選択されたtarget・feature・cfgの有効なmoduleを検査します。
+不正・欠落はファイルとmodule名を添えて報告し、非ゼロ終了します。
+診断用に生成する不完全なmodule図では `[役割未記載]` と表示します。
+
+crate図にはpackage名と役割、module図には領域の見出しにmodule名と役割を表示します。
+crate図のpackageの役割はlib rootを優先し、libがない場合はpackageと同名のbin、
+それもなければ名前順で最初のbinから取得します。
+`deps-graph` はそのrootの役割宣言を検査し、子moduleの探索やmacro展開は行いません。
+`//!`・`/*! */` の役割コメントはコード行数の上限に数えません。
+明示的な `#![doc = ...]` 属性はRustコードとして行数に数えます。
+
+文字数上限は `dev/xtask/policy/workspace.toml` で変更できます。
+80より大きな値も小さな値も設定でき、1以上の整数が必要です。
+
+```toml
+[limits]
+max_role_chars = 160
+```
+
+一時的に変更する場合は、すべてのコマンドで `--max-role-chars` を利用できます。
+CLIの値はpolicyより優先します。
+
+```shell
+cargo xtask check --max-role-chars 160
+cargo xtask graphs --max-role-chars 160
+```
+
+Rust APIでは `Config.max_role_chars = Some(160)` で上書きできます。
+`None` はpolicyの値を採用します。`run` と `analyze` の両方に適用されます。
+グラフコマンドと `analyze` はpolicyファイルがなければ既定値80を使い、
+存在するpolicyは読み込み・検証します。`check` はpolicyファイルを必須とします。
+`xtask-modules` を直接使う場合は `AnalysisOptions.max_role_chars` と
+`crate_role_with_limit(root, limit)` で指定できます。`crate_role(root)` は既定値80です。
+文字数上限は図の折り返し幅200pxとは独立しており、長い説明も折り返して表示します。
 
 ## SVG書き出しについて
 
@@ -43,6 +103,8 @@ crate図では各階層内の縦配置と、階層間の配置・配線をELKで
 接続数に応じて矩形の高さを広げ、左右辺の接続点が密集しないようにします。
 
 module依存図は各moduleの領域を親moduleの領域内に入れ子で配置します。
+module名と役割の見出しは200pxで折り返し、領域の上中央に配置します。
+領域の幅は見出しに左右20pxずつの余白を加えた最小幅と、内部の配置・配線に必要な幅で決まります。
 各領域の `(self)` ノードはそのmodule自身を表し、参照を実線矢印で結びます。
 階層の親子関係は領域の包含で表し、参照と一枚の図にまとめます。
 角の丸め、devの波線、交差点の跨ぎはELKが返す経路に描画処理を加えます。
@@ -82,6 +144,8 @@ xtask-core = { path = "../../vendor/xtask-core/crates/xtask-core" }
 共通crate自身の `CARGO_MANIFEST_DIR` を利用側のルートとして扱いません。
 
 ```rust
+//! Role: 利用側リポジトリの設定で共通xtaskを起動する。
+
 fn main() -> std::process::ExitCode {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent().unwrap().parent().unwrap();
@@ -101,6 +165,7 @@ xtask = "run --package xtask --"
 ```toml
 [limits]
 max_code_lines = 1000
+max_role_chars = 80
 
 [visible_to]
 internal = ["facade", "app-*"]
@@ -108,6 +173,7 @@ app = []
 ```
 
 上限は省略すると1000です。1000を超える設定は拒否し、より厳しい設定は許可します。
+`max_role_chars` は省略すると80で、80を超える上限も許可します。
 `visible_to` はproviderをキーに、依存してよいconsumerのpackage名を指定します。
 未記載のproviderは公開、`[]` は自己依存以外禁止、末尾の `*` は前方一致です。
 存在しないproviderや、workspaceに一致するconsumerがないパターンもエラーです。
@@ -121,9 +187,9 @@ cargo xtask modules-graph
 cargo xtask graphs
 ```
 
-`check` はpolicy、コード行数、モジュール参照循環を検査し、グラフを書き換えません。
+`check` はpolicy、コード行数、役割宣言、モジュール参照循環を検査し、グラフを書き換えません。
 グラフコマンドはSVGを明示的に生成します。
-`deps-graph` はモジュール解析やpolicyを必要とせず、workspace内の直接依存を出力します。
+`deps-graph` はpolicyや子moduleの解析を必要とせず、rootの役割宣言とworkspace内の直接依存を出力します。
 module系コマンドは解析不能や循環があれば非ゼロ終了します。取得できたグラフは診断用に出力します。
 
 出力先の既定値は `architecture/` です。

@@ -1,3 +1,4 @@
+//! Role: 組み込みderiveと対応macroを、名前の由来に基づいて識別する。
 //! Recognize origins, not just spellings, of supported intrinsic grammars.
 pub(crate) const DERIVES: &[&str] = &[
     "Clone",

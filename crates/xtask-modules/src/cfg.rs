@@ -1,3 +1,4 @@
+//! Role: cfgとcfg_attrを評価し、解析できない属性展開を診断する。
 use crate::AnalysisOptions;
 use syn::{Attribute, Meta, Token, punctuated::Punctuated};
 

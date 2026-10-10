@@ -1,9 +1,10 @@
+//! Role: CLI引数を設定へ変換し、検査結果と実行エラーを表示する。
 use std::path::Path;
 use std::process::ExitCode;
 
 use crate::{Command, Config, run};
 
-const USAGE: &str = "usage: xtask <check|deps-graph|modules-graph|graphs> [--root PATH] [--policy PATH] [--output PATH] [--target TRIPLE] [--features LIST] [--all-features] [--no-default-features] [--cfg VALUE] [--no-tests] [--trust-attribute PATH] [--trust-derive PATH]";
+const USAGE: &str = "usage: xtask <check|deps-graph|modules-graph|graphs> [--root PATH] [--policy PATH] [--output PATH] [--max-role-chars N] [--target TRIPLE] [--features LIST] [--all-features] [--no-default-features] [--cfg VALUE] [--no-tests] [--trust-attribute PATH] [--trust-derive PATH]";
 
 /// Parse command-line arguments, excluding the executable name.
 pub fn parse_args(
@@ -31,6 +32,18 @@ pub fn parse_args(
             }
             "--policy" => policy = Some(value(&mut arguments, &argument)?),
             "--output" => output = Some(value(&mut arguments, &argument)?),
+            "--max-role-chars" => {
+                let limit = value(&mut arguments, &argument)?;
+                config.max_role_chars = Some(
+                    limit
+                        .parse::<usize>()
+                        .ok()
+                        .filter(|limit| *limit > 0)
+                        .ok_or_else(|| {
+                            format!("{argument} requires a positive integer\n{USAGE}")
+                        })?,
+                );
+            }
             "--target" => config.target = Some(value(&mut arguments, &argument)?),
             "--features" => config.features.extend(
                 value(&mut arguments, &argument)?
@@ -103,6 +116,8 @@ pub fn main(root: impl AsRef<Path>) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    //! Role: CLI引数の検証と、パス・feature設定の反映を検証する。
+
     use super::*;
 
     #[test]
@@ -134,9 +149,27 @@ mod tests {
             vec![],
             vec!["check", "--output"],
             vec!["check", "--typo"],
+            vec!["check", "--max-role-chars"],
+            vec!["check", "--max-role-chars", "0"],
+            vec!["check", "--max-role-chars", "-1"],
+            vec!["check", "--max-role-chars", "many"],
+            vec!["check", "--max-role-chars", "9999999999999999999999999999"],
             vec!["nope"],
         ] {
             assert!(parse_args(".", args.into_iter().map(str::to_owned)).is_err());
         }
+    }
+
+    #[test]
+    fn role_limit_overrides_survive_root_changes_and_accept_values_above_default() {
+        let (default, _) = parse_args(".", ["check".into()]).unwrap();
+        assert_eq!(default.max_role_chars, None);
+        let (config, _) = parse_args(
+            ".",
+            ["graphs", "--max-role-chars", "160", "--root", "repo"].map(str::to_owned),
+        )
+        .unwrap();
+        assert_eq!(config.max_role_chars, Some(160));
+        assert_eq!(config.root, Path::new("repo"));
     }
 }

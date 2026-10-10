@@ -41,7 +41,7 @@ async function build(request, elk) {
             layoutOptions: {
                 'elk.hierarchyHandling': 'INCLUDE_CHILDREN',
                 'elk.padding': `[top=${input.label_height + 20},left=20,bottom=20,right=20]`,
-                'elk.nodeLabels.placement': 'INSIDE V_TOP H_LEFT',
+                'elk.nodeLabels.placement': 'INSIDE V_TOP H_CENTER',
                 'elk.nodeSize.constraints': 'MINIMUM_SIZE',
                 'elk.nodeSize.minimum': `(${input.label_width + 40},${input.label_height + 40})`,
             },

@@ -1,3 +1,4 @@
+//! Role: 直線と曲線の交差を解析し、障害物を避ける半円ジャンプを選ぶ。
 use super::route::{
     Path, Point, Segment, coefficients, evaluate, horizontal, point, tangent, vertical,
 };

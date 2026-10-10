@@ -1,3 +1,4 @@
+//! Role: 配置結果を検証し、階層・文字・矢印を重ねてSVGを生成する。
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 

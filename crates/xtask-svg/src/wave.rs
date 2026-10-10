@@ -1,3 +1,4 @@
+//! Role: 経路に沿う波線を生成し、矢印の接続位置と曲線の連続性を保つ。
 use super::route::{Point, Segment};
 use std::f64::consts::TAU;
 use std::fmt::Write;

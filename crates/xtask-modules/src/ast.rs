@@ -1,3 +1,4 @@
+//! Role: Rust構文の各種ノードから属性を取り出す共通処理を提供する。
 //! Attribute access that does not inspect macro token trees.
 use syn::{Attribute, Expr};
 

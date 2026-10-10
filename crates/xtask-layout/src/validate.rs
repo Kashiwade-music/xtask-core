@@ -1,3 +1,4 @@
+//! Role: 配置要求の整合性と、配置結果の形状・接続・階層を検証する。
 use crate::model::{Direction, EdgeStyle, LayoutRequest, RegionRequest, Scene};
 use std::collections::{BTreeMap, BTreeSet};
 

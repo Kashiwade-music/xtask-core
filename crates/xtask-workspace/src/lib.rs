@@ -1,3 +1,4 @@
+//! Role: workspace情報とリポジトリ固有の可視性ポリシーを公開する。
 //! Cargo workspace declarations and the shared visibility policy.
 //!
 //! Edges include every declared normal, development, build, and target-specific

@@ -1,3 +1,4 @@
+//! Role: コード行数・役割説明の文字数上限とvisible_toの設定を読み込み検証する。
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -18,16 +19,24 @@ pub struct Policy {
 pub struct Limits {
     #[serde(default = "default_max_code_lines")]
     pub max_code_lines: usize,
+    /// Maximum Unicode scalar values in a module's Role description.
+    #[serde(default = "default_max_role_chars")]
+    pub max_role_chars: usize,
 }
 
 const fn default_max_code_lines() -> usize {
     1000
 }
 
+const fn default_max_role_chars() -> usize {
+    80
+}
+
 impl Default for Limits {
     fn default() -> Self {
         Self {
             max_code_lines: default_max_code_lines(),
+            max_role_chars: default_max_role_chars(),
         }
     }
 }
@@ -46,10 +55,14 @@ impl Policy {
         Ok(policy)
     }
 
-    /// Restrict the common limit further, but never relax the 1000-line rule.
+    /// Validate configurable limits and visibility patterns. The common
+    /// 1000-line ceiling can be tightened; Role limits may be any positive value.
     pub fn validate(&self) -> Result<(), String> {
         if self.limits.max_code_lines > 1000 {
             return Err("limits.max_code_lines must be at most 1000".into());
+        }
+        if self.limits.max_role_chars == 0 {
+            return Err("limits.max_role_chars must be at least 1".into());
         }
         for (provider, consumers) in &self.visible_to {
             if provider.is_empty() || provider.contains('*') {

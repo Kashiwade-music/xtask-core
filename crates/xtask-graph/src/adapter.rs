@@ -1,3 +1,4 @@
+//! Role: グラフと配置設定を決定的な型付きELK要求へ変換する。
 use crate::layout::{Cluster, Direction, EdgeStyle, Layout, sorted_edges, validate};
 use crate::model::Graph;
 use xtask_layout::{EdgeRequest, LayoutRequest, NodeRequest, RegionRequest};

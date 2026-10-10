@@ -1,3 +1,4 @@
+//! Role: リポジトリ共通ルールの設定・検査・図の出力APIを公開する。
 //! Shared rules for repository-local xtask executables.
 //!
 //! Call [`main`] with an explicit repository root, or use [`run`] to obtain a
