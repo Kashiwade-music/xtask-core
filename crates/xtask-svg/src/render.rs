@@ -108,7 +108,8 @@ pub fn render(scene: &Scene) -> Result<String, String> {
     }
     for region in regions.values() {
         let title_height = region.lines.len() as f64 * REGION_LINE_HEIGHT;
-        write!(output,"<g class=\"region-label\" data-region-id=\"{}\"><rect x=\"{:.3}\" y=\"{:.3}\" width=\"{:.3}\" height=\"{:.3}\" fill=\"white\"/>",xml(&region.id),region.x+3.0,region.y+3.0,region.width-6.0,title_height+4.0).unwrap();
+        let background = region_background(region, &regions);
+        write!(output,"<g class=\"region-label\" data-region-id=\"{}\"><rect x=\"{:.3}\" y=\"{:.3}\" width=\"{:.3}\" height=\"{:.3}\" fill=\"{background}\"/>",xml(&region.id),region.x+3.0,region.y+3.0,region.width-6.0,title_height+4.0).unwrap();
         text(
             &mut output,
             &region.lines,
@@ -154,10 +155,32 @@ fn regions_layer(
         .values()
         .filter(|region| region.parent.as_deref() == parent)
     {
-        write!(output,"<g class=\"cluster\" data-region-id=\"{}\" data-parent=\"{}\"><title>{}</title><rect x=\"{:.3}\" y=\"{:.3}\" width=\"{:.3}\" height=\"{:.3}\" rx=\"4\" fill=\"none\" stroke=\"#94a3b8\" stroke-width=\"1\"/>",xml(&region.id),xml(region.parent.as_deref().unwrap_or("")),xml(&region.label),region.x,region.y,region.width,region.height).unwrap();
+        let background = if region.parent.is_none() {
+            "none".into()
+        } else {
+            region_background(region, regions)
+        };
+        write!(output,"<g class=\"cluster\" data-region-id=\"{}\" data-parent=\"{}\"><title>{}</title><rect x=\"{:.3}\" y=\"{:.3}\" width=\"{:.3}\" height=\"{:.3}\" rx=\"4\" fill=\"{background}\" stroke=\"#94a3b8\" stroke-width=\"1\"/>",xml(&region.id),xml(region.parent.as_deref().unwrap_or("")),xml(&region.label),region.x,region.y,region.width,region.height).unwrap();
         regions_layer(output, regions, Some(&region.id));
         output.push_str("</g>\n");
     }
+}
+
+fn region_background(region: &SceneRegion, regions: &BTreeMap<&str, &SceneRegion>) -> String {
+    let mut lightness = 1.0;
+    let mut current = region;
+    while let Some(parent) = current.parent.as_deref() {
+        lightness *= 0.8;
+        current = regions[parent];
+    }
+    // Approach slate-300 gradually so even deeply nested modules remain light.
+    let channel = |base: f64| (base + (255.0 - base) * lightness).round() as u8;
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        channel(203.0),
+        channel(213.0),
+        channel(225.0)
+    )
 }
 
 fn text(output: &mut String, lines: &[String], x: f64, y: f64, size: f64, line_height: f64) {
