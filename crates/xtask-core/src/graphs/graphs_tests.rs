@@ -374,7 +374,7 @@ fn module_diagrams_keep_errors_and_continue_to_later_targets() {
         },
     ];
     let mut report = Report::default();
-    super::modules(&config, &targets, DiagramTargets::All, &mut report).unwrap();
+    super::modules(&config, &targets, &[], DiagramTargets::All, &mut report).unwrap();
     assert_eq!(report.errors.len(), 2);
     assert!(
         report.errors[0].contains("app::bad")
@@ -469,7 +469,7 @@ fn no_write_modules_preserve_errors_and_validate_later_targets() {
         },
     ];
     let mut report = Report::default();
-    super::modules(&config, &targets, DiagramTargets::All, &mut report).unwrap();
+    super::modules(&config, &targets, &[], DiagramTargets::All, &mut report).unwrap();
     assert_eq!(report.errors.len(), 1);
     assert!(report.errors[0].contains("missing parent"));
     assert!(report.artifacts.is_empty());
@@ -478,4 +478,21 @@ fn no_write_modules_preserve_errors_and_validate_later_targets() {
         report.notes[0].contains("good-lib-normal.svg") && report.notes[0].contains("(no-write)")
     );
     assert!(!config.output_dir().exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn stale_detection_ignores_path_case_on_windows() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = Config::new(directory.path());
+    let modules = directory.path().join("architecture/modules/App");
+    std::fs::create_dir_all(&modules).unwrap();
+    std::fs::write(modules.join("Good-lib-normal.svg"), "kept").unwrap();
+    std::fs::write(modules.join("Gone-lib-normal.svg"), "stale").unwrap();
+    // The generated name differs from the on-disk name only by letter case.
+    let generated = BTreeSet::from([config.output_dir().join("modules/app/good-lib-normal.svg")]);
+    let mut report = Report::default();
+    stale_modules(&config, &generated, &mut report).unwrap();
+    assert_eq!(report.notes.len(), 1, "{:?}", report.notes);
+    assert!(report.notes[0].contains("Gone-lib-normal.svg"));
 }

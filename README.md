@@ -113,7 +113,7 @@ architecture/
 targets = "lib-bin"
 ```
 
-今回の実行で生成しなかった既存のmodule図（選外になったtarget、またはrename・削除されて生成元の無いtargetの図）は、`<output>/modules` 以下の `*.svg` から探して `stale module diagram` として報告する（失敗にはしない）。自動では消さない。`--prune` を付けると削除し、空になったpackageのdirectoryも消す。`--prune` は `--no-write` と同時に使えず、報告にエラーがあるときは（解析失敗で全図が未生成に見えるため）削除しない。`crates.svg` と `*.svg` 以外のファイルは対象外。
+今回の実行で生成しなかった既存のmodule図（選外になったtarget、またはrename・削除されて生成元の無いtargetの図）は、`<output>/modules` 以下の `*.svg` から探して `stale module diagram` として報告する（失敗にはしない）。自動では消さない。`--prune` を付けると削除し、空になったpackageのdirectoryも消す。`--prune` は `--no-write` と同時に使えず、報告にエラーがあるときは（解析失敗で全図が未生成に見えるため）削除しない。`required-features` が有効でなく解析をskipしたtargetは実在するものとして扱い、選択に含まれる限りその図は報告も削除もしない。Windowsではpathの大文字小文字を区別せずに比較する。`crates.svg` と `*.svg` 以外のファイルは対象外。
 
 ```sh
 cargo xtask check --prune

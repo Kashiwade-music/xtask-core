@@ -938,3 +938,99 @@ fn prune_is_skipped_while_the_report_has_errors() {
     assert!(stale.iter().all(|path| path.exists()));
     assert!(String::from_utf8_lossy(&output.stdout).contains("stale module diagram prune skipped"));
 }
+
+fn seed_diagrams(root: &std::path::Path, names: &[&str]) {
+    let directory = root.join("architecture/modules/fixture");
+    fs::create_dir_all(&directory).unwrap();
+    for name in names {
+        fs::write(directory.join(name), "existing").unwrap();
+    }
+}
+
+#[test]
+fn default_and_all_targets_never_report_their_own_diagrams_as_stale() {
+    for policy in ["", "[diagrams]\ntargets = 'all'\n"] {
+        let directory = fixture("pub fn run() {}", policy);
+        add_bin_and_test_targets(&directory);
+        seed_diagrams(
+            directory.path(),
+            &[
+                "fixture-lib-normal.svg",
+                "fixture-lib-test.svg",
+                "fixture-bin-normal.svg",
+                "fixture-bin-test.svg",
+                "it-test-test.svg",
+            ],
+        );
+        let mut config = Config::new(directory.path());
+        config.no_write = true;
+        let report = run(&config).unwrap();
+        assert!(report.is_success(), "{:?}", report.errors);
+        assert!(stale_notes(&report).is_empty(), "{:?}", report.notes);
+    }
+}
+
+#[test]
+fn targets_skipped_for_inactive_required_features_keep_their_diagrams() {
+    let directory = fixture("pub fn run() {}", "[diagrams]\ntargets = 'lib-bin'\n");
+    let manifest = directory.path().join("Cargo.toml");
+    let mut text = fs::read_to_string(&manifest).unwrap();
+    text.push_str("extra = []\n[[bin]]\nname = 'gated'\npath = 'src/gated.rs'\nrequired-features = ['extra']\n");
+    fs::write(&manifest, text).unwrap();
+    fs::write(
+        directory.path().join("src/gated.rs"),
+        "//! Role: 任意featureの実行ファイルを検証する。\nfn main() {}\n",
+    )
+    .unwrap();
+    seed_diagrams(
+        directory.path(),
+        &["gated-bin-normal.svg", "gated-bin-test.svg"],
+    );
+    let kept = [
+        directory
+            .path()
+            .join("architecture/modules/fixture/gated-bin-normal.svg"),
+        directory
+            .path()
+            .join("architecture/modules/fixture/gated-bin-test.svg"),
+    ];
+    let mut config = Config::new(directory.path());
+    config.no_write = true;
+    let report = run(&config).unwrap();
+    assert!(report.is_success(), "{:?}", report.errors);
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|note| note.contains("skipped fixture::gated")),
+        "{:?}",
+        report.notes
+    );
+    assert!(stale_notes(&report).is_empty(), "{:?}", report.notes);
+
+    // A skipped target outside the selection is not kept.
+    fs::write(
+        directory.path().join("dev/xtask/policy/workspace.toml"),
+        "[diagrams]\ntargets = 'lib'\n",
+    )
+    .unwrap();
+    let report = run(&config).unwrap();
+    assert_eq!(stale_notes(&report).len(), 2, "{:?}", report.notes);
+    fs::write(
+        directory.path().join("dev/xtask/policy/workspace.toml"),
+        "[diagrams]\ntargets = 'lib-bin'\n",
+    )
+    .unwrap();
+
+    let Some(node) = available_node() else {
+        return;
+    };
+    let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
+        .args(["check", "--prune", "--root"])
+        .arg(directory.path())
+        .env("XTASK_NODE", &node)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(kept.iter().all(|path| path.exists()));
+}

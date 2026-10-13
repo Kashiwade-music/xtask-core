@@ -5,7 +5,7 @@ use std::process;
 use xtask_modules::AnalysisOptions;
 use xtask_workspace::{AnalysisSettings, Policy, Workspace};
 
-use crate::{Analysis, Config, Report, TargetGraph, graphs};
+use crate::{Analysis, Config, Report, SkippedTarget, TargetGraph, graphs};
 
 /// Analyze active Cargo features and Rust target cfg. Unit-test configurations
 /// are separate graphs, so mutually exclusive production/test edges never merge.
@@ -55,6 +55,7 @@ fn analyze_workspace(
     let cfg = rustc_cfg(config, settings)?;
     let mut report = Report::default();
     let mut targets = Vec::new();
+    let mut skipped = Vec::new();
     for package in &workspace.packages {
         let features = resolved.get(&package.name).cloned().ok_or_else(|| {
             format!(
@@ -79,6 +80,11 @@ fn analyze_workspace(
                     "skipped {}::{}: required features are inactive",
                     package.name, target.name
                 ));
+                skipped.push(SkippedTarget {
+                    package: package.name.clone(),
+                    target: target.name.clone(),
+                    kind: target.kind.join("+"),
+                });
                 continue;
             }
             let kind = target.kind.join("+");
@@ -169,6 +175,7 @@ fn analyze_workspace(
     Ok(Analysis {
         workspace,
         targets,
+        skipped,
         report,
     })
 }
@@ -221,6 +228,7 @@ pub fn run(config: &Config) -> Result<Report, String> {
         Err(error) => Analysis {
             workspace,
             targets: Vec::new(),
+            skipped: Vec::new(),
             report: Report {
                 errors: vec![format!("module analysis: {error}")],
                 ..Report::default()
@@ -235,6 +243,7 @@ pub fn run(config: &Config) -> Result<Report, String> {
     if let Err(error) = graphs::modules(
         &graph_config,
         &analysis.targets,
+        &analysis.skipped,
         policy.diagrams.targets,
         &mut analysis.report,
     ) {

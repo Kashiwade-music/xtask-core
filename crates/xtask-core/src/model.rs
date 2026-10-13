@@ -25,8 +25,18 @@ pub struct TargetGraph {
     pub graph: ModuleGraph,
 }
 
+/// A target that exists but was not analyzed because its `required-features`
+/// are inactive. Its existing diagrams are kept rather than reported as stale.
+#[derive(Clone, Debug)]
+pub struct SkippedTarget {
+    pub package: String,
+    pub target: String,
+    pub kind: String,
+}
+
 pub struct Analysis {
     pub workspace: Workspace,
     pub targets: Vec<TargetGraph>,
+    pub skipped: Vec<SkippedTarget>,
     pub report: Report,
 }

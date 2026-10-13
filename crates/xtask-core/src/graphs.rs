@@ -6,7 +6,7 @@ use xtask_graph::{Cluster, Direction, Edge, EdgeStyle, Graph, Layout, Node};
 use xtask_modules::ModuleGraph;
 use xtask_workspace::{DiagramTargets, Package, Target, Workspace};
 
-use crate::{Config, Report, TargetGraph};
+use crate::{Config, Report, SkippedTarget, TargetGraph};
 
 pub(crate) fn dependencies(
     config: &Config,
@@ -213,6 +213,7 @@ fn normal_ranks(workspace: &Workspace) -> Result<Vec<Vec<String>>, String> {
 pub(crate) fn modules(
     config: &Config,
     targets: &[TargetGraph],
+    skipped: &[SkippedTarget],
     selection: DiagramTargets,
     report: &mut Report,
 ) -> Result<(), String> {
@@ -221,7 +222,13 @@ pub(crate) fn modules(
         .iter()
         .filter(|target| selection.includes(target.kind.split('+')))
     {
-        generated.insert(module_svg_path(config, target));
+        generated.insert(module_svg_path(
+            config,
+            &target.package,
+            &target.target,
+            &target.kind,
+            target.test,
+        ));
         if let Err(error) = module_diagram(config, target, report) {
             let source = target
                 .graph
@@ -240,6 +247,21 @@ pub(crate) fn modules(
                 target.target,
                 target.kind,
                 if target.test { "test" } else { "normal" }
+            ));
+        }
+    }
+    // Targets skipped for inactive required features still exist: keep their diagrams.
+    for target in skipped
+        .iter()
+        .filter(|target| selection.includes(target.kind.split('+')))
+    {
+        for test in [false, true] {
+            generated.insert(module_svg_path(
+                config,
+                &target.package,
+                &target.target,
+                &target.kind,
+                test,
             ));
         }
     }
@@ -266,7 +288,8 @@ fn stale_modules(
     }
     let mut stale = Vec::new();
     collect_svgs(&modules, &mut stale)?;
-    stale.retain(|path| !generated.contains(path));
+    let generated: BTreeSet<PathBuf> = generated.iter().map(|path| comparable(path)).collect();
+    stale.retain(|path| !generated.contains(&comparable(path)));
     for path in &stale {
         if config.prune {
             std::fs::remove_file(path).map_err(|error| format!("{}: {error}", path.display()))?;
@@ -285,6 +308,15 @@ fn stale_modules(
         }
     }
     Ok(())
+}
+
+/// Windows paths compare case-insensitively; other platforms compare exactly.
+fn comparable(path: &Path) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(path.to_string_lossy().to_lowercase())
+    } else {
+        path.to_path_buf()
+    }
 }
 
 fn collect_svgs(directory: &Path, found: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -309,17 +341,23 @@ fn collect_svgs(directory: &Path, found: &mut Vec<PathBuf>) -> Result<(), String
     Ok(())
 }
 
-fn module_svg_path(config: &Config, target: &TargetGraph) -> PathBuf {
+fn module_svg_path(
+    config: &Config,
+    package: &str,
+    target: &str,
+    kind: &str,
+    test: bool,
+) -> PathBuf {
     let name = format!(
         "{}-{}-{}",
-        safe_name(&target.target),
-        safe_name(&target.kind),
-        if target.test { "test" } else { "normal" }
+        safe_name(target),
+        safe_name(kind),
+        if test { "test" } else { "normal" }
     );
     config
         .output_dir()
         .join("modules")
-        .join(safe_name(&target.package))
+        .join(safe_name(package))
         .join(name)
         .with_extension("svg")
 }
@@ -365,7 +403,13 @@ fn module_diagram(
     write(
         &graph,
         &layout,
-        &module_svg_path(config, target),
+        &module_svg_path(
+            config,
+            &target.package,
+            &target.target,
+            &target.kind,
+            target.test,
+        ),
         report,
         config.no_write,
     )
