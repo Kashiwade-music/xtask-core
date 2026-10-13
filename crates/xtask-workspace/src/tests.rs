@@ -191,6 +191,75 @@ fn policy_defaults_and_patterns_and_unknown_fields_are_strict() {
 }
 
 #[test]
+fn diagram_targets_default_to_all_and_select_library_like_kinds() {
+    use crate::DiagramTargets::{All, Lib, LibBin};
+    assert_eq!(Policy::default().diagrams.targets, All);
+    for text in [
+        "",
+        "[diagrams]
+",
+        "[diagrams]
+targets='all'
+",
+    ] {
+        assert_eq!(Policy::from_toml(text).unwrap().diagrams.targets, All);
+    }
+    assert_eq!(
+        Policy::from_toml(
+            "[diagrams]
+targets='lib'
+"
+        )
+        .unwrap()
+        .diagrams
+        .targets,
+        Lib
+    );
+    assert_eq!(
+        Policy::from_toml(
+            "[diagrams]
+targets='lib-bin'
+"
+        )
+        .unwrap()
+        .diagrams
+        .targets,
+        LibBin
+    );
+    for invalid in [
+        "[diagrams]
+targets='tests'
+",
+        "[diagrams]
+targets=['lib']
+",
+        "[diagrams]
+kinds='lib'
+",
+    ] {
+        assert!(Policy::from_toml(invalid).is_err(), "accepted {invalid}");
+    }
+    let lib = ["lib"];
+    let cdylib = ["cdylib", "rlib"];
+    let proc_macro = ["proc-macro"];
+    let bin = ["bin"];
+    let others = [["test"], ["bench"], ["example"], ["custom-build"]];
+    for kinds in [&lib[..], &cdylib[..], &proc_macro[..]] {
+        for mode in [All, Lib, LibBin] {
+            assert!(mode.includes(kinds.iter().copied()));
+        }
+    }
+    assert!(All.includes(bin));
+    assert!(!Lib.includes(bin));
+    assert!(LibBin.includes(bin));
+    for kinds in others {
+        assert!(All.includes(kinds));
+        assert!(!Lib.includes(kinds));
+        assert!(!LibBin.includes(kinds));
+    }
+}
+
+#[test]
 fn role_character_limit_defaults_and_accepts_any_positive_setting() {
     assert_eq!(crate::Limits::default().max_role_chars, 80);
     assert_eq!(Policy::default().limits.max_role_chars, 80);

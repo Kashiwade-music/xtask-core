@@ -200,6 +200,9 @@ fn rustc_cfg(config: &Config, settings: &AnalysisSettings) -> Result<BTreeSet<St
 /// `no_write` is set. That mode validates graph structure without invoking Node.
 /// Rule violations and independent output failures are collected in the report.
 pub fn run(config: &Config) -> Result<Report, String> {
+    if config.prune && config.no_write {
+        return Err("prune cannot be combined with no_write".into());
+    }
     let policy = Policy::load(&config.policy)?;
     let output = config.output.as_ref().unwrap_or(&policy.output);
     if output.as_os_str().to_string_lossy().trim().is_empty() {
@@ -229,7 +232,12 @@ pub fn run(config: &Config) -> Result<Report, String> {
         .errors
         .extend(analysis.workspace.check_visibility(&policy));
     check_lines(&mut analysis, policy.limits.max_code_lines);
-    if let Err(error) = graphs::modules(&graph_config, &analysis.targets, &mut analysis.report) {
+    if let Err(error) = graphs::modules(
+        &graph_config,
+        &analysis.targets,
+        policy.diagrams.targets,
+        &mut analysis.report,
+    ) {
         analysis
             .report
             .errors

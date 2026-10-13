@@ -11,6 +11,10 @@ pub struct Config {
     pub output: Option<PathBuf>,
     /// Validate rules and diagram structure without writing files or invoking Node.
     pub no_write: bool,
+    /// Delete existing module SVGs that this run did not generate (excluded or
+    /// source-less targets). Without it they are only reported. Incompatible
+    /// with `no_write`, and skipped while the report contains errors.
+    pub prune: bool,
     /// Override the policy's role-description limit in Unicode characters.
     /// `None` uses the policy value, or 80 when no policy is available.
     pub max_role_chars: Option<usize>,
@@ -25,6 +29,7 @@ impl Config {
             policy: root.join("dev/xtask/policy/workspace.toml"),
             output: None,
             no_write: false,
+            prune: false,
             root,
             max_role_chars: None,
             analysis: None,

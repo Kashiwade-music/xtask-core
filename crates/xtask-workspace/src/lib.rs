@@ -12,6 +12,6 @@ mod policy;
 #[cfg(test)]
 mod tests;
 
-pub use policy::{AnalysisSettings, Limits, Policy};
+pub use policy::{AnalysisSettings, DiagramTargets, Diagrams, Limits, Policy};
 
 pub use model::{Dependency, Package, Target, Workspace};

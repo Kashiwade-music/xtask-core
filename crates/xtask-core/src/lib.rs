@@ -16,4 +16,4 @@ pub use config::Config;
 pub use model::{Analysis, Report, TargetGraph};
 pub use run::{analyze, run};
 pub use xtask_modules::{AnalysisOptions, ModuleGraph};
-pub use xtask_workspace::{AnalysisSettings, Limits, Policy};
+pub use xtask_workspace::{AnalysisSettings, DiagramTargets, Diagrams, Limits, Policy};

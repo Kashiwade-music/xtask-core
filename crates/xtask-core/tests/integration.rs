@@ -742,3 +742,199 @@ fn no_write_runs_every_rule_without_node_or_filesystem_mutation() {
         );
     }
 }
+
+fn add_bin_and_test_targets(directory: &tempfile::TempDir) {
+    fs::write(
+        directory.path().join("src/main.rs"),
+        "//! Role: 実行ファイルの図を検証する。\nfn main() {}\n",
+    )
+    .unwrap();
+    fs::create_dir_all(directory.path().join("tests")).unwrap();
+    fs::write(
+        directory.path().join("tests/it.rs"),
+        "//! Role: 結合試験の図を検証する。\n#[test]\nfn works() {}\n",
+    )
+    .unwrap();
+}
+
+fn seed_stale_diagrams(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let modules = root.join("architecture/modules");
+    fs::create_dir_all(modules.join("fixture")).unwrap();
+    fs::create_dir_all(modules.join("removed")).unwrap();
+    let stale = vec![
+        modules.join("fixture/gone-lib-normal.svg"),
+        modules.join("removed/only-lib-normal.svg"),
+    ];
+    for path in &stale {
+        fs::write(path, "stale").unwrap();
+    }
+    fs::write(modules.join("fixture/notes.txt"), "not an svg").unwrap();
+    stale
+}
+
+fn stale_notes(report: &xtask_core::Report) -> Vec<&String> {
+    report
+        .notes
+        .iter()
+        .filter(|note| note.contains("stale module diagram"))
+        .collect()
+}
+
+fn diagram_names(root: &std::path::Path) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let modules = root.join("architecture/modules");
+    for package in fs::read_dir(modules).unwrap() {
+        let package = package.unwrap().path();
+        for file in fs::read_dir(&package).unwrap() {
+            names.insert(format!(
+                "{}/{}",
+                package.file_name().unwrap().to_string_lossy(),
+                file.unwrap().file_name().to_string_lossy()
+            ));
+        }
+    }
+    names
+}
+
+#[test]
+fn diagram_targets_select_generated_diagrams_but_not_checked_targets() {
+    let lib = ["fixture-lib-normal", "fixture-lib-test"];
+    let bin = ["fixture-bin-normal", "fixture-bin-test"];
+    let test = ["it-test-test"];
+    for (setting, expected) in [
+        ("", [&lib[..], &bin[..], &test[..]].concat()),
+        (
+            "[diagrams]\ntargets = 'all'\n",
+            [&lib[..], &bin[..], &test[..]].concat(),
+        ),
+        (
+            "[diagrams]\ntargets = 'lib-bin'\n",
+            [&lib[..], &bin[..]].concat(),
+        ),
+        ("[diagrams]\ntargets = 'lib'\n", lib.to_vec()),
+    ] {
+        let directory = fixture("pub fn run() {}", setting);
+        add_bin_and_test_targets(&directory);
+        let mut config = Config::new(directory.path());
+        config.no_write = true;
+        let report = run(&config).unwrap();
+        assert!(report.is_success(), "{:?}", report.errors);
+        let validated: BTreeSet<_> = report
+            .notes
+            .iter()
+            .filter_map(|note| note.strip_prefix("validated "))
+            .filter_map(|note| note.strip_suffix(" (no-write)"))
+            .map(|path| {
+                std::path::Path::new(path)
+                    .file_stem()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .filter(|name| name != "crates")
+            .collect();
+        let names: BTreeSet<_> = expected.iter().map(|name| name.to_string()).collect();
+        assert_eq!(validated, names, "{setting}");
+    }
+    // A target outside the selection is still checked: its missing role is an error.
+    let directory = fixture("pub fn run() {}", "[diagrams]\ntargets = 'lib'\n");
+    add_bin_and_test_targets(&directory);
+    fs::write(
+        directory.path().join("tests/it.rs"),
+        "#[test]\nfn works() {}\n",
+    )
+    .unwrap();
+    let mut config = Config::new(directory.path());
+    config.no_write = true;
+    let report = run(&config).unwrap();
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|error| error.contains("fixture::it")),
+        "{:?}",
+        report.errors
+    );
+}
+
+#[test]
+fn stale_module_diagrams_are_reported_without_deleting_and_pruned_on_request() {
+    let directory = fixture("pub fn run() {}", "[diagrams]\ntargets = 'lib'\n");
+    add_bin_and_test_targets(&directory);
+    let stale = seed_stale_diagrams(directory.path());
+    let excluded = directory
+        .path()
+        .join("architecture/modules/fixture/fixture-bin-normal.svg");
+    fs::write(&excluded, "excluded").unwrap();
+
+    // no_write reports the same set and never deletes, even if prune is requested via the API.
+    let mut config = Config::new(directory.path());
+    config.no_write = true;
+    let report = run(&config).unwrap();
+    assert_eq!(stale_notes(&report).len(), 3, "{:?}", report.notes);
+    assert!(stale.iter().chain([&excluded]).all(|path| path.exists()));
+    config.prune = true;
+    assert!(run(&config).is_err());
+
+    let Some(node) = available_node() else {
+        return;
+    };
+    let output = check_cli(&directory, &node);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.matches("stale module diagram").count(),
+        3,
+        "{stdout}"
+    );
+    assert!(stale.iter().chain([&excluded]).all(|path| path.exists()));
+    assert_eq!(
+        fs::read_to_string(&excluded).unwrap(),
+        "excluded",
+        "an excluded diagram is neither regenerated nor deleted"
+    );
+
+    let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
+        .args(["check", "--prune", "--root"])
+        .arg(directory.path())
+        .env("XTASK_NODE", &node)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        diagram_names(directory.path()),
+        BTreeSet::from([
+            "fixture/fixture-lib-normal.svg".to_string(),
+            "fixture/fixture-lib-test.svg".to_string(),
+            "fixture/notes.txt".to_string(),
+        ])
+    );
+    assert!(
+        !directory
+            .path()
+            .join("architecture/modules/removed")
+            .exists()
+    );
+    assert!(directory.path().join("architecture/crates.svg").exists());
+}
+
+#[test]
+fn prune_is_skipped_while_the_report_has_errors() {
+    let Some(node) = available_node() else {
+        return;
+    };
+    let directory = fixture(
+        "mod a { pub fn a() { crate::b::b(); } }\nmod b { /*! Role: aを参照する。 */ pub fn b() { crate::a::a(); } }\n",
+        "",
+    );
+    let stale = seed_stale_diagrams(directory.path());
+    let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
+        .args(["check", "--prune", "--root"])
+        .arg(directory.path())
+        .env("XTASK_NODE", &node)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stale.iter().all(|path| path.exists()));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("stale module diagram prune skipped"));
+}

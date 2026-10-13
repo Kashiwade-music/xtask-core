@@ -104,6 +104,21 @@ architecture/
     └── <target>-<kind>-test.svg
 ```
 
+図を生成するtargetはpolicyの `[diagrams] targets` で選ぶ。省略時は `"all"`（全target）で、既存の挙動と同じ。
+`"lib"` は library系（`lib`・`rlib`・`staticlib`・`cdylib`・`dylib`・`proc-macro`）、`"lib-bin"` はそれに `bin` を加える。
+選んだtargetの `cfg(test)` 図は含まれる。選外のtarget（test・bench・example・build scriptなど）も行数・役割・依存・循環の検査は行い、図だけを生成しない。
+
+```toml
+[diagrams]
+targets = "lib-bin"
+```
+
+今回の実行で生成しなかった既存のmodule図（選外になったtarget、またはrename・削除されて生成元の無いtargetの図）は、`<output>/modules` 以下の `*.svg` から探して `stale module diagram` として報告する（失敗にはしない）。自動では消さない。`--prune` を付けると削除し、空になったpackageのdirectoryも消す。`--prune` は `--no-write` と同時に使えず、報告にエラーがあるときは（解析失敗で全図が未生成に見えるため）削除しない。`crates.svg` と `*.svg` 以外のファイルは対象外。
+
+```sh
+cargo xtask check --prune
+```
+
 CIでは `--no-write` でファイルを変更せずに検査できる。
 全ルールと図の構造を検査し、SVG生成・書き込みを省くためNode.jsは不要。既存SVGとの差分検査は行わない。
 別リポジトリを指定する場合は `--root` を使用する。
@@ -133,7 +148,7 @@ crate内の `macro_rules` の名前解決は、bare名の呼出しでは呼出�
 `target`、`all_features`、`default_features` も指定できる。役割文字数は `[limits] max_role_chars` で変更する。
 Rust APIは `run(&Config)` で同じ処理を実行する。`Config.analysis = Some(AnalysisSettings { ... })` は
 policyの解析設定全体を、`Config.max_role_chars = Some(n)` は文字数上限を上書きする。
-`Config.output = Some(path)` はpolicyの出力先を上書きし、`Config.no_write = true` はCIと同じ検査を行う。
+`Config.output = Some(path)` はpolicyの出力先を上書きし、`Config.no_write = true` はCIと同じ検査を行い、`Config.prune = true` は生成しなかった既存のmodule図を削除する。
 出力不要の解析だけを行う場合はRust APIの `analyze(&Config)` を使用する。
 
 ## 解析・実行上の注意

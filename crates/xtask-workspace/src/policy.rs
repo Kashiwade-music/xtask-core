@@ -13,6 +13,9 @@ pub struct Policy {
     pub output: PathBuf,
     #[serde(default)]
     pub limits: Limits,
+    /// Which cargo targets get module diagrams. Rules are checked for all targets.
+    #[serde(default)]
+    pub diagrams: Diagrams,
     #[serde(default, deserialize_with = "analysis_settings")]
     pub analysis: AnalysisSettings,
     #[serde(default)]
@@ -28,10 +31,51 @@ impl Default for Policy {
         Self {
             output: default_output(),
             limits: Limits::default(),
+            diagrams: Diagrams::default(),
             analysis: AnalysisSettings::default(),
             visible_to: BTreeMap::new(),
         }
     }
+}
+
+/// Selection of the cargo targets whose module diagrams are generated.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct Diagrams {
+    pub targets: DiagramTargets,
+}
+
+/// Target kinds that receive module diagrams. Test configurations of a selected
+/// target are always included with it.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiagramTargets {
+    /// Every target: libraries, binaries, tests, benches, examples and build scripts.
+    #[default]
+    All,
+    /// Library-like targets only (`lib`, `rlib`, `staticlib`, `cdylib`, `dylib`, `proc-macro`).
+    Lib,
+    /// Library-like targets and `bin` targets.
+    LibBin,
+}
+
+impl DiagramTargets {
+    /// Whether a target with these Cargo kinds receives module diagrams.
+    pub fn includes<'a>(self, kinds: impl IntoIterator<Item = &'a str>) -> bool {
+        let mut kinds = kinds.into_iter();
+        match self {
+            Self::All => true,
+            Self::Lib => kinds.any(is_library_kind),
+            Self::LibBin => kinds.any(|kind| kind == "bin" || is_library_kind(kind)),
+        }
+    }
+}
+
+fn is_library_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "lib" | "rlib" | "staticlib" | "cdylib" | "dylib" | "proc-macro"
+    )
 }
 
 /// Repository-owned Cargo, cfg and expansion assumptions for module analysis.

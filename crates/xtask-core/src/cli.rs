@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use crate::{Config, run};
 
 const USAGE: &str =
-    "usage: xtask check [--root PATH] [--no-write] [--help|-h]\n       xtask --help|-h";
+    "usage: xtask check [--root PATH] [--no-write | --prune] [--help|-h]\n       xtask --help|-h";
 
 /// Parse arguments excluding the executable name. Help also yields a valid
 /// configuration; the CLI entrypoint displays usage before invoking the check.
@@ -31,6 +31,7 @@ pub fn parse_args(
     let mut root_seen = false;
     let mut help_seen = false;
     let mut no_write = false;
+    let mut prune = false;
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--root" => {
@@ -56,10 +57,22 @@ pub fn parse_args(
                 }
                 no_write = true;
             }
+            "--prune" => {
+                if prune {
+                    return Err(format!("duplicate --prune option\n{USAGE}"));
+                }
+                prune = true;
+            }
             _ => return Err(format!("unknown argument `{argument}`\n{USAGE}")),
         }
     }
+    if no_write && prune {
+        return Err(format!(
+            "--prune cannot be combined with --no-write\n{USAGE}"
+        ));
+    }
     config.no_write = no_write;
+    config.prune = prune;
     Ok(config)
 }
 
@@ -117,6 +130,7 @@ mod tests {
         );
         assert_eq!(config.output, None);
         assert!(!config.no_write);
+        assert!(!config.prune);
         assert_eq!(config.max_role_chars, None);
         assert!(config.analysis.is_none());
     }
@@ -163,6 +177,27 @@ mod tests {
         ] {
             let error = parse_args("old", arguments.into_iter().map(str::to_owned)).unwrap_err();
             assert!(error.contains("duplicate --no-write"));
+            assert!(error.contains(USAGE));
+        }
+    }
+
+    #[test]
+    fn prune_survives_root_override_and_conflicts_with_no_write() {
+        for arguments in [
+            vec!["check", "--prune", "--root", "repo"],
+            vec!["check", "--root", "repo", "--prune"],
+        ] {
+            let config = parse_args("old", arguments.into_iter().map(str::to_owned)).unwrap();
+            assert!(config.prune);
+            assert!(!config.no_write);
+            assert_eq!(config.root, Path::new("repo"));
+        }
+        for arguments in [
+            vec!["check", "--prune", "--no-write"],
+            vec!["check", "--no-write", "--prune"],
+            vec!["check", "--prune", "--prune"],
+        ] {
+            let error = parse_args("old", arguments.into_iter().map(str::to_owned)).unwrap_err();
             assert!(error.contains(USAGE));
         }
     }

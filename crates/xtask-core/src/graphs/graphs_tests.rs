@@ -374,7 +374,7 @@ fn module_diagrams_keep_errors_and_continue_to_later_targets() {
         },
     ];
     let mut report = Report::default();
-    super::modules(&config, &targets, &mut report).unwrap();
+    super::modules(&config, &targets, DiagramTargets::All, &mut report).unwrap();
     assert_eq!(report.errors.len(), 2);
     assert!(
         report.errors[0].contains("app::bad")
@@ -469,7 +469,7 @@ fn no_write_modules_preserve_errors_and_validate_later_targets() {
         },
     ];
     let mut report = Report::default();
-    super::modules(&config, &targets, &mut report).unwrap();
+    super::modules(&config, &targets, DiagramTargets::All, &mut report).unwrap();
     assert_eq!(report.errors.len(), 1);
     assert!(report.errors[0].contains("missing parent"));
     assert!(report.artifacts.is_empty());
