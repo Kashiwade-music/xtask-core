@@ -4,8 +4,7 @@ use std::process::ExitCode;
 
 use crate::{Config, run};
 
-const USAGE: &str =
-    "usage: xtask check [--root PATH] [--no-write | --prune] [--help|-h]\n       xtask --help|-h";
+const USAGE: &str = "usage: xtask check [--root PATH] [--no-write | --prune] [--help|-h]\n       xtask --help|-h\n\nWriting checks prune stale module SVGs by default. --no-write only reports them.";
 
 /// Parse arguments excluding the executable name. Help also yields a valid
 /// configuration; the CLI entrypoint displays usage before invoking the check.

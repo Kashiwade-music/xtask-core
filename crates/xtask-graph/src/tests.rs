@@ -156,14 +156,14 @@ fn injected_node_checks_arguments_exit_json_and_scene_validity() {
     let directory = tempfile::tempdir().unwrap();
     let source = directory.path().join("fake_node.rs");
     fs::write(&source, r#"
-        use std::io::Read;
+        use std::io::BufRead;
         fn main() {
             let args: Vec<_> = std::env::args_os().collect();
             assert_eq!(args.len(), 3);
             assert!(std::fs::read_to_string(&args[1]).unwrap().contains("elk"));
             assert!(std::fs::metadata(&args[2]).unwrap().len() > 0);
             let mut input = String::new();
-            std::io::stdin().read_to_string(&mut input).unwrap();
+            std::io::stdin().lock().read_line(&mut input).unwrap();
             assert!(input.contains("\"nodes\"") && input.contains("\"direction\""));
             if input.contains("FAIL") {
                 eprintln!("fixture ELK process error");
@@ -171,7 +171,7 @@ fn injected_node_checks_arguments_exit_json_and_scene_validity() {
             }
             if input.contains("EMPTY") { return; }
             if input.contains("INVALID") { println!("not json"); return; }
-            println!("{{\"title\":\"INCOMPLETE\",\"width\":100,\"height\":100,\"nodes\":[],\"regions\":[],\"edges\":[]}}");
+            println!("{{\"scene\":{{\"title\":\"INCOMPLETE\",\"width\":100,\"height\":100,\"nodes\":[],\"regions\":[],\"edges\":[]}}}}");
         }
     "#).unwrap();
     let binary = directory

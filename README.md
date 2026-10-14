@@ -113,10 +113,12 @@ architecture/
 targets = "lib-bin"
 ```
 
-今回の実行で生成しなかった既存のmodule図（選外になったtarget、またはrename・削除されて生成元の無いtargetの図）は、`<output>/modules` 以下の `*.svg` から探して `stale module diagram` として報告する（失敗にはしない）。自動では消さない。`--prune` を付けると削除し、空になったpackageのdirectoryも消す。`--prune` は `--no-write` と同時に使えず、報告にエラーがあるときは（解析失敗で全図が未生成に見えるため）削除しない。`required-features` が有効でなく解析をskipしたtargetは実在するものとして扱い、選択に含まれる限りその図は報告も削除もしない。Windowsではpathの大文字小文字を区別せずに比較する。`crates.svg` と `*.svg` 以外のファイルは対象外。
+通常の `check` は、今回の実行で生成しなかった既存のmodule図（選外になったtarget、またはrename・削除されたpackage・targetの図）を `<output>/modules` 以下の `*.svg` から探して自動削除する。削除は `pruned stale module diagram` として報告し、空になったdirectoryも消す。`--no-write` は削除予定の図を報告するだけで、ファイルを変更しない。`--prune` は互換性のため引き続き受理するが、通常の `check` と同じ動作で、`--no-write` とは同時に使えない。
+
+解析失敗や検査エラーがある場合はCargo metadataに存在する選択targetの図を保護し、確実に削除・renameされたpackage・targetや選外targetの図だけを削除する。解析全体が失敗しても、実在targetの図は保持する。`required-features` が有効でなく解析をskipしたtargetも、選択に含まれる限りその図は報告も削除もしない。Windowsではpathの大文字小文字を区別せずに比較する。`crates.svg`、`*.svg` 以外のファイル、`<output>/modules` 外のファイル、symlinkは削除対象外。
 
 ```sh
-cargo xtask check --prune
+cargo xtask check
 ```
 
 CIでは `--no-write` でファイルを変更せずに検査できる。
@@ -148,7 +150,7 @@ crate内の `macro_rules` の名前解決は、bare名の呼出しでは呼出�
 `target`、`all_features`、`default_features` も指定できる。役割文字数は `[limits] max_role_chars` で変更する。
 Rust APIは `run(&Config)` で同じ処理を実行する。`Config.analysis = Some(AnalysisSettings { ... })` は
 policyの解析設定全体を、`Config.max_role_chars = Some(n)` は文字数上限を上書きする。
-`Config.output = Some(path)` はpolicyの出力先を上書きし、`Config.no_write = true` はCIと同じ検査を行い、`Config.prune = true` は生成しなかった既存のmodule図を削除する。
+`Config.output = Some(path)` はpolicyの出力先を上書きし、`Config.no_write = true` はCIと同じ検査を行う。書き込み時は古いmodule図を自動削除するため、`Config.prune` は互換性のためのflagで、明示的に有効にする必要はない。
 出力不要の解析だけを行う場合はRust APIの `analyze(&Config)` を使用する。
 
 ## 解析・実行上の注意
@@ -159,6 +161,27 @@ policyの解析設定全体を、`Config.max_role_chars = Some(n)` は文字数�
 - Cargo依存解決は `--locked --offline`。事前にlockfileと依存キャッシュを準備する。
 - SVG配置にはNode.jsが必要。`PATH` または `XTASK_NODE` で指定する。
 - `elkjs 0.12.0` を同梱し、実行時のnpm・ネットワークアクセスは不要。
+
+## 実行時間の計測
+
+targetごとの解析とファイルごとの行数検査は、利用可能なCPU数に応じて最大8workerで並列実行し、結果を入力順に集約する。hostのrustc cfgは実行内で再利用する。SVG生成では一回の `run` 内でNodeプロセスと同梱ELKの読み込みを共有し、各図の配置と検証は独立して行う。連続したSVG出力を行うRust APIの利用者は `xtask_graph::SvgWriter`、配置だけを行う利用者は `xtask_layout::LayoutSession` を使用できる。
+
+`benchmark` exampleで、ビルド時間を除く `analyze`、検査のみの `no-write`、SVG生成を含む `write` を計測できる。OUTPUTは絶対パスを指定すると、対象リポジトリの既存図を変更せずに測定できる。検査エラーがあれば非ゼロ終了する。
+
+```powershell
+cargo build --locked --offline --release -p xtask-core --example benchmark
+target/release/examples/benchmark.exe W:/w/akeboshi-xtask-test W:/w/xtask-core/target/benchmark-output no-write
+target/release/examples/benchmark.exe W:/w/akeboshi-xtask-test W:/w/xtask-core/target/benchmark-output write
+```
+
+2026-10-14に `W:/w/akeboshi-xtask-test` で測定した結果。改善前はmainの `ba6ac15`、改善後は解析・行数検査の並列化、host cfg再利用、Nodeランタイム再利用を適用した版。Windows、Ryzen 9 3900X（12 core / 24 thread）、Rust 1.98.1、Node 20.18.0、releaseビルドを使用し、各modeを別プロセスで3回実行した。コンパイルは計測外、ファイルキャッシュはクリアしていない。対象のpolicy（図は `lib-bin`）は変更していない。26 crate / 201 target・構成を検査し、全実行でエラー0、`write` は53 SVGを出力した。
+
+| mode | 改善前の中央値 | 改善後の中央値 | 速度比 | 時間短縮 |
+| --- | ---: | ---: | ---: | ---: |
+| no-write | 35.268秒 | 9.360秒 | 3.77倍 | 73.5% |
+| write | 61.660秒 | 17.779秒 | 3.47倍 | 71.2% |
+
+測定値（秒）は、改善前 `no-write = [39.880264, 35.267826, 33.368537]`、`write = [61.660461, 61.386531, 62.229156]`、改善後 `no-write = [9.438426, 9.359520, 8.952320]`、`write = [17.778657, 17.990855, 17.667342]`。別途、解析のみは32.635416秒から9.421555秒（各1回）。改善前後の53 SVGは相対パスとSHA-256がすべて一致した。計測バイナリ・生ログ・JSON集計は `target/benchmarks/` に保存している。
 
 ## 本リポジトリの検証
 

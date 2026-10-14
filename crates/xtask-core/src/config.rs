@@ -11,9 +11,9 @@ pub struct Config {
     pub output: Option<PathBuf>,
     /// Validate rules and diagram structure without writing files or invoking Node.
     pub no_write: bool,
-    /// Delete existing module SVGs that this run did not generate (excluded or
-    /// source-less targets). Without it they are only reported. Incompatible
-    /// with `no_write`, and skipped while the report contains errors.
+    /// Compatibility flag: writing checks now prune stale module SVGs by default.
+    /// Incompatible with `no_write`. Diagrams for existing selected targets are
+    /// preserved when analysis fails, and inactive required-feature targets are kept.
     pub prune: bool,
     /// Override the policy's role-description limit in Unicode characters.
     /// `None` uses the policy value, or 80 when no policy is available.

@@ -9,6 +9,7 @@ mod cli;
 mod config;
 mod graphs;
 mod model;
+mod parallel;
 mod run;
 
 pub use cli::{main, parse_args};

@@ -2,7 +2,7 @@
 
 // Pinned elkjs is embedded beside this runner; no npm or network at runtime.
 const ELK = require(process.argv[2]);
-const fs = require('node:fs');
+const readline = require('node:readline');
 const rootId = '__xtask_root__';
 
 async function build(request, elk) {
@@ -161,10 +161,19 @@ function scene(request, output, maps) {
 }
 
 async function main() {
-    const request = JSON.parse(fs.readFileSync(0, 'utf8'));
-    const elk = new ELK();
-    const maps = await build(request, elk);
-    const output = await elk.layout(maps.graph);
-    process.stdout.write(JSON.stringify(scene(request, output, maps)));
+    const lines = readline.createInterface({input: process.stdin, crlfDelay: Infinity});
+    for await (const line of lines) {
+        try {
+            const request = JSON.parse(line);
+            // Keep each graph independent while amortizing Node startup and the
+            // embedded bundle's module loading across a whole workspace.
+            const elk = new ELK();
+            const maps = await build(request, elk);
+            const output = await elk.layout(maps.graph);
+            process.stdout.write(JSON.stringify({scene: scene(request, output, maps)}) + '\n');
+        } catch (error) {
+            process.stdout.write(JSON.stringify({error: error.stack || String(error)}) + '\n');
+        }
+    }
 }
 main().catch(error => { console.error(error.stack || String(error)); process.exitCode = 1; });

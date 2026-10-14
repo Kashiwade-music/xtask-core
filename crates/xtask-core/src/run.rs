@@ -5,7 +5,7 @@ use std::process;
 use xtask_modules::AnalysisOptions;
 use xtask_workspace::{AnalysisSettings, Policy, Workspace};
 
-use crate::{Analysis, Config, Report, SkippedTarget, TargetGraph, graphs};
+use crate::{Analysis, Config, Report, SkippedTarget, TargetGraph, graphs, parallel};
 
 /// Analyze active Cargo features and Rust target cfg. Unit-test configurations
 /// are separate graphs, so mutually exclusive production/test edges never merge.
@@ -53,9 +53,11 @@ fn analyze_workspace(
         settings.target.as_deref(),
     )?;
     let cfg = rustc_cfg(config, settings)?;
+    let mut host_cfg = None;
     let mut report = Report::default();
     let mut targets = Vec::new();
     let mut skipped = Vec::new();
+    let mut jobs = Vec::new();
     for package in &workspace.packages {
         let features = resolved.get(&package.name).cloned().ok_or_else(|| {
             format!(
@@ -118,9 +120,16 @@ fn analyze_workspace(
                 let procedural = target.kind.iter().any(|kind| kind == "proc-macro");
                 if procedural || target.kind.iter().any(|kind| kind == "custom-build") {
                     // Cargo builds scripts and procedural macros for the host.
-                    let mut host = settings.clone();
-                    host.target = None;
-                    active_cfg = rustc_cfg(config, &host)?;
+                    if settings.target.is_none() {
+                        active_cfg = cfg.clone();
+                    } else {
+                        if host_cfg.is_none() {
+                            let mut host = settings.clone();
+                            host.target = None;
+                            host_cfg = Some(rustc_cfg(config, &host)?);
+                        }
+                        active_cfg = host_cfg.as_ref().expect("host cfg initialized").clone();
+                    }
                 }
                 if procedural {
                     active_cfg.insert("proc_macro".into());
@@ -142,28 +151,34 @@ fn analyze_workspace(
                     target.name,
                     if test { ", cfg(test)" } else { "" }
                 );
-                match xtask_modules::analyze(&target.src_path, &options) {
-                    Ok(graph) => {
-                        for diagnostic in &graph.diagnostics {
-                            report.errors.push(format!("{context}: {diagnostic}"));
-                        }
-                        for cycle in &graph.cycles {
-                            report.errors.push(format!(
-                                "{context}: module reference cycle among: {}",
-                                cycle.join(", ")
-                            ));
-                        }
-                        targets.push(TargetGraph {
-                            package: package.name.clone(),
-                            target: target.name.clone(),
-                            kind: kind.clone(),
-                            test,
-                            graph,
-                        });
-                    }
-                    Err(error) => report.errors.push(format!("{context}: {error}")),
-                }
+                jobs.push((package, target, kind.clone(), test, options, context));
             }
+        }
+    }
+    let results = parallel::map(&jobs, |(_, target, _, _, options, _)| {
+        xtask_modules::analyze(&target.src_path, options)
+    })?;
+    for ((package, target, kind, test, _, context), result) in jobs.into_iter().zip(results) {
+        match result {
+            Ok(graph) => {
+                for diagnostic in &graph.diagnostics {
+                    report.errors.push(format!("{context}: {diagnostic}"));
+                }
+                for cycle in &graph.cycles {
+                    report.errors.push(format!(
+                        "{context}: module reference cycle among: {}",
+                        cycle.join(", ")
+                    ));
+                }
+                targets.push(TargetGraph {
+                    package: package.name.clone(),
+                    target: target.name.clone(),
+                    kind: kind.clone(),
+                    test,
+                    graph,
+                });
+            }
+            Err(error) => report.errors.push(format!("{context}: {error}")),
         }
     }
     if !settings.trusted_attributes.is_empty()
@@ -240,12 +255,15 @@ pub fn run(config: &Config) -> Result<Report, String> {
         .errors
         .extend(analysis.workspace.check_visibility(&policy));
     check_lines(&mut analysis, policy.limits.max_code_lines);
+    let mut writer = xtask_graph::SvgWriter::default();
     if let Err(error) = graphs::modules(
         &graph_config,
+        &analysis.workspace,
         &analysis.targets,
         &analysis.skipped,
         policy.diagrams.targets,
         &mut analysis.report,
+        &mut writer,
     ) {
         analysis
             .report
@@ -257,6 +275,7 @@ pub fn run(config: &Config) -> Result<Report, String> {
         &analysis.workspace,
         &mut analysis.report,
         max_role_chars,
+        &mut writer,
     ) {
         analysis
             .report
@@ -311,8 +330,21 @@ fn check_lines(analysis: &mut Analysis, limit: usize) {
                 .push(format!("source line check: {}: {error}", file.display())),
         }
     }
-    for file in identities.into_values() {
-        match xtask_source::check_files(std::slice::from_ref(&file), limit) {
+    let files: Vec<_> = identities.into_values().collect();
+    let results = match parallel::map(&files, |file| {
+        xtask_source::check_files(std::slice::from_ref(file), limit)
+    }) {
+        Ok(results) => results,
+        Err(error) => {
+            analysis
+                .report
+                .errors
+                .push(format!("source line check: {error}"));
+            return;
+        }
+    };
+    for result in results {
+        match result {
             Ok(violations) => {
                 for violation in violations {
                     analysis.report.errors.push(format!(

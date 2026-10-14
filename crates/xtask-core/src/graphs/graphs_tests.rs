@@ -374,7 +374,16 @@ fn module_diagrams_keep_errors_and_continue_to_later_targets() {
         },
     ];
     let mut report = Report::default();
-    super::modules(&config, &targets, &[], DiagramTargets::All, &mut report).unwrap();
+    super::modules(
+        &config,
+        &workspace(&[], &[]),
+        &targets,
+        &[],
+        DiagramTargets::All,
+        &mut report,
+        &mut xtask_graph::SvgWriter::default(),
+    )
+    .unwrap();
     assert_eq!(report.errors.len(), 2);
     assert!(
         report.errors[0].contains("app::bad")
@@ -422,6 +431,7 @@ fn no_write_validates_graphs_without_creating_outputs_or_artifacts() {
         &stem,
         &mut report,
         true,
+        &mut xtask_graph::SvgWriter::default(),
     )
     .unwrap();
     assert!(report.artifacts.is_empty());
@@ -438,9 +448,16 @@ fn no_write_validates_graphs_without_creating_outputs_or_artifacts() {
     };
     let untouched = directory.path().join("uncreated").join("bad");
     assert!(
-        write(&invalid, &Layout::default(), &untouched, &mut report, true)
-            .unwrap_err()
-            .contains("missing node")
+        write(
+            &invalid,
+            &Layout::default(),
+            &untouched,
+            &mut report,
+            true,
+            &mut xtask_graph::SvgWriter::default()
+        )
+        .unwrap_err()
+        .contains("missing node")
     );
     assert!(!untouched.parent().unwrap().exists());
     assert!(report.artifacts.is_empty());
@@ -469,7 +486,16 @@ fn no_write_modules_preserve_errors_and_validate_later_targets() {
         },
     ];
     let mut report = Report::default();
-    super::modules(&config, &targets, &[], DiagramTargets::All, &mut report).unwrap();
+    super::modules(
+        &config,
+        &workspace(&[], &[]),
+        &targets,
+        &[],
+        DiagramTargets::All,
+        &mut report,
+        &mut xtask_graph::SvgWriter::default(),
+    )
+    .unwrap();
     assert_eq!(report.errors.len(), 1);
     assert!(report.errors[0].contains("missing parent"));
     assert!(report.artifacts.is_empty());
@@ -492,7 +518,72 @@ fn stale_detection_ignores_path_case_on_windows() {
     // The generated name differs from the on-disk name only by letter case.
     let generated = BTreeSet::from([config.output_dir().join("modules/app/good-lib-normal.svg")]);
     let mut report = Report::default();
-    stale_modules(&config, &generated, &mut report).unwrap();
+    stale_modules(
+        &config,
+        &workspace(&[], &[]),
+        &generated,
+        DiagramTargets::All,
+        &mut report,
+    )
+    .unwrap();
     assert_eq!(report.notes.len(), 1, "{:?}", report.notes);
     assert!(report.notes[0].contains("Gone-lib-normal.svg"));
+    assert!(modules.join("Good-lib-normal.svg").exists());
+    assert!(!modules.join("Gone-lib-normal.svg").exists());
+}
+
+#[test]
+fn failed_analysis_protects_existing_selected_targets_while_pruning_obsolete_svgs() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = Config::new(directory.path());
+    let mut workspace = workspace(&["app"], &[]);
+    workspace.packages[0].targets = vec![Target {
+        name: "app".into(),
+        kind: vec!["lib".into()],
+        src_path: directory.path().join("broken.rs"),
+        required_features: Vec::new(),
+        test: true,
+        edition: "2024".into(),
+    }];
+    let modules = config.output_dir().join("modules");
+    let package = modules.join("app");
+    let removed = modules.join("removed/nested");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::create_dir_all(&removed).unwrap();
+    for name in [
+        "app-lib-normal.svg",
+        "app-lib-test.svg",
+        "gone-lib-normal.svg",
+    ] {
+        std::fs::write(package.join(name), "existing").unwrap();
+    }
+    std::fs::write(package.join("notes.txt"), "keep").unwrap();
+    std::fs::write(removed.join("only-lib-normal.svg"), "stale").unwrap();
+    let outside = config.output_dir().join("unmanaged.svg");
+    std::fs::write(&outside, "keep").unwrap();
+    let mut report = Report {
+        errors: vec!["analysis failed".into()],
+        ..Report::default()
+    };
+    stale_modules(
+        &config,
+        &workspace,
+        &BTreeSet::new(),
+        DiagramTargets::All,
+        &mut report,
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(package.join("app-lib-normal.svg")).unwrap(),
+        "existing"
+    );
+    assert_eq!(
+        std::fs::read_to_string(package.join("app-lib-test.svg")).unwrap(),
+        "existing"
+    );
+    assert!(!package.join("gone-lib-normal.svg").exists());
+    assert!(!modules.join("removed").exists());
+    assert!(package.join("notes.txt").exists());
+    assert!(outside.exists());
+    assert_eq!(report.notes.len(), 2);
 }

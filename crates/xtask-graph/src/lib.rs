@@ -37,23 +37,42 @@ pub fn write_with_node_and_layout(
     svg_path: &Path,
     binary: &OsStr,
 ) -> Result<(), String> {
-    let request = graph.layout_request(layout)?;
-    let scene = xtask_layout::layout_with_node(&request, binary)?;
-    let svg = xtask_svg::render(&scene)?;
-    create_parent(svg_path)?;
-    let temporary = TemporarySvg::new(svg_path)?;
-    fs::write(&temporary.path, svg)
-        .map_err(|error| format!("cannot write SVG {}: {error}", svg_path.display()))?;
-    // Windows cannot rename over an existing file. Remove it only after the
-    // new output has been produced and validated.
-    #[cfg(windows)]
-    if svg_path.exists() {
-        fs::remove_file(svg_path)
-            .map_err(|error| format!("cannot replace SVG {}: {error}", svg_path.display()))?;
+    SvgWriter::with_node(binary).write(graph, layout, svg_path)
+}
+
+/// A sequence of SVG exports sharing one lazily initialized Node worker.
+#[derive(Default)]
+pub struct SvgWriter {
+    session: xtask_layout::LayoutSession,
+}
+
+impl SvgWriter {
+    pub fn with_node(binary: &OsStr) -> Self {
+        Self {
+            session: xtask_layout::LayoutSession::with_node(binary),
+        }
     }
-    fs::rename(&temporary.path, svg_path)
-        .map_err(|error| format!("cannot save SVG {}: {error}", svg_path.display()))?;
-    Ok(())
+
+    /// Keep a previous SVG until layout and independent rendering succeed.
+    pub fn write(&mut self, graph: &Graph, layout: &Layout, svg_path: &Path) -> Result<(), String> {
+        let request = graph.layout_request(layout)?;
+        let scene = self.session.layout(&request)?;
+        let svg = xtask_svg::render(&scene)?;
+        create_parent(svg_path)?;
+        let temporary = TemporarySvg::new(svg_path)?;
+        fs::write(&temporary.path, svg)
+            .map_err(|error| format!("cannot write SVG {}: {error}", svg_path.display()))?;
+        // Windows cannot rename over an existing file. Remove it only after the
+        // new output has been produced and validated.
+        #[cfg(windows)]
+        if svg_path.exists() {
+            fs::remove_file(svg_path)
+                .map_err(|error| format!("cannot replace SVG {}: {error}", svg_path.display()))?;
+        }
+        fs::rename(&temporary.path, svg_path)
+            .map_err(|error| format!("cannot save SVG {}: {error}", svg_path.display()))?;
+        Ok(())
+    }
 }
 
 fn create_parent(path: &Path) -> Result<(), String> {
