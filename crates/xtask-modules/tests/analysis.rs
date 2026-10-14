@@ -908,6 +908,37 @@ fn external_imports_cannot_masquerade_as_builtin_macros_or_derives() {
 }
 
 #[test]
+fn unattributed_expressions_keep_references_with_a_shadowed_derive_provider() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            r#"
+        use evil::Clone;
+        #[cfg_attr(active, derive(Clone))] struct Unsupported;
+        #[cfg(inactive)] #[derive(Clone)] struct Excluded;
+        mod provider {pub fn value()->u32 {1}}
+        fn plain()->u32 {
+            let value = crate::provider::value();
+            match value {0 => 0, _ => value + crate::provider::value()}
+        }
+    "#,
+        )],
+        AnalysisOptions {
+            cfg: BTreeSet::from(["active".into()]),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        edges(&result),
+        BTreeSet::from([("crate", "crate::provider")])
+    );
+    assert_eq!(
+        result.diagnostics,
+        ["crate: derive macro expansion is unsupported: Clone"]
+    );
+}
+
+#[test]
 fn external_providers_survive_alias_reexports_and_globs() {
     let result = graph(
         &[(

@@ -21,6 +21,54 @@ pub(crate) struct Rectangle {
     pub(crate) bottom: f64,
 }
 
+impl Rectangle {
+    fn segment(segment: &Segment) -> Self {
+        let mut bounds = Self {
+            left: segment.start.x.min(segment.end.x),
+            right: segment.start.x.max(segment.end.x),
+            top: segment.start.y.min(segment.end.y),
+            bottom: segment.start.y.max(segment.end.y),
+        };
+        if let Some(control) = segment.control {
+            bounds.left = bounds.left.min(control.x);
+            bounds.right = bounds.right.max(control.x);
+            bounds.top = bounds.top.min(control.y);
+            bounds.bottom = bounds.bottom.max(control.y);
+        }
+        // Quadratic intersections accept parameters slightly outside [0, 1].
+        // On [-EPSILON, 1 + EPSILON], each coordinate's derivative is bounded
+        // by 2 * hull span * (1 + 2 * EPSILON). Conservatively cover that
+        // extrapolation, the curve-pair distance tolerance, and rounding.
+        let padding = |min: f64, max: f64| {
+            4.0 * EPSILON * (1.0 + EPSILON) * (max - min)
+                + 10.0 * EPSILON
+                + min.abs().max(max.abs()) * (32.0 * f64::EPSILON)
+        };
+        let x = padding(bounds.left, bounds.right);
+        let y = padding(bounds.top, bounds.bottom);
+        bounds.left -= x;
+        bounds.right += x;
+        bounds.top -= y;
+        bounds.bottom += y;
+        bounds
+    }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        // Reject only definitely separated bounds, retaining touching pairs.
+        !(self.right < other.left
+            || other.right < self.left
+            || self.bottom < other.top
+            || other.bottom < self.top)
+    }
+
+    fn include(&mut self, other: &Self) {
+        self.left = self.left.min(other.left);
+        self.right = self.right.max(other.right);
+        self.top = self.top.min(other.top);
+        self.bottom = self.bottom.max(other.bottom);
+    }
+}
+
 fn intersection(a: &Segment, b: &Segment) -> Option<Point> {
     let (h, v) = if horizontal(a) && vertical(b) {
         (a, b)
@@ -243,14 +291,37 @@ fn intersections(a: &Segment, b: &Segment) -> Vec<(Point, bool, Option<f64>)> {
 }
 
 pub(crate) fn crossings(paths: &[Path], obstacles: &[Rectangle]) -> Vec<Vec<Jump>> {
+    let bounds: Vec<Vec<_>> = paths
+        .iter()
+        .map(|path| path.segments.iter().map(Rectangle::segment).collect())
+        .collect();
+    let path_bounds: Vec<_> = bounds
+        .iter()
+        .map(|segments| {
+            segments.first().copied().map(|mut bounds| {
+                for segment in &segments[1..] {
+                    bounds.include(segment);
+                }
+                bounds
+            })
+        })
+        .collect();
     let mut result: Vec<Vec<Jump>> = vec![Vec::new(); paths.len()];
     for left in 0..paths.len() {
         for right in left + 1..paths.len() {
             if paths[left].group == paths[right].group {
                 continue;
             }
+            if let (Some(a), Some(b)) = (&path_bounds[left], &path_bounds[right]) {
+                if !a.overlaps(b) {
+                    continue;
+                }
+            }
             for (a_index, a) in paths[left].segments.iter().enumerate() {
                 for (b_index, b) in paths[right].segments.iter().enumerate() {
+                    if !bounds[left][a_index].overlaps(&bounds[right][b_index]) {
+                        continue;
+                    }
                     for (center, carrier_a, parameter) in intersections(a, b) {
                         if [left, right].iter().any(|path_index| {
                             let segments = &paths[*path_index].segments;
@@ -324,4 +395,105 @@ pub(crate) fn crossings(paths: &[Path], obstacles: &[Rectangle]) -> Vec<Vec<Jump
         jumps.retain(|jump| jump.radius > EPSILON);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    //! Role: 交差判定の許容誤差を保った境界による候補棄却を検証する。
+    use super::*;
+
+    fn segment(start: (f64, f64), end: (f64, f64), control: Option<(f64, f64)>) -> Segment {
+        Segment {
+            start: Point {
+                x: start.0,
+                y: start.1,
+            },
+            end: Point { x: end.0, y: end.1 },
+            control: control.map(|(x, y)| Point { x, y }),
+            straight: control.is_none(),
+        }
+    }
+
+    #[test]
+    fn bounds_preserve_intersections_including_parameter_and_coordinate_tolerances() {
+        let curve = segment((0.0, 0.0), (1e9, 1e9), Some((0.0, 1e9)));
+        let before = point(&curve, -EPSILON * 0.5);
+        let after = point(&curve, 1.0 + EPSILON * 0.5);
+        let before_line = segment((-1e4, before.y), (1e4, before.y), None);
+        let after_line = segment((after.x, 1e9 - 1e4), (after.x, 1e9 + 1e4), None);
+        assert!(!intersections(&curve, &before_line).is_empty());
+        assert!(!intersections(&curve, &after_line).is_empty());
+        let horizontal = segment((0.0, 0.0), (10.0, 0.0), None);
+        let just_beyond = segment(
+            (10.0 + EPSILON * 0.5, -1.0),
+            (10.0 + EPSILON * 0.5, 1.0),
+            None,
+        );
+        assert!(!intersections(&horizontal, &just_beyond).is_empty());
+        let segments = [
+            curve,
+            before_line,
+            after_line,
+            horizontal,
+            just_beyond,
+            segment((0.0, -10.0), (0.0, 10.0), None),
+            segment((0.0, 0.0), (0.0, 0.0), None),
+            segment((-2.0, -2.0), (2.0, 2.0), Some((0.0, 0.0))),
+            segment((-2.0, 2.0), (2.0, 2.0), Some((0.0, -2.0))),
+            segment((-2.0, -2.0), (2.0, -2.0), Some((0.0, 2.0))),
+            segment(
+                (before.x - 10.0, before.y - 10.0),
+                (before.x + 10.0, before.y - 10.0),
+                Some((before.x, before.y + 10.0)),
+            ),
+            segment((100.0, 100.0), (110.0, 100.0), None),
+        ];
+        let mut rejected = 0;
+        for a in &segments {
+            for b in &segments {
+                let expected = intersections(a, b);
+                let bounded = if Rectangle::segment(a).overlaps(&Rectangle::segment(b)) {
+                    intersections(a, b)
+                } else {
+                    rejected += 1;
+                    Vec::new()
+                };
+                assert_eq!(bounded, expected, "a={a:?}, b={b:?}");
+            }
+        }
+        assert!(rejected > 0);
+    }
+
+    #[test]
+    fn bounds_contain_quadratic_extrapolation_and_keep_nested_control_hulls() {
+        for curve in [
+            segment((0.0, 0.0), (1e9, 1e9), Some((0.0, 1e9))),
+            segment((-1e12, 1e12), (1e12, -1e12), Some((1e12, 1e12))),
+            segment((5.0, 5.0), (5.0, 5.0), Some((5.0, 5.0))),
+        ] {
+            let bounds = Rectangle::segment(&curve);
+            for t in [
+                -EPSILON,
+                -EPSILON * 0.5,
+                0.0,
+                0.5,
+                1.0,
+                1.0 + EPSILON * 0.5,
+                1.0 + EPSILON,
+            ] {
+                let p = point(&curve, t);
+                assert!(p.x >= bounds.left && p.x <= bounds.right);
+                assert!(p.y >= bounds.top && p.y <= bounds.bottom);
+            }
+        }
+        let outer = Rectangle::segment(&segment(
+            (-100.0, -100.0),
+            (100.0, 100.0),
+            Some((-100.0, 100.0)),
+        ));
+        let inner = Rectangle::segment(&segment((-1.0, -1.0), (1.0, 1.0), Some((0.0, 1.0))));
+        assert!(outer.overlaps(&inner) && inner.overlaps(&outer));
+        let far = Rectangle::segment(&segment((200.0, 200.0), (210.0, 210.0), None));
+        assert!(!outer.overlaps(&far));
+    }
 }

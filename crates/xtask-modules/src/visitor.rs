@@ -27,6 +27,12 @@ pub(crate) struct References<'a> {
 
 impl References<'_> {
     pub(crate) fn enabled(&mut self, attrs: &[syn::Attribute]) -> bool {
+        // Most expression and statement nodes have no attributes. They cannot
+        // disable code or require expansion, so avoid cloning the module and
+        // local symbol tables just to compute unused intrinsic derive names.
+        if attrs.is_empty() {
+            return true;
+        }
         match cfg::enabled(attrs, self.options) {
             Ok(true) => {
                 match cfg::expansion_diagnostics(attrs, self.options, &self.intrinsic_derives()) {
