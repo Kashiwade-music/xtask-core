@@ -171,3 +171,54 @@ mod consumer {
     assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
     assert!(result.diagnostics[0].ends_with("::FAKE"));
 }
+
+#[test]
+fn delayed_external_glob_provider_does_not_leave_a_generated_static() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod provider {
+    //! Role: External macro reexport.
+    pub use external::thread_local;
+}
+mod declarations {
+    //! Role: Delayed external glob import.
+    use crate::provider::*;
+    thread_local! { pub static FAKE: u8 = 1; }
+}
+mod consumer {
+    //! Role: Invalid generated static import.
+    use crate::declarations::FAKE;
+}
+"#,
+    );
+    assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+    assert!(result.diagnostics[0].ends_with("::FAKE"));
+}
+
+#[test]
+fn value_names_do_not_shadow_standard_macro_or_module_namespaces() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod declarations {
+    //! Role: Values coexist with standard macro paths.
+    fn thread_local() {}
+    const std: u8 = 1;
+    thread_local! { pub static FIRST: u8 = 1; }
+    std::thread_local! { pub static SECOND: u8 = 2; }
+}
+mod consumer {
+    //! Role: Valid generated static imports.
+    use crate::declarations::{FIRST, SECOND};
+}
+"#,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .edges
+            .iter()
+            .any(|edge| edge.from == "crate::consumer" && edge.to == "crate::declarations")
+    );
+}

@@ -2,7 +2,7 @@
 use crate::{
     AnalysisOptions, cfg,
     loader::Source,
-    symbols::{Namespace, Tables, Target},
+    symbols::{Namespace, Tables, Target, resolve_path},
     visitor::local_macro_targets,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -64,18 +64,21 @@ pub(crate) fn register(
                 .iter()
                 .map(|part| part.ident.to_string())
                 .collect::<Vec<_>>();
-            let bare = item.mac.path.is_ident("thread_local")
-                && !strong
-                    .get(&source.module.id)
-                    .is_some_and(|names| names.contains("thread_local"));
+            let unknown_glob = tables
+                .get(&source.module.id)
+                .is_some_and(|table| table.contains_key("$external_globs"));
+            let bare = item.mac.path.is_ident("thread_local") && !unknown_glob;
             let qualified = parts.iter().map(String::as_str).eq(["std", "thread_local"])
                 && (item.mac.path.leading_colon.is_some()
-                    || !tables
-                        .get(&source.module.id)
-                        .is_some_and(|table| table.contains_key("std"))
-                        && !strong
-                            .get(&source.module.id)
-                            .is_some_and(|names| names.contains("std")));
+                    || !unknown_glob
+                        && resolve_path(
+                            &source.module.id,
+                            &["std".into()],
+                            tables,
+                            None,
+                            Some(Namespace::Type),
+                        )
+                        .is_empty());
             let standard = if targets.is_empty() {
                 bare || qualified
             } else {
