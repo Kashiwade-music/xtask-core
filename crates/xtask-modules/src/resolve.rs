@@ -113,6 +113,13 @@ pub(crate) fn analyze(
                     );
                 }
             }
+            crate::thread_local_items::register(
+                &sources,
+                &mut tables,
+                &textual,
+                &mut strong,
+                options,
+            )?;
             if previous == tables {
                 break;
             }

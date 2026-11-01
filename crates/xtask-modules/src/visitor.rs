@@ -781,7 +781,7 @@ fn macro_path_text(path: &syn::Path) -> String {
 }
 
 /// Targets a macro invocation path resolves to in the macro namespace.
-fn local_macro_targets(
+pub(crate) fn local_macro_targets(
     module: &str,
     path: &syn::Path,
     tables: &Tables,

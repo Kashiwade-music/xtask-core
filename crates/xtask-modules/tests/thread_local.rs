@@ -1,0 +1,173 @@
+//! Role: Verify standard thread-local static names without expanding other macros.
+use std::fs;
+use xtask_modules::{AnalysisOptions, ModuleGraph, analyze};
+
+fn graph(source: &str) -> ModuleGraph {
+    let directory = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let root = directory.path().join("lib.rs");
+    fs::write(&root, source).unwrap();
+    let mut options = AnalysisOptions::default();
+    for name in [
+        "thread_local",
+        "std::thread_local",
+        "::std::thread_local",
+        "tls",
+        "other",
+    ] {
+        options.trusted_macros.insert(name.into());
+    }
+    analyze(&root, &options).unwrap()
+}
+
+#[test]
+fn standard_statics_resolve_imports_aliases_reexports_and_edges() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod declarations {
+    //! Role: Thread-local declarations.
+    std::thread_local! {
+        #[doc = "A constant initializer."]
+        pub static FIRST: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+        pub static SECOND: std::cell::Cell<u8> = std::cell::Cell::new(1)
+    }
+    thread_local! { pub static THIRD: u8 = 3; }
+    ::std::thread_local! { pub static FOURTH: u8 = 4; }
+}
+mod facade {
+    //! Role: Static reexports.
+    pub use crate::declarations::{FIRST as RENAMED, SECOND, THIRD, FOURTH};
+}
+mod consumer {
+    //! Role: Static consumers.
+    use crate::facade::{RENAMED, SECOND, THIRD, FOURTH};
+    fn read() { RENAMED.with(|_| ()); SECOND.with(|_| ()); THIRD.with(|_| ()); FOURTH.with(|_| ()); }
+}
+"#,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    for from in ["crate::facade", "crate::consumer"] {
+        assert!(
+            result
+                .edges
+                .iter()
+                .any(|edge| edge.from == from && edge.to == "crate::declarations")
+        );
+    }
+}
+
+#[test]
+fn standard_macro_alias_resolves_after_reexport() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod macros {
+    //! Role: Standard macro reexport.
+    pub use std::thread_local as tls;
+}
+mod declarations {
+    //! Role: Aliased standard invocation.
+    use crate::macros::tls;
+    tls! { pub static VALUE: u8 = 1; }
+}
+mod consumer {
+    //! Role: Generated static import.
+    use crate::declarations::VALUE;
+}
+"#,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .edges
+            .iter()
+            .any(|edge| edge.from == "crate::consumer" && edge.to == "crate::declarations")
+    );
+}
+
+#[test]
+fn missing_and_inactive_statics_still_report_unresolved_imports() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod declarations {
+    //! Role: Conditionally absent declarations.
+    thread_local! {
+        #[cfg(any())] pub static DISABLED: u8 = 0;
+        #[cfg_attr(all(), cfg(any()))] pub static ALSO_DISABLED: u8 = 0;
+        pub static ACTIVE: u8 = 1;
+    }
+    #[cfg(any())] thread_local! { pub static WHOLE_DISABLED: u8 = 0; }
+}
+mod consumer {
+    //! Role: Invalid static imports.
+    use crate::declarations::{ACTIVE, MISSING, DISABLED, ALSO_DISABLED, WHOLE_DISABLED};
+}
+"#,
+    );
+    assert_eq!(result.diagnostics.len(), 4, "{:?}", result.diagnostics);
+    for name in ["MISSING", "DISABLED", "ALSO_DISABLED", "WHOLE_DISABLED"] {
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.ends_with(name))
+        );
+    }
+}
+
+#[test]
+fn other_macro_providers_do_not_gain_static_declarations() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod declarations {
+    //! Role: Nonstandard macro providers.
+    use external::thread_local;
+    thread_local! { pub static FAKE: u8 = 1; }
+    other! { pub static ALSO_FAKE: u8 = 2; }
+}
+
+mod consumer {
+    //! Role: Invalid generated name imports.
+    use crate::declarations::{FAKE, ALSO_FAKE};
+}
+"#,
+    );
+    assert_eq!(result.diagnostics.len(), 2, "{:?}", result.diagnostics);
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.ends_with("::FAKE"))
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.ends_with("::ALSO_FAKE"))
+    );
+}
+
+#[test]
+fn local_std_module_is_not_the_standard_macro_provider() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod declarations {
+    //! Role: A shadowed standard-library name.
+    mod std {
+        //! Role: A local standard-library namesake.
+        pub fn thread_local() {}
+    }
+    std::thread_local! { pub static FAKE: u8 = 1; }
+}
+mod consumer {
+    //! Role: Invalid generated static import.
+    use crate::declarations::FAKE;
+}
+"#,
+    );
+    assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+    assert!(result.diagnostics[0].ends_with("::FAKE"));
+}
