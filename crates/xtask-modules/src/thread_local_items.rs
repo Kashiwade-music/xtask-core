@@ -6,9 +6,45 @@ use crate::{
     visitor::local_macro_targets,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use syn::{Item, Token, parse::Parse, parse::ParseStream};
+use syn::{
+    Item, Meta, Token, ext::IdentExt, parse::Parse, parse::ParseStream, punctuated::Punctuated,
+};
 
 struct Statics(Vec<syn::ItemStatic>);
+
+fn imports_unknown_thread_local(
+    source: &Source,
+    options: &AnalysisOptions,
+) -> Result<bool, String> {
+    for item in &source.items {
+        let Item::ExternCrate(item) = item else {
+            continue;
+        };
+        if !cfg::enabled(&item.attrs, options)? {
+            continue;
+        }
+        for attribute in cfg::effective(&item.attrs, options)? {
+            if !attribute.path().is_ident("macro_use") {
+                continue;
+            }
+            match attribute {
+                Meta::Path(_) | Meta::NameValue(_) => return Ok(true),
+                Meta::List(list) => {
+                    let names =
+                        list.parse_args_with(Punctuated::<syn::Ident, Token![,]>::parse_terminated);
+                    if names.is_err()
+                        || names.is_ok_and(|names| {
+                            names.iter().any(|name| name.unraw() == "thread_local")
+                        })
+                    {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+    }
+    Ok(false)
+}
 
 fn uncertain_binding(
     source: &Source,
@@ -94,10 +130,16 @@ pub(crate) fn register(
     options: &AnalysisOptions,
 ) -> Result<(), String> {
     let mut declarations = Vec::new();
-    let unknown_macro_use = sources.iter().any(|source| source.items.iter().any(|item| {
-        matches!(item, Item::ExternCrate(item) if item.attrs.iter().any(|attr| attr.path().is_ident("macro_use")))
-    }));
+    let mut unknown_macro_scopes = BTreeSet::new();
     for source in sources {
+        if imports_unknown_thread_local(source, options)? {
+            unknown_macro_scopes.insert(source.module.id.clone());
+        }
+    }
+    for source in sources {
+        let unknown_macro_use = unknown_macro_scopes.iter().any(|scope| {
+            source.module.id == *scope || source.module.id.starts_with(&format!("{scope}::"))
+        });
         for item in &source.items {
             let Item::Macro(item) = item else { continue };
             let targets =

@@ -367,3 +367,50 @@ mod consumer {
     assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
     assert!(result.diagnostics[0].ends_with("::FAKE"));
 }
+
+#[test]
+fn effective_macro_use_attributes_only_block_selected_macro_names() {
+    for (attribute, blocks) in [
+        ("#[cfg_attr(all(), macro_use)]", true),
+        ("#[cfg_attr(all(), macro_use(thread_local,))]", true),
+        ("#[macro_use(other, thread_local)]", true),
+        ("#[macro_use(r#thread_local,)]", true),
+        ("#[macro_use(other::unknown)]", true),
+        ("#[macro_use(other)]", false),
+        ("#[macro_use()]", false),
+        ("#[cfg(any())] #[macro_use]", false),
+        ("#[cfg_attr(any(), macro_use)]", false),
+        ("#[cfg_attr(any(), macro_use(thread_local))]", false),
+    ] {
+        let source = format!(
+            r#"
+//! Role: Test root.
+{attribute} extern crate external;
+mod declarations {{
+    //! Role: Effective macro-use provider boundaries.
+    thread_local! {{ pub static BARE: u8 = 1; }}
+    std::thread_local! {{ pub static QUALIFIED: u8 = 2; }}
+    ::std::thread_local! {{ pub static ABSOLUTE: u8 = 3; }}
+}}
+mod consumer {{
+    //! Role: Imported generated static names.
+    use crate::declarations::{{BARE, QUALIFIED, ABSOLUTE}};
+}}
+"#
+        );
+        let result = graph(&source);
+        assert_eq!(
+            result.diagnostics.len(),
+            usize::from(blocks),
+            "{attribute}: {:?}",
+            result.diagnostics
+        );
+        if blocks {
+            assert!(
+                result.diagnostics[0].ends_with("::BARE"),
+                "{:?}",
+                result.diagnostics
+            );
+        }
+    }
+}
