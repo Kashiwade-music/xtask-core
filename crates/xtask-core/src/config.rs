@@ -7,7 +7,7 @@ use xtask_workspace::AnalysisSettings;
 pub struct Config {
     pub root: PathBuf,
     pub policy: PathBuf,
-    /// Override the policy's SVG destination. Relative paths use `root`.
+    /// Override the policy's SVG and HTML destination. Relative paths use `root`.
     pub output: Option<PathBuf>,
     /// Validate rules and diagram structure without writing files or invoking Node.
     pub no_write: bool,

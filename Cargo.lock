@@ -302,6 +302,7 @@ name = "xtask-core"
 version = "0.1.0"
 dependencies = [
  "roxmltree",
+ "serde_json",
  "tempfile",
  "xtask-graph",
  "xtask-modules",
