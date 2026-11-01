@@ -9,7 +9,8 @@ pub struct Config {
     pub policy: PathBuf,
     /// Override the policy's SVG and HTML destination. Relative paths use `root`.
     pub output: Option<PathBuf>,
-    /// Validate rules and diagram structure without writing files or invoking Node.
+    /// Validate rules and diagram structure without writing source/diagram files
+    /// or invoking Node. Enabled style tools may still produce Cargo build output.
     pub no_write: bool,
     /// Compatibility flag: writing checks now prune stale module SVGs by default.
     /// Incompatible with `no_write`. Diagrams for existing selected targets are

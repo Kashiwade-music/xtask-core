@@ -8,6 +8,7 @@ Rust workspace向けの共通検査・アーキテクチャ可視化ツール。
 - **依存制限**：`visible_to` によるcrate間の依存許可リスト
 - **役割宣言**：全crate root・moduleに `Role:` を必須化
 - **循環検出**：module間の参照循環を禁止
+- **Rust style検査**：Google Rust Style Guideから採用した21項目を、構文解析・rustfmt・Clippyで検査
 - **SVG出力**：crate依存図、module階層・参照図を生成
 - **対話型HTML**：無限キャンバスで依存関係を強調し、crateからmodule図へ移動
 
@@ -37,7 +38,10 @@ workspaceのmembersに `dev/xtask` を追加する。
 
 fn main() -> std::process::ExitCode {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap();
+        .parent()
+        .expect("xtask must be inside dev")
+        .parent()
+        .expect("dev must be inside the repository");
     xtask_core::main(root)
 }
 ```
@@ -58,6 +62,9 @@ output = "architecture"
 max_code_lines = 1000
 max_role_chars = 80
 
+[style]
+enabled = true
+
 [visible_to]
 internal = ["facade", "app-*"]
 app = []
@@ -66,6 +73,90 @@ app = []
 `visible_to` は依存される側をキーに、依存を許可するpackage名を指定する。未指定なら制限なし、`[]` は外部crateからの依存禁止、末尾の `*` は前方一致。normal・dev・build・optional・target条件付き依存も検査する。
 
 行数上限は最大1000、役割文字数の既定値は80（変更可能）。
+
+style検査にはrustfmtとClippyが必要。使用するツールチェーンへ `rustup component add rustfmt clippy` で導入する。
+この設定で基本13項目が有効になり、親リポジトリの `cargo xtask check` から自動実行される。既存policyとの互換性のため、`[style]` の省略時は無効。
+通常の `cargo build` やPRの作成では実行されない。CIでも `cargo xtask check --no-write` を呼ぶ。
+
+## Rust style検査
+
+[Google Rust Style Guide](https://google.github.io/styleguide/rustguide.html)から、対象を機械的に定義できる検査を採用している。
+ガイド全体への準拠を保証するものではない。文書・安全性コメントは存在を検査し、説明の正しさや設計意図はレビューで確認する。
+
+| # | rule ID | 検査内容・範囲 | 実装 |
+| --- | --- | --- | --- |
+| 1 | `format` | rustfmt設定への一致。`max_width = 100` は全物理行が100桁以下である保証ではない | rustfmt |
+| 2 | `hex-literals` | 数値の16進リテラルを小文字で記述。文字列・コメントの内容は対象外 | 構文解析 |
+| 3 | `import-granularity` | 1つの `use` の波括弧内で異なるmoduleからimportしない。複数の `use` の統合は要求しない | 構文解析 |
+| 4 | `unstable-features` | 有効な `#![feature(...)]` を禁止 | rustc `unstable_features` |
+| 5 | `unwrap` | `Option` / `Result` の `unwrap` / `unwrap_err` を検出 | Clippy `unwrap_used` |
+| 6 | `checked-unwrap` | 値の確認後のunwrapを、Clippyが認識するパターンで検出 | Clippy `unnecessary_unwrap` |
+| 7 | `flexible-references` | 不要な `&Box<T>`、`&Vec<T>`、`&String` を検出 | Clippy `borrowed_box` / `ptr_arg` |
+| 8 | `derivable-impls` | deriveで置換できる手書き `Default` など、Clippyの対応範囲を検出 | Clippy `derivable_impls` |
+| 9 | `new-default` | 対象となる引数なし公開コンストラクタに `Default` を要求 | Clippy `new_without_default` |
+| 10 | `len-is-empty` | 公開 `len()` に対応する `is_empty()` を要求 | Clippy `len_without_is_empty` |
+| 11 | `missing-docs` | 公開APIの文書の欠落を検出。自明なAPIなどで省略する場合は例外を指定 | rustc `missing_docs` |
+| 12 | `safety-docs` | unsafe APIのSafety節の欠落を検出 | Clippy `missing_safety_doc` |
+| 13 | `safety-comments` | unsafe block / implの安全性コメントの欠落を検出 | Clippy `undocumented_unsafe_blocks` |
+| 14 | `glob-imports` | glob importを制限。inline moduleの `super::*`、非leaf moduleからの子moduleの公開再exportは許可 | 構文解析 |
+| 15 | `non-leaf-implementation` | 非leaf moduleの実装を制限。test / FFI moduleの扱いに注意し、結合コードには例外を指定 | 構文解析 |
+| 16 | `rustfmt-skip` | `#[rustfmt::skip]` を制限。生成コード・手動整列には例外を指定 | 構文解析 |
+| 17 | `non-exhaustive` | 指定packageの公開enum・全fieldが公開されたstructに `#[non_exhaustive]` を要求 | Clippy `exhaustive_enums` / `exhaustive_structs` |
+| 18 | `catch-unwind` | `std::panic::catch_unwind` を制限。防御目的で許可する箇所には例外を指定 | Clippy `disallowed_methods` |
+| 19 | `poison-access` | `std::sync::PoisonError` の `into_inner` / `get_ref` / `get_mut` を制限 | Clippy `disallowed_methods` |
+| 20 | `extension-trait-names` | 指定したextension traitの名前に `Ext` suffixを要求 | 構文解析 |
+| 21 | `options-default` | 指定した公開options型が `Default` を実装することを確認 | Rustコンパイル検査 |
+
+`enabled = true` では1〜13を検査する。14〜21は適用対象や裁量例外の設定が必要なため、`extra_rules` で追加する。
+例えば、全21項目を使用するpolicyは次のように記述する。`my-library` と型のpathは実際のpackage・定義に置き換える。
+
+```toml
+[style]
+enabled = true
+extra_rules = [
+    "glob-imports",
+    "non-leaf-implementation",
+    "rustfmt-skip",
+    "non-exhaustive",
+    "catch-unwind",
+    "poison-access",
+    "extension-trait-names",
+    "options-default",
+]
+api_packages = ["my-library"]
+extension_traits = ["my-library::foreign_type::ForeignTypeExt"]
+options_structs = ["my-library::options::Options"]
+# 使用するツールチェーンを固定する場合:
+# toolchain = "1.85.0"
+
+[[style.exceptions]]
+rule = "glob-imports"
+path = "crates/my-library/src/parser.rs"
+reason = "このmoduleは1つのenumのvariantを扱う"
+
+[[style.exceptions]]
+rule = "rustfmt-skip"
+path = "crates/my-library/src/generated/*"
+reason = "生成元の配置を維持する"
+```
+
+`api_packages` はpackage名で指定する。`extension_traits` と `options_structs` は `package::module::Item` の完全一致で指定し、存在しない対象はエラーになる。
+`options-default` は別crateから参照できる公開library型が対象で、型引数が必要なgeneric型は指定できない。
+外部の一時crateから `Default` 境界をコンパイル検査するため、指定pathは公開APIのpathとする。
+検査用lockfileは親リポジトリのlockfileを一時領域へコピーし、その一時領域でのみoffline解決する。親のmanifest・lockfileは変更しない。
+
+例外の `path` は親リポジトリルートからの相対pathで、末尾の `*` のみ前方一致に使用できる。`reason` は必須。
+必要に応じて `item = "module::item"` で対象itemも限定できる。例外を指定しても、ツール未導入・設定不正・コンパイル失敗などの実行エラーは免除しない。
+選択したlintはソース側の `#[allow(...)]` より優先して検査する。style規則を免除する場合は、このpolicyの理由付き例外を使う。
+無効なcfg配下の外部moduleなど、解析結果からmodule pathを復元できないファイルでは、itemの限定を省略してpath単位の例外を指定する。
+基本ルールをプロジェクト全体で無効にする場合は、例えば `disabled_rules = ["missing-docs"]` を `[style]` に指定する。
+
+構文検査は探索したRustソースを対象とし、無効なcfg内のコードも検査する。macroのtokenや生成コードは展開しない。
+Clippyは `[analysis]` のtarget・feature・cfgに従って、workspaceの全targetを検査する。全feature・全targetの組合せを自動的に網羅するものではない。
+`analysis.cfg` とCargo設定の `rustflags` を併用する場合は、既存のflagsを含む `RUSTFLAGS` または `CARGO_ENCODED_RUSTFLAGS` を明示する。後者は引数をU+001Fで区切る。既存のCargo flagsを暗黙に上書きする構成は実行エラーにする。
+`poison-access` はMutexに限定せず、RwLockなどから得た同じ `PoisonError` APIも対象となる。
+Clippyの既存設定は引き継ぎ、今回の禁止APIを加えた一時設定で実行する。診断はrule IDと位置を含めて既存の検査結果へ集約し、違反があれば非ゼロ終了する。
+Rust APIでは `Report.style_diagnostics` からrule ID・ファイル・行・列・対象itemを取得できる。同じ違反はCLI互換のため `Report.errors` にも含まれる。
 
 ## 役割宣言
 
@@ -90,7 +181,7 @@ mod config {
 cargo xtask check
 ```
 
-`check` 一つでコード行数・依存制限・役割宣言・module参照循環を検査し、crate依存図と全module図、および対話型HTMLを生成する。
+`check` 一つでコード行数・依存制限・役割宣言・module参照循環と、有効にしたRust styleルールを検査し、crate依存図と全module図、および対話型HTMLを生成する。
 検査違反があっても生成可能な図は出力し、診断をまとめて非ゼロ終了する。図の生成に失敗した場合もエラーとする。
 通常構成とCargoで有効なテスト構成は毎回解析する。
 
@@ -135,8 +226,9 @@ targets = "lib-bin"
 cargo xtask check
 ```
 
-CIでは `--no-write` でファイルを変更せずに検査できる。
+CIでは `--no-write` でソースや図を変更せずに検査できる。
 全ルールと図の構造を検査し、SVG・HTML生成と書き込みを省くためNode.jsは不要。既存SVG・HTMLとの差分検査は行わない。
+style検査を有効にした場合もrustfmt / Clippyは実行する。Cargoによる `target/` 以下へのビルド出力や、一時検査ファイルの作成は行う。また、Clippyのコンパイル中にbuild scriptやprocedural macroが実行される。
 別リポジトリを指定する場合は `--root` を使用する。
 
 ```sh
@@ -165,7 +257,7 @@ crate内の `macro_rules` の名前解決は、bare名の呼出しでは呼出�
 Rust APIは `run(&Config)` で同じ処理を実行する。`Config.analysis = Some(AnalysisSettings { ... })` は
 policyの解析設定全体を、`Config.max_role_chars = Some(n)` は文字数上限を上書きする。
 `Config.output = Some(path)` はSVG・HTMLの出力先を上書きし、`Config.no_write = true` はCIと同じ検査を行う。書き込み時は古いmodule図を自動削除するため、`Config.prune` は互換性のためのflagで、明示的に有効にする必要はない。
-出力不要の解析だけを行う場合はRust APIの `analyze(&Config)` を使用する。
+出力不要の解析だけを行う場合はRust APIの `analyze(&Config)` を使用する。`analyze` はmoduleのsource-level解析APIで、style検査やrustfmt / Clippyの起動は行わない。
 
 ## 解析・実行上の注意
 
