@@ -222,3 +222,148 @@ mod consumer {
             .any(|edge| edge.from == "crate::consumer" && edge.to == "crate::declarations")
     );
 }
+
+#[test]
+fn unresolved_explicit_providers_and_globs_do_not_create_statics() {
+    for import in [
+        "use crate::missing::thread_local;",
+        "use crate::missing::provider as thread_local;",
+        "use crate::missing::provider as std;",
+        "use crate::missing::*;",
+    ] {
+        let source = format!(
+            r#"
+//! Role: Test root.
+mod declarations {{
+    //! Role: Unresolved macro provider.
+    {import}
+    thread_local! {{ pub static FIRST: u8 = 1; }}
+    std::thread_local! {{ pub static SECOND: u8 = 2; }}
+}}
+mod consumer {{
+    //! Role: Invalid generated static imports.
+    use crate::declarations::{{FIRST, SECOND}};
+}}
+"#
+        );
+        let result = graph(&source);
+        let unresolved = if import.contains(" as std") {
+            "::SECOND"
+        } else {
+            "::FIRST"
+        };
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.ends_with(unresolved)),
+            "{import}: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("crate::missing")),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+}
+
+#[test]
+fn resolved_value_imports_and_inactive_imports_preserve_standard_providers() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod values {
+    //! Role: Values sharing standard provider names.
+    pub fn thread_local() {}
+    pub const std: u8 = 1;
+}
+mod declarations {
+    //! Role: Value imports do not occupy provider namespaces.
+    use crate::values::{thread_local, std};
+    #[cfg(any())] use crate::missing::thread_local;
+    #[cfg(any())] use crate::missing::provider as std;
+    #[cfg(any())] use crate::missing::*;
+    thread_local! { pub static FIRST: u8 = 1; }
+    std::thread_local! { pub static SECOND: u8 = 2; }
+}
+mod consumer {
+    //! Role: Valid generated static imports.
+    use crate::declarations::{FIRST, SECOND};
+}
+"#,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn absolute_standard_provider_ignores_unresolved_local_std_alias() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod declarations {
+    //! Role: Absolute provider with unresolved local alias.
+    use crate::missing::provider as std;
+    ::std::thread_local! { pub static VALUE: u8 = 1; }
+}
+mod consumer {
+    //! Role: A valid absolute-provider static import.
+    use crate::declarations::VALUE;
+}
+"#,
+    );
+    assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+    assert!(result.diagnostics[0].contains("crate::missing"));
+}
+
+#[test]
+fn unresolved_imports_behind_local_globs_remain_uncertain() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod provider {
+    //! Role: Unresolved macro reexport.
+    pub use crate::missing::thread_local;
+}
+mod declarations {
+    //! Role: Local glob with unresolved provider names.
+    use crate::provider::*;
+    thread_local! { pub static FAKE: u8 = 1; }
+}
+mod consumer {
+    //! Role: Invalid generated static import.
+    use crate::declarations::FAKE;
+}
+"#,
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.ends_with("::FAKE"))
+    );
+}
+
+#[test]
+fn unknown_external_macro_use_does_not_infer_bare_standard_provider() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+#[macro_use] extern crate external;
+mod declarations {
+    //! Role: Unknown macro-use provider.
+    thread_local! { pub static FAKE: u8 = 1; }
+    ::std::thread_local! { pub static ACTUAL: u8 = 2; }
+}
+mod consumer {
+    //! Role: Macro-use uncertainty and absolute standard path.
+    use crate::declarations::{FAKE, ACTUAL};
+}
+"#,
+    );
+    assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+    assert!(result.diagnostics[0].ends_with("::FAKE"));
+}

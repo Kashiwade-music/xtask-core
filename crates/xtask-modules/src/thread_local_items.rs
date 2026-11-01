@@ -2,13 +2,55 @@
 use crate::{
     AnalysisOptions, cfg,
     loader::Source,
-    symbols::{Namespace, Tables, Target, resolve_path},
+    symbols::{Namespace, Tables, Target, imports, resolve_path},
     visitor::local_macro_targets,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use syn::{Item, Token, parse::Parse, parse::ParseStream};
 
 struct Statics(Vec<syn::ItemStatic>);
+
+fn uncertain_binding(
+    source: &Source,
+    name: &str,
+    tables: &Tables,
+    sources: &[Source],
+    visited: &mut BTreeSet<String>,
+) -> bool {
+    if !visited.insert(source.module.id.clone()) {
+        return false;
+    }
+    for item in &source.items {
+        let Item::Use(item) = item else { continue };
+        let mut bindings = Vec::new();
+        imports(
+            &item.tree,
+            if item.leading_colon.is_some() {
+                vec![String::new()]
+            } else {
+                Vec::new()
+            },
+            &mut bindings,
+        );
+        for binding in bindings {
+            if !binding.glob && binding.alias.as_deref() != Some(name) {
+                continue;
+            }
+            let targets = resolve_path(&source.module.id, &binding.path, tables, None, None);
+            if targets.is_empty() {
+                return true;
+            }
+            if binding.glob && targets.iter().any(|target| {
+                matches!(target, Target::Module(owner) if sources.iter()
+                    .find(|source| source.module.id == *owner)
+                    .is_some_and(|source| uncertain_binding(source, name, tables, sources, visited)))
+            }) {
+                return true;
+            }
+        }
+    }
+    false
+}
 
 impl Parse for Statics {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
@@ -52,6 +94,9 @@ pub(crate) fn register(
     options: &AnalysisOptions,
 ) -> Result<(), String> {
     let mut declarations = Vec::new();
+    let unknown_macro_use = sources.iter().any(|source| source.items.iter().any(|item| {
+        matches!(item, Item::ExternCrate(item) if item.attrs.iter().any(|attr| attr.path().is_ident("macro_use")))
+    }));
     for source in sources {
         for item in &source.items {
             let Item::Macro(item) = item else { continue };
@@ -67,10 +112,26 @@ pub(crate) fn register(
             let unknown_glob = tables
                 .get(&source.module.id)
                 .is_some_and(|table| table.contains_key("$external_globs"));
-            let bare = item.mac.path.is_ident("thread_local") && !unknown_glob;
+            let bare = item.mac.path.is_ident("thread_local")
+                && !unknown_glob
+                && !unknown_macro_use
+                && !uncertain_binding(
+                    source,
+                    "thread_local",
+                    tables,
+                    sources,
+                    &mut BTreeSet::new(),
+                );
             let qualified = parts.iter().map(String::as_str).eq(["std", "thread_local"])
                 && (item.mac.path.leading_colon.is_some()
                     || !unknown_glob
+                        && !uncertain_binding(
+                            source,
+                            "std",
+                            tables,
+                            sources,
+                            &mut BTreeSet::new(),
+                        )
                         && resolve_path(
                             &source.module.id,
                             &["std".into()],
