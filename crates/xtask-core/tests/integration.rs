@@ -378,7 +378,7 @@ fn policy_analysis_is_used_and_api_analysis_replaces_all_of_it() {
     if available_node().is_some() {
         let report = run(&config).unwrap();
         assert!(report.is_success(), "{:?}", report.errors);
-        assert_eq!(report.artifacts.len(), 3);
+        assert_eq!(report.artifacts.len(), 4);
     }
 }
 
@@ -442,7 +442,7 @@ fn role_limits_reach_analysis_and_all_check_diagrams_with_api_precedence() {
         config.max_role_chars = None;
         let report = run(&config).unwrap();
         assert!(report.is_success(), "{:?}", report.errors);
-        assert_eq!(report.artifacts.len(), 3);
+        assert_eq!(report.artifacts.len(), 4);
         let crates = fs::read_to_string(directory.path().join("architecture/crates.svg")).unwrap();
         assert!(crates.contains(&"根".repeat(90)));
         for mode in ["normal", "test"] {
@@ -588,6 +588,7 @@ fn policy_output_paths_and_api_overrides_resolve_from_the_repository_root() {
     );
     let relative = directory.path().join("docs/architecture diagrams");
     for file in [
+        "index.html",
         "crates.svg",
         "modules/fixture/fixture-lib-normal.svg",
         "modules/fixture/fixture-lib-test.svg",
@@ -603,7 +604,7 @@ fn policy_output_paths_and_api_overrides_resolve_from_the_repository_root() {
     fs::write(&config.policy, format!("output = \"{value}\"\n")).unwrap();
     let report = run(&config).unwrap();
     assert!(report.is_success(), "{:?}", report.errors);
-    assert_eq!(report.artifacts.len(), 3);
+    assert_eq!(report.artifacts.len(), 4);
     assert!(
         report
             .artifacts
@@ -665,6 +666,11 @@ fn no_write_runs_every_rule_without_node_or_filesystem_mutation() {
         }
         fs::create_dir_all(directory.path().join("architecture/modules/fixture")).unwrap();
         fs::write(
+            directory.path().join("architecture/index.html"),
+            "existing architecture HTML sentinel",
+        )
+        .unwrap();
+        fs::write(
             directory.path().join("architecture/crates.svg"),
             "existing crate SVG sentinel",
         )
@@ -681,6 +687,7 @@ fn no_write_runs_every_rule_without_node_or_filesystem_mutation() {
             "Cargo.toml",
             "Cargo.lock",
             "dev/xtask/policy/workspace.toml",
+            "architecture/index.html",
             "architecture/crates.svg",
             "architecture/modules/fixture/fixture-lib-normal.svg",
         ];
@@ -745,3 +752,6 @@ fn no_write_runs_every_rule_without_node_or_filesystem_mutation() {
 
 #[path = "integration/diagrams.rs"]
 mod diagrams;
+
+#[path = "integration/arch_map.rs"]
+mod arch_map;

@@ -362,7 +362,7 @@ fn collect_svgs(directory: &Path, found: &mut Vec<PathBuf>) -> Result<(), String
     Ok(())
 }
 
-fn module_svg_path(
+pub(crate) fn module_svg_path(
     config: &Config,
     package: &str,
     target: &str,

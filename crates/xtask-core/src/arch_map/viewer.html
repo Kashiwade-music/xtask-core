@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Architecture map</title>
+<style><!--XTASK_STYLE--></style>
+</head>
+<body>
+<header class="topbar">
+  <button id="back" class="back" type="button" aria-label="Back to crates" title="Back to crates" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 5-7 7 7 7M3 12h18"/></svg></button>
+  <nav id="view-path" class="breadcrumb" aria-label="Breadcrumb"></nav>
+  <div class="target-control" id="target-control" hidden><select id="target-select" aria-label="Module target and configuration"></select></div>
+</header>
+<div class="workspace">
+<aside class="explorer" aria-label="Crates and modules">
+  <div class="explorer-heading">Crates &amp; modules</div>
+  <div id="tree" class="tree"></div>
+</aside>
+<main id="canvas" tabindex="0" aria-label="Dependency graph. Drag to pan, scroll to zoom, Tab to focus nodes.">
+  <div id="world"></div>
+  <div id="empty" class="empty" hidden><strong>No diagram available</strong><p id="empty-message"></p></div>
+  <aside class="guide" aria-label="Legend">
+    <div class="legend"><span><i class="selected"></i>Selected</span><span><i class="incoming"></i>Dependents</span><span><i class="outgoing"></i>Dependencies</span></div>
+    <p class="direction">Arrows: consumer → provider</p>
+    <p class="gesture-help">Click to pin · Double-click crate to open · Drag to pan</p>
+  </aside>
+  <div class="zoom-controls" role="group" aria-label="Canvas controls"><button id="zoom-out" type="button" aria-label="Zoom out">−</button><output id="zoom-level" aria-live="off">100%</output><button id="zoom-in" type="button" aria-label="Zoom in">＋</button><span class="divider"></span><button id="fit" type="button">Fit</button></div>
+  <footer class="statusbar"><span id="status" role="status">Loading…</span></footer>
+</main>
+</div>
+<details id="notices" class="notices" hidden><summary id="notice-summary"></summary><ul id="notice-list"></ul></details>
+<script id="architecture-data" type="application/json"><!--XTASK_DATA--></script>
+<script><!--XTASK_SCRIPT--></script>
+</body>
+</html>

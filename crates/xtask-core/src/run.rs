@@ -218,7 +218,7 @@ fn rustc_cfg(config: &Config, settings: &AnalysisSettings) -> Result<BTreeSet<St
     Ok(cfg)
 }
 
-/// Execute every repository check and write crate/module SVG artifacts, unless
+/// Execute every repository check and write crate/module SVGs and an HTML map, unless
 /// `no_write` is set. That mode validates graph structure without invoking Node.
 /// Rule violations and independent output failures are collected in the report.
 pub fn run(config: &Config) -> Result<Report, String> {
@@ -281,6 +281,14 @@ pub fn run(config: &Config) -> Result<Report, String> {
             .report
             .errors
             .push(format!("crate diagram: {error}"));
+    }
+    if let Err(error) =
+        crate::arch_map::write(&graph_config, &mut analysis, policy.diagrams.targets)
+    {
+        analysis
+            .report
+            .errors
+            .push(format!("architecture map: {error}"));
     }
     analysis.report.notes.push(format!(
         "analyzed {} workspace crates and {} target/configuration graphs",

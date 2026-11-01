@@ -9,6 +9,7 @@ Rust workspace向けの共通検査・アーキテクチャ可視化ツール。
 - **役割宣言**：全crate root・moduleに `Role:` を必須化
 - **循環検出**：module間の参照循環を禁止
 - **SVG出力**：crate依存図、module階層・参照図を生成
+- **対話型HTML**：無限キャンバスで依存関係を強調し、crateからmodule図へ移動
 
 ## 導入
 
@@ -89,20 +90,33 @@ mod config {
 cargo xtask check
 ```
 
-`check` 一つでコード行数・依存制限・役割宣言・module参照循環を検査し、crate依存図と全module図を生成する。
+`check` 一つでコード行数・依存制限・役割宣言・module参照循環を検査し、crate依存図と全module図、および対話型HTMLを生成する。
 検査違反があっても生成可能な図は出力し、診断をまとめて非ゼロ終了する。図の生成に失敗した場合もエラーとする。
 通常構成とCargoで有効なテスト構成は毎回解析する。
 
-SVGの出力先はpolicyのトップレベル `output` で指定する。省略時は `architecture/`。
+SVGとHTMLの出力先はpolicyのトップレベル `output` で指定する。省略時は `architecture/`。
 相対パスはリポジトリルート基準で、絶対パスも使用できる（例：`output = "docs/architecture"`）。
 
 ```text
 architecture/
+├── index.html
 ├── crates.svg
 └── modules/<package>/
     ├── <target>-<kind>-normal.svg
     └── <target>-<kind>-test.svg
 ```
+
+生成された `architecture/index.html` をブラウザで開くと、最初にcrate依存図を表示する。
+SVG・CSS・JavaScriptをすべて埋め込んだ単一ファイルなので、HTTPサーバーや追加インストール、ネットワーク接続は不要。
+
+- crate・moduleをホバーすると、その項目に依存する側と、その項目が依存する側を矢印ごと色分けする。矢印は依存元から依存先へ向かう。シングルクリックでハイライトを固定し、マウスを外したりキャンバスをドラッグ・ズームしたりしても維持する。何もない場所をクリックするかEscで固定を解除する。
+- crateをダブルクリックするとmodule依存図へ移動する。最初は通常構成のlibrary、なければbinaryを優先し、他のtargetやテスト構成は選択欄から切り替えられる。
+- moduleの名前・領域・`(self)`をホバーしても、直接の依存元・依存先を強調する。戻るアイコンや `Crates` リンクで元の図に戻れる。ヘッダーのパスは各階層へのリンクで、package名を押すとそのcrateの既定targetへ移動する。
+- 左ペインは全crate・target構成・moduleのツリーを常に保持する。ツリー上でもホバーで依存元・依存先を色分けし、クリックで該当図へ移動して固定できる。表示中の図にかかわらず他のcrate・moduleを選択でき、展開状態とスクロール位置も維持する。
+- キャンバスのドラッグで自由に移動、ホイールでカーソル位置を中心に拡大・縮小できる。全体表示とズームボタンも使用できる。
+- キーボードではTabで項目へ移動して依存関係を確認し、Spaceでハイライトを固定、Enterでcrateを開ける。
+
+HTMLにも `[diagrams] targets` の選択を適用する。解析・描画に失敗したtargetや、無効なrequired-featuresで省略したtargetの古いSVGはHTMLへ取り込まない。選択対象に図がないcrateではその旨を表示する。検査エラーはHTML内でも確認できる。
 
 図を生成するtargetはpolicyの `[diagrams] targets` で選ぶ。省略時は `"all"`（全target）で、既存の挙動と同じ。
 `"lib"` は library系（`lib`・`rlib`・`staticlib`・`cdylib`・`dylib`・`proc-macro`）、`"lib-bin"` はそれに `bin` を加える。
@@ -122,7 +136,7 @@ cargo xtask check
 ```
 
 CIでは `--no-write` でファイルを変更せずに検査できる。
-全ルールと図の構造を検査し、SVG生成・書き込みを省くためNode.jsは不要。既存SVGとの差分検査は行わない。
+全ルールと図の構造を検査し、SVG・HTML生成と書き込みを省くためNode.jsは不要。既存SVG・HTMLとの差分検査は行わない。
 別リポジトリを指定する場合は `--root` を使用する。
 
 ```sh
@@ -150,7 +164,7 @@ crate内の `macro_rules` の名前解決は、bare名の呼出しでは呼出�
 `target`、`all_features`、`default_features` も指定できる。役割文字数は `[limits] max_role_chars` で変更する。
 Rust APIは `run(&Config)` で同じ処理を実行する。`Config.analysis = Some(AnalysisSettings { ... })` は
 policyの解析設定全体を、`Config.max_role_chars = Some(n)` は文字数上限を上書きする。
-`Config.output = Some(path)` はpolicyの出力先を上書きし、`Config.no_write = true` はCIと同じ検査を行う。書き込み時は古いmodule図を自動削除するため、`Config.prune` は互換性のためのflagで、明示的に有効にする必要はない。
+`Config.output = Some(path)` はSVG・HTMLの出力先を上書きし、`Config.no_write = true` はCIと同じ検査を行う。書き込み時は古いmodule図を自動削除するため、`Config.prune` は互換性のためのflagで、明示的に有効にする必要はない。
 出力不要の解析だけを行う場合はRust APIの `analyze(&Config)` を使用する。
 
 ## 解析・実行上の注意
@@ -200,5 +214,6 @@ target/release/examples/benchmark.exe W:/w/akeboshi-xtask-test W:/w/xtask-core/t
 cargo test --locked --offline --workspace
 cargo fmt --all -- --check
 cargo clippy --locked --offline --workspace --all-targets -- -D warnings
+node --test crates/xtask-core/src/arch_map/viewer.test.cjs
 cargo xtask check
 ```

@@ -2,9 +2,10 @@
 //! Shared rules for repository-local xtask executables.
 //!
 //! Call [`main`] with an explicit repository root, or use [`run`] to obtain a
-//! structured report without printing. Checks write architecture SVGs unless
+//! structured report without printing. Checks write architecture SVGs and HTML unless
 //! [`Config::no_write`] requests validation only.
 
+mod arch_map;
 mod cli;
 mod config;
 mod graphs;
