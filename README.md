@@ -1,21 +1,37 @@
 # xtask-core
 
-Rust workspace向けの共通検査・アーキテクチャ可視化ツール。各リポジトリの `dev/xtask` から利用する。
+[日本語](README_JP.md)
 
-## 機能
+Repository rules and architecture diagrams for Rust workspaces, run through a
+`cargo xtask` entry point.
 
-- **コード行数**：コメント・文字列内容・空行を除き、1ファイルn行以下
-- **依存制限**：`visible_to` によるcrate間の依存許可リスト
-- **役割宣言**：全crate root・moduleに `Role:` を必須化
-- **循環検出**：module間の参照循環を禁止
-- **SVG出力**：crate依存図、module階層・参照図を生成
-- **対話型HTML**：無限キャンバスで依存関係を強調し、crateからmodule図へ移動
+A single `cargo xtask check` command:
 
-## 導入
+- enforces a per-file code line limit,
+- restricts which packages may depend on which (`visible_to`),
+- requires a one-line `Role:` declaration on every crate root and module,
+- rejects reference cycles between modules,
+- optionally applies a mechanically checkable subset of the
+  [Google Rust Style Guide](https://google.github.io/styleguide/rustguide.html),
+- renders crate and module dependency graphs to SVG and a self-contained
+  interactive HTML viewer.
 
-共通リポジトリを `vendor/xtask-core` にsubmoduleとして配置し、以下を設定する。
+## Requirements
 
-**`dev/xtask/Cargo.toml`**
+- Rust 1.85 or later.
+- A `Cargo.lock` and a populated dependency cache. Cargo is invoked with
+  `--locked --offline`.
+- Node.js, for writing diagrams. Set `XTASK_NODE` to use a binary other than
+  `node` on `PATH`. A vendored copy of `elkjs` 0.12.0 is used, so no npm install
+  or network access is required. `--no-write` does not need Node.js.
+- `rustfmt` and `clippy` components, if style checks are enabled.
+
+## Installation
+
+Add this repository to the target repository, for example as a submodule at
+`vendor/xtask-core`, then create an xtask package.
+
+`dev/xtask/Cargo.toml`:
 
 ```toml
 [package]
@@ -28,74 +44,139 @@ publish = false
 xtask-core = { path = "../../vendor/xtask-core/crates/xtask-core" }
 ```
 
-workspaceのmembersに `dev/xtask` を追加する。
-
-**`dev/xtask/src/main.rs`**
+`dev/xtask/src/main.rs`:
 
 ```rust
-//! Role: 共通xtaskを起動する。
+//! Role: Run the shared repository checks.
 
 fn main() -> std::process::ExitCode {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap();
+        .parent()
+        .expect("xtask must be inside dev")
+        .parent()
+        .expect("dev must be inside the repository");
     xtask_core::main(root)
 }
 ```
 
-**`.cargo/config.toml`**
+`.cargo/config.toml`:
 
 ```toml
 [alias]
 xtask = "run --package xtask --"
 ```
 
-**`dev/xtask/policy/workspace.toml`**
+Add `dev/xtask` to the workspace `members`, and create the policy file
+described below.
+
+## Usage
+
+```sh
+cargo xtask check              # check, then write SVG and HTML output
+cargo xtask check --no-write   # check only; suitable for CI
+cargo xtask check --root PATH  # check another repository
+cargo xtask check --help
+```
+
+All violations are collected and reported together. Diagrams that can be
+generated are written even when checks fail. The command exits with 0 on
+success, 1 on violations or execution errors, and 2 on invalid arguments.
+
+`--no-write` runs every check and validates diagram structure without writing
+SVG or HTML files. When style checks are enabled, rustfmt and Clippy still run,
+which produces Cargo build output under `target/` and executes build scripts
+and procedural macros.
+
+Both the normal and the `cfg(test)` configuration of each target are analyzed.
+
+## Configuration
+
+The policy is read from `dev/xtask/policy/workspace.toml`. Unknown keys are
+rejected.
 
 ```toml
-output = "architecture"
+output = "architecture"   # SVG and HTML destination, relative to the root
 
 [limits]
-max_code_lines = 1000
-max_role_chars = 80
+max_code_lines = 1000     # per file; at most 1000
+max_role_chars = 80       # Role description length in Unicode characters
 
 [visible_to]
 internal = ["facade", "app-*"]
 app = []
+
+[diagrams]
+targets = "all"           # "all", "lib-bin" or "lib"
+
+[analysis]
+target = "x86_64-unknown-linux-gnu"
+features = ["app/feature"]
+all_features = false
+default_features = true
+cfg = ["custom_cfg"]
+trusted_attributes = ["serde"]
+trusted_derives = ["Deserialize", "Serialize"]
+trusted_macros = ["proptest", "prop_assert"]
+
+[style]
+enabled = true
 ```
 
-`visible_to` は依存される側をキーに、依存を許可するpackage名を指定する。未指定なら制限なし、`[]` は外部crateからの依存禁止、末尾の `*` は前方一致。normal・dev・build・optional・target条件付き依存も検査する。
+### Line limit
 
-行数上限は最大1000、役割文字数の既定値は80（変更可能）。
+Lines are counted excluding blank lines, comments and the contents of string
+literals.
 
-## 役割宣言
+### Dependency visibility
 
-全crate root（lib・bin・test・bench・example・build script）と各moduleに、内側ドキュメントで1行の役割宣言を書く。
+Each key of `visible_to` names a package that is depended on; its value lists
+the packages allowed to depend on it. A trailing `*` matches a prefix. `[]`
+forbids all dependents, and packages without an entry are unrestricted. Keys
+and patterns must match workspace members. Normal,
+dev, build, optional and target-specific dependencies are all checked.
+
+### Role declarations
+
+Every crate root (library, binary, test, bench, example and build script) and
+every module begins with a one-line inner documentation comment:
 
 ```rust
-//! Role: アプリケーション全体を制御する。
+//! Role: Coordinate the application.
 
 mod config {
-    //! Role: 実行設定を管理する。
+    //! Role: Hold runtime settings.
 }
 ```
 
-外部ファイルのmoduleはファイル先頭に記述する。`mod name;` 側の外側ドキュメントでは代用できない。
+For a module in its own file, the declaration goes at the top of that file; an
+outer comment on `mod name;` does not count. `/*! Role: ... */` and
+`#![doc = "Role: ..."]` are also accepted. The description must be nonempty and
+no longer than `max_role_chars`.
 
-説明は1文字以上、設定上限以下。同等の `/*! Role: ... */` や `#![doc = "Role: ..."]` も使用できる。
-未記載・不正な役割は図で `[役割未記載]` と表示し、検査エラーとして報告する。
+### Diagrams
 
-## コマンド
+`[diagrams] targets` selects the targets that get module diagrams:
 
-```sh
-cargo xtask check
-```
+| Value | Targets |
+| --- | --- |
+| `"all"` (default) | every target |
+| `"lib-bin"` | library kinds and binaries |
+| `"lib"` | `lib`, `rlib`, `staticlib`, `cdylib`, `dylib`, `proc-macro` |
 
-`check` 一つでコード行数・依存制限・役割宣言・module参照循環を検査し、crate依存図と全module図、および対話型HTMLを生成する。
-検査違反があっても生成可能な図は出力し、診断をまとめて非ゼロ終了する。図の生成に失敗した場合もエラーとする。
-通常構成とCargoで有効なテスト構成は毎回解析する。
+Unselected targets are still checked; only their diagrams are omitted.
 
-SVGとHTMLの出力先はpolicyのトップレベル `output` で指定する。省略時は `architecture/`。
-相対パスはリポジトリルート基準で、絶対パスも使用できる（例：`output = "docs/architecture"`）。
+### Analysis
+
+By default, analysis uses the host target, Cargo's default features and no
+extra `cfg`. `[analysis]` changes these settings for both source analysis and
+Clippy.
+
+`trusted_attributes`, `trusted_derives` and `trusted_macros` name items that
+are assumed not to affect module structure. Calls to a trusted function-like
+macro, matched by the exact path written at the call site, are not expanded,
+so references inside them are not analyzed.
+
+## Output
 
 ```text
 architecture/
@@ -106,109 +187,136 @@ architecture/
     └── <target>-<kind>-test.svg
 ```
 
-生成された `architecture/index.html` をブラウザで開くと、最初にcrate依存図を表示する。
-SVG・CSS・JavaScriptをすべて埋め込んだ単一ファイルなので、HTTPサーバーや追加インストール、ネットワーク接続は不要。
+`index.html` is a single file with all SVG, CSS and JavaScript embedded. It
+opens on the crate graph and supports:
 
-- crate・moduleをホバーすると、その項目に依存する側と、その項目が依存する側を矢印ごと色分けする。矢印は依存元から依存先へ向かう。シングルクリックでハイライトを固定し、マウスを外したりキャンバスをドラッグ・ズームしたりしても維持する。何もない場所をクリックするかEscで固定を解除する。
-- crateをダブルクリックするとmodule依存図へ移動する。最初は通常構成のlibrary、なければbinaryを優先し、他のtargetやテスト構成は選択欄から切り替えられる。
-- moduleの名前・領域・`(self)`をホバーしても、直接の依存元・依存先を強調する。戻るアイコンや `Crates` リンクで元の図に戻れる。ヘッダーのパスは各階層へのリンクで、package名を押すとそのcrateの既定targetへ移動する。
-- 左ペインは全crate・target構成・moduleのツリーを常に保持する。ツリー上でもホバーで依存元・依存先を色分けし、クリックで該当図へ移動して固定できる。表示中の図にかかわらず他のcrate・moduleを選択でき、展開状態とスクロール位置も維持する。
-- キャンバスのドラッグで自由に移動、ホイールでカーソル位置を中心に拡大・縮小できる。全体表示とズームボタンも使用できる。
-- キーボードではTabで項目へ移動して依存関係を確認し、Spaceでハイライトを固定、Enterでcrateを開ける。
+- hovering a crate or module to highlight what it depends on and what depends
+  on it, and clicking to pin the highlight (Esc or a click on empty space
+  clears it);
+- double-clicking a crate to open its module graph, with a selector for other
+  targets and the test configuration;
+- a tree of all crates, targets and modules in the side pane;
+- panning by dragging and zooming with the wheel;
+- keyboard navigation: Tab to move, Space to pin, Enter to open.
 
-HTMLにも `[diagrams] targets` の選択を適用する。解析・描画に失敗したtargetや、無効なrequired-featuresで省略したtargetの古いSVGはHTMLへ取り込まない。選択対象に図がないcrateではその旨を表示する。検査エラーはHTML内でも確認できる。
+On each writing run, module SVGs under `<output>/modules` that were not
+generated this run (for removed or unselected targets) are deleted. When
+analysis fails, diagrams of targets that still exist are kept. `--no-write`
+only reports what would be deleted.
 
-図を生成するtargetはpolicyの `[diagrams] targets` で選ぶ。省略時は `"all"`（全target）で、既存の挙動と同じ。
-`"lib"` は library系（`lib`・`rlib`・`staticlib`・`cdylib`・`dylib`・`proc-macro`）、`"lib-bin"` はそれに `bin` を加える。
-選んだtargetの `cfg(test)` 図は含まれる。選外のtarget（test・bench・example・build scriptなど）も行数・役割・依存・循環の検査は行い、図だけを生成しない。
+## Style checks
+
+`[style]` applies rules from the Google Rust Style Guide that can be checked
+mechanically. It does not certify compliance with the whole guide: for
+documentation and safety comments, only presence is checked.
+
+`enabled = true` selects rules 1–13. Rules 14–20 need targets or reviewed
+exceptions and are added through `extra_rules`.
+
+| # | Rule | Checks | Implementation |
+| --- | --- | --- | --- |
+| 1 | `format` | Code matches the project's rustfmt configuration, whose effective `max_width` is at most 100. | rustfmt |
+| 2 | `hex-literals` | Hexadecimal integer literals use lowercase digits, including inside macro calls. | syntax |
+| 3 | `import-granularity` | One `use` imports from one module; no nested paths inside braces. | syntax |
+| 4 | `unstable-features` | No `#![feature(...)]`. | rustc `unstable_features` |
+| 5 | `unwrap` | No `unwrap` / `unwrap_err` on `Option` or `Result` outside test code. | Clippy `unwrap_used` |
+| 6 | `checked-unwrap` | No unwrap after an explicit check. | Clippy `unnecessary_unwrap` |
+| 7 | `flexible-references` | No `&Box<T>`, `&Vec<T>`, `&String` or `&Option<T>` parameters. | Clippy `borrowed_box`, `ptr_arg`, `ref_option` |
+| 8 | `derivable-impls` | No manual impls that `derive` can replace. | Clippy `derivable_impls` |
+| 9 | `new-default` | Public argument-less `new` has a `Default` impl. | Clippy `new_without_default` |
+| 10 | `len-is-empty` | Public `len` has a matching `is_empty`. | Clippy `len_without_is_empty` |
+| 11 | `missing-docs` | Public items are documented. | rustc `missing_docs` |
+| 12 | `safety-docs` | Unsafe functions document a `# Safety` section. | Clippy `missing_safety_doc` |
+| 13 | `safety-comments` | Unsafe blocks and impls have a `SAFETY:` comment. | Clippy `undocumented_unsafe_blocks` |
+| 14 | `glob-imports` | No glob imports, except `super::*` in inline modules, `use Enum::*` in function bodies and `pub use child::*` in non-leaf modules. | syntax |
+| 15 | `non-leaf-implementation` | Modules with child modules contain only declarations, imports and re-exports; test modules and `#[cxx::bridge]` are allowed. | syntax |
+| 16 | `rustfmt-skip` | No `#[rustfmt::skip]` in any form. | syntax |
+| 17 | `non-exhaustive` | Public enums and all-public structs in `api_packages` are `#[non_exhaustive]`. | Clippy `exhaustive_enums`, `exhaustive_structs` |
+| 18 | `catch-unwind` | No `std::panic::catch_unwind`. | Clippy `disallowed_methods` |
+| 19 | `poison-access` | No `PoisonError::into_inner`, `get_ref` or `get_mut`. | Clippy `disallowed_methods` |
+| 20 | `options-default` | Types listed in `options_structs` implement `Default`. | compile probe |
 
 ```toml
-[diagrams]
-targets = "lib-bin"
+[style]
+enabled = true
+extra_rules = [
+    "glob-imports",
+    "non-leaf-implementation",
+    "rustfmt-skip",
+    "non-exhaustive",
+    "catch-unwind",
+    "poison-access",
+    "options-default",
+]
+disabled_rules = ["missing-docs"]
+api_packages = ["my-library"]
+options_structs = ["my-library::options::Options"]
+toolchain = "1.85.0"      # optional rustup toolchain
+
+[[style.exceptions]]
+rule = "rustfmt-skip"
+path = "crates/my-library/src/generated/*"
+reason = "Preserve the generator's layout."
+
+[[style.exceptions]]
+rule = "unwrap"
+path = "crates/app/src/main.rs"
+item = "startup"
+reason = "The configuration was validated before this call."
 ```
 
-通常の `check` は、今回の実行で生成しなかった既存のmodule図（選外になったtarget、またはrename・削除されたpackage・targetの図）を `<output>/modules` 以下の `*.svg` から探して自動削除する。削除は `pruned stale module diagram` として報告し、空になったdirectoryも消す。`--no-write` は削除予定の図を報告するだけで、ファイルを変更しない。`--prune` は互換性のため引き続き受理するが、通常の `check` と同じ動作で、`--no-write` とは同時に使えない。
+Exceptions are the only way to waive a rule: selected lints take precedence
+over `#[allow(...)]` in source. `path` is relative to the repository root and
+may end in `*` for a prefix match. `item` optionally restricts the exception to
+one item path within its module hierarchy. `reason` is required. Exceptions
+never waive execution errors such as a missing tool or a failed compilation.
 
-解析失敗や検査エラーがある場合はCargo metadataに存在する選択targetの図を保護し、確実に削除・renameされたpackage・targetや選外targetの図だけを削除する。解析全体が失敗しても、実在targetの図は保持する。`required-features` が有効でなく解析をskipしたtargetも、選択に含まれる限りその図は報告も削除もしない。Windowsではpathの大文字小文字を区別せずに比較する。`crates.svg`、`*.svg` 以外のファイル、`<output>/modules` 外のファイル、symlinkは削除対象外。
+Notes:
 
-```sh
-cargo xtask check
+- Syntax rules read all discovered sources, including code under inactive
+  `cfg`. Macro input is not parsed as Rust and generated code is not expanded.
+- Clippy runs on all workspace targets with the `[analysis]` settings. It does
+  not try every feature combination.
+- The project's Clippy configuration is preserved, except that
+  `allow-unwrap-in-tests = true`, `check-private-items = true` and
+  `avoid-breaking-exported-api = false` are set.
+- `ref_option` requires Clippy 1.83 or later.
+- With `analysis.cfg`, Cargo `rustflags` from configuration files are not
+  merged implicitly; set `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` to include
+  them.
+- `options-default` compiles a temporary crate against a copy of the lockfile.
+  The repository's manifests and lockfile are not modified. Selectors must
+  name public, non-generic types.
+
+## Library API
+
+The checks are also available as a library.
+
+```rust
+use xtask_core::{Config, run};
+
+let mut config = Config::new("path/to/repository");
+config.no_write = true;
+let report = run(&config)?;
+for diagnostic in &report.style_diagnostics {
+    println!("{diagnostic}");
+}
 ```
 
-CIでは `--no-write` でファイルを変更せずに検査できる。
-全ルールと図の構造を検査し、SVG・HTML生成と書き込みを省くためNode.jsは不要。既存SVG・HTMLとの差分検査は行わない。
-別リポジトリを指定する場合は `--root` を使用する。
+`Config` can override the output directory, the role length limit and the
+`[analysis]` settings. `analyze(&Config)` returns the per-target module graphs
+without running style tools or writing output. Style violations are available as
+structured `Report::style_diagnostics` and are also included in
+`Report::errors`.
 
-```sh
-cargo xtask check --root ../other-repo
-cargo xtask check --no-write
-cargo xtask check --help
-```
+## Limitations
 
-target・feature・cfgや既知macroの解析設定は、policyファイルの `[analysis]` に記述する。
+- Analysis is static, based on `syn`. Type inference and macro expansion are
+  not reproduced. Unsupported syntax is reported as an error rather than
+  ignored.
+- Rust editions 2018, 2021 and 2024 are supported.
 
-```toml
-[analysis]
-features = ["app/feature"]
-cfg = ["custom_cfg"]
-trusted_attributes = ["serde"]
-trusted_derives = ["Deserialize", "Serialize"]
-trusted_macros = ["proptest", "prop_assert", "prop_assert_eq"]
-```
-
-`trusted_macros` は呼び出しの書かれたパス（`::` 連結、先頭 `::` なし）に完全一致する function-like macro の展開・tokenを解析しない仮定で、生成・内包される参照はsource-level解析の外になる。macroパス自体の参照は従来どおり解決する。crate内の `macro_rules` の呼出しにも適用され、定義moduleへの参照を記録する。item位置の場合、呼出しを書いたmoduleがopaqueになり、そのmodule内の未解決名は呼出しmoduleへの参照として扱う（crate rootで呼べばcrate全体の未解決 `crate::` pathが対象）。
-
-crate内の `macro_rules` の名前解決は、bare名の呼出しでは呼出しmodule・祖先moduleの定義（`#[macro_use] mod` 経由を含む）を定義と呼出しの前後順を見ない近似で探し、`#[macro_export]` は定義moduleによらずcrate rootの名前として扱い、`crate::name!` の呼出しと `use crate::name` で参照できる。
-
-省略時はhost target・Cargo既定feature・追加cfgなしで解析する。
-`target`、`all_features`、`default_features` も指定できる。役割文字数は `[limits] max_role_chars` で変更する。
-Rust APIは `run(&Config)` で同じ処理を実行する。`Config.analysis = Some(AnalysisSettings { ... })` は
-policyの解析設定全体を、`Config.max_role_chars = Some(n)` は文字数上限を上書きする。
-`Config.output = Some(path)` はSVG・HTMLの出力先を上書きし、`Config.no_write = true` はCIと同じ検査を行う。書き込み時は古いmodule図を自動削除するため、`Config.prune` は互換性のためのflagで、明示的に有効にする必要はない。
-出力不要の解析だけを行う場合はRust APIの `analyze(&Config)` を使用する。
-
-## 解析・実行上の注意
-
-- Rust 2018 / 2021 / 2024に対応。通常構成と `cfg(test)` を別々に解析する。
-- `syn` による静的解析のため、型推論やmacro展開を完全には再現しない。未対応の構文・展開は原則エラーとする。
-- 組込みのinert属性・derive helper（`#[default]`）とtool属性（`rustfmt`/`clippy`/`diagnostic`/`rust_analyzer`）は展開なしで扱う。
-- Cargo依存解決は `--locked --offline`。事前にlockfileと依存キャッシュを準備する。
-- SVG配置にはNode.jsが必要。`PATH` または `XTASK_NODE` で指定する。
-- `elkjs 0.12.0` を同梱し、実行時のnpm・ネットワークアクセスは不要。
-
-## 実行時間の計測
-
-targetごとの解析とファイルごとの行数検査は、利用可能なCPU数に応じて最大8workerで並列実行し、結果を入力順に集約する。hostのrustc cfgは実行内で再利用する。SVG生成では一回の `run` 内でNodeプロセスと同梱ELKの読み込みを共有し、各図の配置と検証は独立して行う。連続したSVG出力を行うRust APIの利用者は `xtask_graph::SvgWriter`、配置だけを行う利用者は `xtask_layout::LayoutSession` を使用できる。
-
-`benchmark` exampleで、ビルド時間を除く `analyze`、検査のみの `no-write`、SVG生成を含む `write` を計測できる。OUTPUTは絶対パスを指定すると、対象リポジトリの既存図を変更せずに測定できる。検査エラーがあれば非ゼロ終了する。
-
-```powershell
-cargo build --locked --offline --release -p xtask-core --example benchmark
-target/release/examples/benchmark.exe W:/w/akeboshi-xtask-test W:/w/xtask-core/target/benchmark-output no-write
-target/release/examples/benchmark.exe W:/w/akeboshi-xtask-test W:/w/xtask-core/target/benchmark-output write
-```
-
-2026-10-14に `W:/w/akeboshi-xtask-test` で測定した結果。改善前はmainの `ba6ac15`、改善後は解析・行数検査の並列化、host cfg再利用、Nodeランタイム再利用を適用した版。Windows、Ryzen 9 3900X（12 core / 24 thread）、Rust 1.98.1、Node 20.18.0、releaseビルドを使用し、各modeを別プロセスで3回実行した。コンパイルは計測外、ファイルキャッシュはクリアしていない。対象のpolicy（図は `lib-bin`）は変更していない。26 crate / 201 target・構成を検査し、全実行でエラー0、`write` は53 SVGを出力した。
-
-| mode | 改善前の中央値 | 改善後の中央値 | 速度比 | 時間短縮 |
-| --- | ---: | ---: | ---: | ---: |
-| no-write | 35.268秒 | 9.360秒 | 3.77倍 | 73.5% |
-| write | 61.660秒 | 17.779秒 | 3.47倍 | 71.2% |
-
-測定値（秒）は、改善前 `no-write = [39.880264, 35.267826, 33.368537]`、`write = [61.660461, 61.386531, 62.229156]`、改善後 `no-write = [9.438426, 9.359520, 8.952320]`、`write = [17.778657, 17.990855, 17.667342]`。別途、解析のみは32.635416秒から9.421555秒（各1回）。改善前後の53 SVGは相対パスとSHA-256がすべて一致した。計測バイナリ・生ログ・JSON集計は `target/benchmarks/` に保存している。
-
-同日、`a64b666` に追加改善を適用した。属性の無い式・文ではcfgやderiveの診断が不要なので、その判定用の名前表の複製を省く。SVGの交差判定では線分・曲線の外接矩形を事前計算し、確実に離れた組の詳細計算を省く。矩形はパラメータ・距離の許容誤差と浮動小数の丸め誤差を含めて拡張し、従来の判定結果と順序を保つ。
-
-同じ環境・対象・policyで前回版と追加版を交互に3回ずつ実行した結果。全実行で26 crate / 201 target・構成、エラー0。最初の改善前から追加版まで、53 SVGの相対パスとSHA-256はすべて一致した。
-
-| mode | 前回版の中央値（再計測） | 追加版の中央値 | 追加の速度比 | 時間短縮 |
-| --- | ---: | ---: | ---: | ---: |
-| no-write | 8.906秒 | 1.638秒 | 5.44倍 | 81.6% |
-| write | 18.291秒 | 8.200秒 | 2.23倍 | 55.2% |
-
-測定値（秒）は、前回版 `no-write = [8.906362, 8.855301, 8.934785]`、`write = [18.290827, 18.773331, 17.790138]`、追加版 `no-write = [1.638381, 1.654961, 1.634049]`、`write = [8.116300, 8.200194, 8.240718]`。追加版の生ログ・集計は `target/benchmarks/second-*`。空属性の最小変更だけの予備計測では解析のみ1.393798秒だった。別途1回の工程計測では、空属性改善後・交差判定改善前のSVG配置が計6.27秒、描画が計2.34秒だった。
-
-## 本リポジトリの検証
+## Development
 
 ```sh
 cargo test --locked --offline --workspace
@@ -217,3 +325,43 @@ cargo clippy --locked --offline --workspace --all-targets -- -D warnings
 node --test crates/xtask-core/src/arch_map/viewer.test.cjs
 cargo xtask check
 ```
+
+To time a run against another repository, use the `benchmark` example. Pass an
+absolute OUTPUT to leave that repository's diagrams untouched.
+
+```sh
+cargo run --release -p xtask-core --example benchmark -- ROOT OUTPUT MODE
+```
+
+`MODE` is `analyze`, `no-write` or `write`.
+
+Workspace crates:
+
+| Crate | Responsibility |
+| --- | --- |
+| `xtask-core` | CLI, checks, style rules and output |
+| `xtask-workspace` | Cargo metadata and policy |
+| `xtask-source` | source discovery and line counting |
+| `xtask-modules` | module and reference analysis |
+| `xtask-graph` | graph construction and SVG writing |
+| `xtask-layout` | ELK layout through Node.js |
+| `xtask-svg` | SVG rendering |
+
+## License
+
+Copyright (c) 2026 Kashiwade.
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  <https://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this project by you, as defined in the Apache-2.0 license,
+shall be dual licensed as above, without any additional terms or conditions.
+
+`crates/xtask-layout/vendor/elkjs` is distributed under its own license; see
+the files in that directory.

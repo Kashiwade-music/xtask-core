@@ -8,10 +8,12 @@
 mod metadata;
 mod model;
 mod policy;
+mod style;
 
 #[cfg(test)]
 mod tests;
 
 pub use policy::{AnalysisSettings, DiagramTargets, Diagrams, Limits, Policy};
+pub use style::{StyleException, StylePolicy, StyleRule};
 
 pub use model::{Dependency, Package, Target, Workspace};

@@ -255,6 +255,7 @@ pub fn run(config: &Config) -> Result<Report, String> {
         .errors
         .extend(analysis.workspace.check_visibility(&policy));
     check_lines(&mut analysis, policy.limits.max_code_lines);
+    crate::style::check(config, settings, &policy.style, &mut analysis);
     let mut writer = xtask_graph::SvgWriter::default();
     if let Err(error) = graphs::modules(
         &graph_config,

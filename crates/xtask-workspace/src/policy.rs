@@ -2,6 +2,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use crate::StylePolicy;
 use serde::Deserialize;
 
 /// Repository-owned settings for the adopted common rules.
@@ -18,6 +19,9 @@ pub struct Policy {
     pub diagrams: Diagrams,
     #[serde(default, deserialize_with = "analysis_settings")]
     pub analysis: AnalysisSettings,
+    /// Opt-in mechanical Google Rust style checks.
+    #[serde(default, deserialize_with = "style_policy")]
+    pub style: StylePolicy,
     #[serde(default)]
     pub visible_to: BTreeMap<String, Vec<String>>,
 }
@@ -33,6 +37,7 @@ impl Default for Policy {
             limits: Limits::default(),
             diagrams: Diagrams::default(),
             analysis: AnalysisSettings::default(),
+            style: StylePolicy::default(),
             visible_to: BTreeMap::new(),
         }
     }
@@ -119,6 +124,16 @@ where
         .map_err(serde::de::Error::custom)
 }
 
+fn style_policy<'de, D>(deserializer: D) -> Result<StylePolicy, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let table = toml::Table::deserialize(deserializer)?;
+    toml::Value::Table(table)
+        .try_into()
+        .map_err(serde::de::Error::custom)
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Limits {
@@ -163,6 +178,7 @@ impl Policy {
     /// Validate the output path, configurable limits and visibility patterns. The common
     /// 1000-line ceiling can be tightened; Role limits may be any positive value.
     pub fn validate(&self) -> Result<(), String> {
+        self.style.validate()?;
         if self.output.as_os_str().to_string_lossy().trim().is_empty() {
             return Err("output must be a nonempty path".into());
         }

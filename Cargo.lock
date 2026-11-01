@@ -301,9 +301,12 @@ dependencies = [
 name = "xtask-core"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
  "roxmltree",
  "serde_json",
+ "syn 2.0.119",
  "tempfile",
+ "toml",
  "xtask-graph",
  "xtask-modules",
  "xtask-source",
