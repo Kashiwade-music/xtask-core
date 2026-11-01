@@ -28,13 +28,12 @@ pub enum StyleRule {
     NonExhaustive,
     CatchUnwind,
     PoisonAccess,
-    ExtensionTraitNames,
     OptionsDefault,
 }
 
 impl StyleRule {
     /// Stable rule identifiers used by policy files and diagnostics.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 20] = [
         Self::Format,
         Self::HexLiterals,
         Self::ImportGranularity,
@@ -54,7 +53,6 @@ impl StyleRule {
         Self::NonExhaustive,
         Self::CatchUnwind,
         Self::PoisonAccess,
-        Self::ExtensionTraitNames,
         Self::OptionsDefault,
     ];
 
@@ -79,7 +77,6 @@ impl StyleRule {
             Self::NonExhaustive => "non-exhaustive",
             Self::CatchUnwind => "catch-unwind",
             Self::PoisonAccess => "poison-access",
-            Self::ExtensionTraitNames => "extension-trait-names",
             Self::OptionsDefault => "options-default",
         }
     }
@@ -137,9 +134,8 @@ pub struct StylePolicy {
     pub extra_rules: Vec<StyleRule>,
     pub disabled_rules: Vec<StyleRule>,
     pub exceptions: Vec<StyleException>,
-    /// Exact `package::module::Trait` selectors; root items use `package::Trait`.
-    pub extension_traits: Vec<String>,
-    /// Exact `package::module::Struct` selectors for options structures.
+    /// Exact `package::module::Struct` selectors for options structures; root
+    /// items use `package::Struct`.
     pub options_structs: Vec<String>,
     /// Workspace package names whose exported types require non_exhaustive.
     pub api_packages: Vec<String>,
@@ -215,23 +211,20 @@ impl StylePolicy {
                 return Err("style exception item must be an exact module::item path".into());
             }
         }
-        for (field, selectors) in [
-            ("extension_traits", &self.extension_traits),
-            ("options_structs", &self.options_structs),
-        ] {
-            let distinct: BTreeSet<_> = selectors.iter().collect();
-            if distinct.len() != selectors.len() {
-                return Err(format!("style.{field} contains duplicate selectors"));
-            }
-            for selector in selectors {
-                let Some((package, item)) = selector.split_once("::") else {
-                    return Err(format!(
-                        "style.{field} requires package::module::Item selectors"
-                    ));
-                };
-                if !package_name(package) || !item_path(item) {
-                    return Err(format!("invalid style.{field} selector `{selector}`"));
-                }
+        let distinct: BTreeSet<_> = self.options_structs.iter().collect();
+        if distinct.len() != self.options_structs.len() {
+            return Err("style.options_structs contains duplicate selectors".into());
+        }
+        for selector in &self.options_structs {
+            let Some((package, item)) = selector.split_once("::") else {
+                return Err(
+                    "style.options_structs requires package::module::Item selectors".into(),
+                );
+            };
+            if !package_name(package) || !item_path(item) {
+                return Err(format!(
+                    "invalid style.options_structs selector `{selector}`"
+                ));
             }
         }
         if self.api_packages.iter().any(|name| !package_name(name)) {
@@ -245,11 +238,6 @@ impl StylePolicy {
                 StyleRule::NonExhaustive,
                 !self.api_packages.is_empty(),
                 "api_packages",
-            ),
-            (
-                StyleRule::ExtensionTraitNames,
-                !self.extension_traits.is_empty(),
-                "extension_traits",
             ),
             (
                 StyleRule::OptionsDefault,
@@ -305,15 +293,16 @@ mod tests {
     }
 
     #[test]
-    fn all_twenty_one_rules_can_be_selected_with_explicit_api_targets() {
+    fn all_twenty_rules_can_be_selected_with_explicit_api_targets() {
         let policy = Policy::from_toml(concat!(
             "[style]\nenabled=true\n",
             "extra_rules=['glob-imports','non-leaf-implementation','rustfmt-skip',",
-            "'non-exhaustive','catch-unwind','poison-access','extension-trait-names','options-default']\n",
-            "api_packages=['my-api']\nextension_traits=['my-api::io::ReadExt']\n",
+            "'non-exhaustive','catch-unwind','poison-access','options-default']\n",
+            "api_packages=['my-api']\n",
             "options_structs=['my-api::Options']\ntoolchain='1.85.0'\n"
-        )).unwrap();
-        assert_eq!(policy.style.rules().len(), 21);
+        ))
+        .unwrap();
+        assert_eq!(policy.style.rules().len(), 20);
         let policy =
             Policy::from_toml("[style]\nenabled=true\ndisabled_rules=['format']\n").unwrap();
         assert_eq!(policy.style.rules().len(), 12);
@@ -329,7 +318,8 @@ mod tests {
             "extra_rules=['non-exhaustive']",
             "extra_rules=['extension-trait-names']",
             "extra_rules=['options-default']",
-            "extension_traits=['Trait']",
+            "extension_traits=['my-api::ReadExt']",
+            "options_structs=['Options']",
             "options_structs=['api::bad::']",
             "toolchain='--help'",
             "toolchain='../toolchain'",

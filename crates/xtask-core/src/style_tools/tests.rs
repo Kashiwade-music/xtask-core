@@ -37,7 +37,7 @@ fn configuration_preserves_project_settings_and_extends_banned_methods() {
     assert_eq!(merged["msrv"].as_str(), Some("1.85"));
     assert_eq!(merged["disallowed-names"][0].as_str(), Some("special"));
     assert_eq!(merged["disallowed-methods"].as_array().unwrap().len(), 5);
-    assert_eq!(merged["allow-unwrap-in-tests"].as_bool(), Some(false));
+    assert_eq!(merged["allow-unwrap-in-tests"].as_bool(), Some(true));
     assert_eq!(merged["check-private-items"].as_bool(), Some(true));
 }
 
@@ -145,6 +145,7 @@ fn real_clippy_distinguishes_standard_aliases_and_same_named_methods() {
     let workspace = Workspace::load(fixture.path()).unwrap();
     let report = super::check(
         fixture.path(),
+        &[],
         &workspace,
         &AnalysisSettings::default(),
         &only(&[StyleRule::Unwrap]),
@@ -163,6 +164,7 @@ fn changed_clippy_configuration_rechecks_cached_sources() {
     let settings = AnalysisSettings::default();
     let first = super::check(
         fixture.path(),
+        &[],
         &workspace,
         &settings,
         &only(&[StyleRule::CatchUnwind]),
@@ -172,6 +174,7 @@ fn changed_clippy_configuration_rechecks_cached_sources() {
     assert_eq!(first.diagnostics[0].rule, StyleRule::CatchUnwind);
     let second = super::check(
         fixture.path(),
+        &[],
         &workspace,
         &settings,
         &only(&[StyleRule::PoisonAccess]),
@@ -190,15 +193,15 @@ fn default_probe_distinguishes_missing_impl_and_invalid_selector_and_preserves_l
     let before = std::fs::read(fixture.path().join("Cargo.lock")).unwrap();
     let mut policy = only(&[StyleRule::OptionsDefault]);
     policy.options_structs.push("tool-fixture::Missing".into());
-    let missing = super::check(fixture.path(), &workspace, &settings, &policy);
+    let missing = super::check(fixture.path(), &[], &workspace, &settings, &policy);
     assert!(missing.errors.is_empty(), "{:?}", missing.errors);
     assert_eq!(missing.diagnostics.len(), 1, "{:?}", missing.diagnostics);
     policy.options_structs[0] = "tool-fixture::Good".into();
-    let good = super::check(fixture.path(), &workspace, &settings, &policy);
+    let good = super::check(fixture.path(), &[], &workspace, &settings, &policy);
     assert!(good.errors.is_empty(), "{:?}", good.errors);
     assert!(good.diagnostics.is_empty(), "{:?}", good.diagnostics);
     policy.options_structs[0] = "tool-fixture::Private".into();
-    let private = super::check(fixture.path(), &workspace, &settings, &policy);
+    let private = super::check(fixture.path(), &[], &workspace, &settings, &policy);
     assert!(!private.errors.is_empty());
     assert!(private.diagnostics.is_empty());
     assert_eq!(
@@ -236,6 +239,7 @@ fn cross_package_feature_requests_are_accepted_for_each_package() {
     };
     let report = super::check(
         fixture.path(),
+        &[],
         &workspace,
         &settings,
         &only(&[StyleRule::Unwrap]),
@@ -291,6 +295,7 @@ fn configured_cfg_activates_compiler_checked_code() {
     };
     let report = super::check(
         fixture.path(),
+        &[],
         &workspace,
         &settings,
         &only(&[StyleRule::Unwrap]),
@@ -298,4 +303,96 @@ fn configured_cfg_activates_compiler_checked_code() {
     assert!(report.errors.is_empty(), "{:?}", report.errors);
     assert_eq!(report.diagnostics.len(), 1, "{:?}", report.diagnostics);
     assert_eq!(report.diagnostics[0].rule, StyleRule::Unwrap);
+}
+
+#[test]
+fn format_uses_project_width_and_rejects_widths_over_the_limit() {
+    let fixture = fixture(
+        "pub fn function(\n    alpha: u32,\n    beta: u32,\n    gamma: u32,\n    delta: u32,\n    epsilon: u32,\n) -> u32 {\n    alpha + beta + gamma + delta + epsilon\n}\n",
+    );
+    let workspace = Workspace::load(fixture.path()).unwrap();
+    let files = [fixture.path().join("src/lib.rs")];
+    let policy = only(&[StyleRule::Format]);
+    // Output of the project's own `cargo fmt` under a narrower width passes.
+    std::fs::write(fixture.path().join("rustfmt.toml"), "max_width = 80\n").unwrap();
+    let narrow = super::check(
+        fixture.path(),
+        &files,
+        &workspace,
+        &AnalysisSettings::default(),
+        &policy,
+    );
+    assert!(narrow.errors.is_empty(), "{:?}", narrow.errors);
+    assert!(narrow.diagnostics.is_empty(), "{:?}", narrow.diagnostics);
+
+    std::fs::write(fixture.path().join("rustfmt.toml"), "max_width = 120\n").unwrap();
+    let wide = super::check(
+        fixture.path(),
+        &files,
+        &workspace,
+        &AnalysisSettings::default(),
+        &policy,
+    );
+    assert!(wide.errors.is_empty(), "{:?}", wide.errors);
+    let widths: Vec<_> = wide
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.contains("max_width = 120"))
+        .collect();
+    assert_eq!(widths.len(), 1, "{:?}", wide.diagnostics);
+    assert!(widths[0].path.ends_with("rustfmt.toml"));
+}
+
+#[test]
+fn flexible_references_include_borrowed_options() {
+    let fixture = fixture("pub fn f(value: &Option<String>) -> bool { value.is_some() }\n");
+    let workspace = Workspace::load(fixture.path()).unwrap();
+    let report = super::check(
+        fixture.path(),
+        &[],
+        &workspace,
+        &AnalysisSettings::default(),
+        &only(&[StyleRule::FlexibleReferences]),
+    );
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    assert_eq!(report.diagnostics.len(), 1, "{:?}", report.diagnostics);
+    assert!(
+        !report.diagnostics[0].message.starts_with("warning:"),
+        "{}",
+        report.diagnostics[0].message
+    );
+}
+
+#[test]
+fn unwrap_is_reported_in_production_code_but_not_in_test_code() {
+    let fixture = fixture(concat!(
+        "pub fn production() -> u8 { Some(1).unwrap() }\n",
+        "#[cfg(test)]\n",
+        "mod tests {\n",
+        "    fn helper() -> u8 { Some(2).unwrap() }\n",
+        "    #[test]\n",
+        "    fn unit() { let _ = Some(3).unwrap() + helper(); }\n",
+        "}\n",
+    ));
+    std::fs::create_dir(fixture.path().join("tests")).unwrap();
+    std::fs::write(
+        fixture.path().join("tests/integration.rs"),
+        "fn helper() -> u8 { Some(4).unwrap() }\n#[test]\nfn integration() { let _ = Some(5).unwrap() + helper(); }\n",
+    )
+    .unwrap();
+    let workspace = Workspace::load(fixture.path()).unwrap();
+    let report = super::check(
+        fixture.path(),
+        &[],
+        &workspace,
+        &AnalysisSettings::default(),
+        &only(&[StyleRule::Unwrap]),
+    );
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    let locations: Vec<_> = report
+        .diagnostics
+        .iter()
+        .map(|diagnostic| (diagnostic.path.ends_with("src/lib.rs"), diagnostic.line))
+        .collect();
+    assert_eq!(locations, [(true, 1)], "{:?}", report.diagnostics);
 }

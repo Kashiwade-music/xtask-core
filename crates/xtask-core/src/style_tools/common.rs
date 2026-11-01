@@ -36,6 +36,20 @@ pub(super) fn cargo(policy: &StylePolicy, root: &Path) -> Command {
     command
 }
 
+/// Run the formatter that `cargo fmt` would select for the same policy.
+pub(super) fn rustfmt(policy: &StylePolicy, root: &Path) -> Command {
+    let mut command = match &policy.toolchain {
+        Some(toolchain) => {
+            let mut command = Command::new("rustfmt");
+            command.arg(format!("+{toolchain}"));
+            command
+        }
+        None => Command::new(std::env::var_os("RUSTFMT").unwrap_or_else(|| "rustfmt".into())),
+    };
+    command.current_dir(root);
+    command
+}
+
 pub(super) fn feature_args(command: &mut Command, settings: &AnalysisSettings) {
     if let Some(target) = &settings.target {
         command.args(["--target", target]);

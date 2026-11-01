@@ -1,4 +1,4 @@
-//! Role: 親workspaceへの21規則の適用、例外と非破壊の実ツール連携を検証する。
+//! Role: 親workspaceへの20規則の適用、例外と非破壊の実ツール連携を検証する。
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -6,7 +6,7 @@ use std::process::Command;
 
 use xtask_core::{Config, Report, StyleRule, run};
 
-const ALL_RULES: &str = "[style]\nenabled = true\nextra_rules = ['glob-imports', 'non-leaf-implementation', 'rustfmt-skip', 'non-exhaustive', 'catch-unwind', 'poison-access', 'extension-trait-names', 'options-default']\napi_packages = ['fixture']\nextension_traits = ['fixture::api::ValueExt']\noptions_structs = ['fixture::api::Options']\n";
+const ALL_RULES: &str = "[style]\nenabled = true\nextra_rules = ['glob-imports', 'non-leaf-implementation', 'rustfmt-skip', 'non-exhaustive', 'catch-unwind', 'poison-access', 'options-default']\napi_packages = ['fixture']\noptions_structs = ['fixture::api::Options']\n";
 
 fn fixture(files: &[(&str, &str)], policy: &str) -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
@@ -73,7 +73,7 @@ fn check_unchanged(root: &Path) -> Report {
 }
 
 #[test]
-fn all_twenty_one_rules_accept_a_documented_public_api() {
+fn all_twenty_rules_accept_a_documented_public_api() {
     let directory = fixture(
         &[
             (
@@ -138,13 +138,12 @@ impl ValueExt for Values {
         report
             .notes
             .iter()
-            .any(|note| note.contains("checked 21 style rules"))
+            .any(|note| note.contains("checked 20 style rules"))
     );
 }
 
 #[test]
 fn tool_and_source_violations_are_aggregated_without_changing_inputs() {
-    let policy = ALL_RULES.replace("fixture::api::ValueExt", "fixture::api::ValueAdd");
     let directory = fixture(
         &[
             (
@@ -171,13 +170,12 @@ pub fn checked(value: Option<u8>) -> u8 {
 pub unsafe fn raw(pointer: *const u8) -> u8 { unsafe { *pointer } }
 pub fn catch() { let _ = std::panic::catch_unwind(|| {}); }
 pub fn poisoned(error: std::sync::PoisonError<u8>) -> u8 { error.into_inner() }
-pub trait ValueAdd { fn value(&self) -> u8; }
 #[rustfmt::skip]
 pub fn skipped( ) { }
 "#,
             ),
         ],
-        &policy,
+        ALL_RULES,
     );
     let report = check_unchanged(directory.path());
     let found: BTreeSet<_> = report
@@ -302,11 +300,6 @@ fn wildcard_exceptions_cannot_suppress_invalid_rule_targets() {
             "absent-package",
         ),
         (
-            "extension-trait-names",
-            "extension_traits=['fixture::api::MissingTrait']",
-            "MissingTrait",
-        ),
-        (
             "options-default",
             "options_structs=['fixture::api::MissingOptions']",
             "MissingOptions",
@@ -353,14 +346,11 @@ fn wildcard_exceptions_cannot_suppress_invalid_rule_targets() {
 }
 
 #[test]
-fn exact_item_exceptions_work_for_extension_and_options_selectors() {
+fn exact_item_exceptions_work_for_options_selectors() {
     let policy = optional_policy(
-        "'extension-trait-names','options-default'",
-        "extension_traits=['fixture::api::WrongName']\noptions_structs=['fixture::api::Options']",
-        concat!(
-            "[[style.exceptions]]\nrule='extension-trait-names'\npath='src/api.rs'\nitem='api::WrongName'\nreason='Preserve the existing public trait name'\n",
-            "[[style.exceptions]]\nrule='options-default'\npath='src/lib.rs'\nitem='api::Options'\nreason='This fixture requires an explicit option value'\n"
-        ),
+        "'options-default'",
+        "options_structs=['fixture::api::Options']",
+        "[[style.exceptions]]\nrule='options-default'\npath='src/lib.rs'\nitem='api::Options'\nreason='This fixture requires an explicit option value'\n",
     );
     let directory = fixture(
         &[
@@ -370,7 +360,7 @@ fn exact_item_exceptions_work_for_extension_and_options_selectors() {
             ),
             (
                 "src/api.rs",
-                "//! Role: Verify exact exceptions for selected items.\npub trait WrongName {}\npub struct Options;\n",
+                "//! Role: Verify exact exceptions for selected items.\npub struct Options;\n",
             ),
         ],
         &policy,
@@ -378,16 +368,14 @@ fn exact_item_exceptions_work_for_extension_and_options_selectors() {
     let report = check_unchanged(directory.path());
     assert!(report.is_success(), "{:#?}", report.errors);
     assert!(report.style_diagnostics.is_empty());
-    for reason in [
-        "Preserve the existing public trait name",
-        "This fixture requires an explicit option value",
-    ] {
-        assert!(
-            report.notes.iter().any(|note| note.contains(reason)),
-            "exception not applied: {reason}: {:#?}",
-            report.notes
-        );
-    }
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|note| note.contains("This fixture requires an explicit option value")),
+        "exception not applied: {:#?}",
+        report.notes
+    );
     assert!(
         !report
             .notes

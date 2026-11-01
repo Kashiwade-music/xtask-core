@@ -1,6 +1,6 @@
 //! Role: 構文・外部ツールのスタイル検査を統合し、理由付き例外と診断を管理する。
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf, Prefix};
 
 use syn::spanned::Spanned;
 use xtask_workspace::{AnalysisSettings, StylePolicy, StyleRule};
@@ -71,14 +71,14 @@ pub(crate) fn check(
     }
     let files: Vec<_> = files.into_iter().collect();
     let mut diagnostics = Vec::new();
-    match crate::style_source::check(&root, &analysis.workspace, &files, policy) {
+    match crate::style_source::check(&files, policy) {
         Ok(found) => diagnostics.extend(found),
         Err(error) => analysis
             .report
             .errors
             .push(format!("style source check: {error}")),
     }
-    let tools = crate::style_tools::check(&root, &analysis.workspace, settings, policy);
+    let tools = crate::style_tools::check(&root, &files, &analysis.workspace, settings, policy);
     diagnostics.extend(tools.diagnostics);
     analysis.report.errors.extend(tools.errors);
     analysis.report.notes.extend(tools.notes);
@@ -98,6 +98,7 @@ pub(crate) fn check(
             .unwrap_or(&diagnostic.path)
             .to_string_lossy()
             .replace('\\', "/");
+        diagnostic.path = without_verbatim_prefix(&diagnostic.path);
         // Explicit selectors include the package, while policy exception items
         // consistently name the item within its module hierarchy.
         if let Some(item) = &diagnostic.item {
@@ -164,6 +165,20 @@ pub(crate) fn check(
         "checked {} style rules; source checks include inactive source syntax, compiler checks cover the configured Cargo target/features",
         policy.rules().len()
     ));
+}
+
+/// Canonical Windows paths use the verbatim `\\?\C:\` form, which reports
+/// show as the ordinary `C:\` path. Other paths are returned unchanged.
+fn without_verbatim_prefix(path: &Path) -> PathBuf {
+    let mut components = path.components();
+    if let Some(Component::Prefix(prefix)) = components.next() {
+        if let Prefix::VerbatimDisk(disk) = prefix.kind() {
+            let mut simplified = PathBuf::from(format!("{}:", char::from(disk)));
+            simplified.push(components.as_path());
+            return simplified;
+        }
+    }
+    path.to_path_buf()
 }
 
 struct SourceItem {
@@ -344,6 +359,17 @@ mod tests {
                 .any(|item| item.name == "api::Options::build" && item.start == 4)
         );
         assert!(items.iter().any(|item| item.name == "api::Ext::run"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reported_paths_drop_the_verbatim_disk_prefix() {
+        assert_eq!(
+            without_verbatim_prefix(Path::new(r"\\?\C:\repo\src\lib.rs")),
+            Path::new(r"C:\repo\src\lib.rs")
+        );
+        let network = Path::new(r"\\?\UNC\server\share\lib.rs");
+        assert_eq!(without_verbatim_prefix(network), network);
     }
 
     #[test]

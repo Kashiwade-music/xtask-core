@@ -106,7 +106,11 @@ pub(super) fn lints(policy: &StylePolicy, api: bool) -> BTreeMap<&'static str, S
         (CheckedUnwrap, &["clippy::unnecessary_unwrap"][..]),
         (
             FlexibleReferences,
-            &["clippy::borrowed_box", "clippy::ptr_arg"][..],
+            &[
+                "clippy::borrowed_box",
+                "clippy::ptr_arg",
+                "clippy::ref_option",
+            ][..],
         ),
         (DerivableImpls, &["clippy::derivable_impls"][..]),
         (NewDefault, &["clippy::new_without_default"][..]),
@@ -152,10 +156,12 @@ pub(super) fn config_table(
     mut table: toml::Table,
     policy: &StylePolicy,
 ) -> Result<toml::Table, String> {
-    // These policy rules deliberately include tests and private unsafe APIs.
+    // Test code may unwrap: `#[test]` functions and `#[cfg(test)]` modules are
+    // exempted here, and integration test targets when parsing the output.
     if policy.is_enabled(StyleRule::Unwrap) {
-        table.insert("allow-unwrap-in-tests".into(), false.into());
+        table.insert("allow-unwrap-in-tests".into(), true.into());
     }
+    // Unsafe API documentation deliberately includes private items.
     if policy.is_enabled(StyleRule::SafetyDocs) {
         table.insert("check-private-items".into(), true.into());
     }
@@ -254,17 +260,28 @@ fn parse_selected_output(
                 .as_str()
                 .is_some_and(|id| packages.contains(id))
         });
+        // Integration tests are test code throughout, including helpers that
+        // Clippy's `allow-unwrap-in-tests` does not recognize.
+        let test_target = value["target"]["kind"]
+            .as_array()
+            .is_some_and(|kinds| kinds.iter().any(|kind| kind == "test"));
+        if rule == Some(StyleRule::Unwrap) && test_target {
+            continue;
+        }
         if let Some(rule) = rule.filter(|_| selected_package) {
             if let Some(span) = message["spans"]
                 .as_array()
                 .and_then(|spans| spans.iter().find(|span| span["is_primary"] == true))
             {
+                // Selected lints are forced to warnings, but xtask reports them as
+                // style errors, so the compiler's level prefix would be misleading.
+                let text = text.trim();
                 report.diagnostics.push(StyleDiagnostic {
                     rule,
                     path: root.join(span["file_name"].as_str().unwrap_or("Cargo.toml")),
                     line: span["line_start"].as_u64().unwrap_or(1) as usize,
                     column: span["column_start"].as_u64().unwrap_or(1) as usize,
-                    message: text.trim().to_owned(),
+                    message: text.strip_prefix("warning: ").unwrap_or(text).to_owned(),
                     item: None,
                 });
             } else {

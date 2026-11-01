@@ -8,7 +8,7 @@ Rust workspace向けの共通検査・アーキテクチャ可視化ツール。
 - **依存制限**：`visible_to` によるcrate間の依存許可リスト
 - **役割宣言**：全crate root・moduleに `Role:` を必須化
 - **循環検出**：module間の参照循環を禁止
-- **Rust style検査**：Google Rust Style Guideから採用した21項目を、構文解析・rustfmt・Clippyで検査
+- **Rust style検査**：Google Rust Style Guideから採用した20項目を、構文解析・rustfmt・Clippyで検査
 - **SVG出力**：crate依存図、module階層・参照図を生成
 - **対話型HTML**：無限キャンバスで依存関係を強調し、crateからmodule図へ移動
 
@@ -85,30 +85,29 @@ style検査にはrustfmtとClippyが必要。使用するツールチェーン�
 
 | # | rule ID | 検査内容・範囲 | 実装 |
 | --- | --- | --- | --- |
-| 1 | `format` | rustfmt設定への一致。`max_width = 100` は全物理行が100桁以下である保証ではない | rustfmt |
-| 2 | `hex-literals` | 数値の16進リテラルを小文字で記述。文字列・コメントの内容は対象外 | 構文解析 |
+| 1 | `format` | 親リポジトリのrustfmt設定（`cargo fmt`）への一致と、有効な `max_width` が100以下であること。全物理行が100桁以下である保証ではない | rustfmt |
+| 2 | `hex-literals` | 数値の16進リテラルを小文字で記述。macro呼出し内のリテラルも対象。文字列・コメントの内容は対象外 | 構文解析 |
 | 3 | `import-granularity` | 1つの `use` の波括弧内で異なるmoduleからimportしない。複数の `use` の統合は要求しない | 構文解析 |
 | 4 | `unstable-features` | 有効な `#![feature(...)]` を禁止 | rustc `unstable_features` |
-| 5 | `unwrap` | `Option` / `Result` の `unwrap` / `unwrap_err` を検出 | Clippy `unwrap_used` |
+| 5 | `unwrap` | `Option` / `Result` の `unwrap` / `unwrap_err` を検出。テストコード（`#[test]` 関数、`#[cfg(test)]` module、`tests/` の統合テスト）は対象外 | Clippy `unwrap_used` |
 | 6 | `checked-unwrap` | 値の確認後のunwrapを、Clippyが認識するパターンで検出 | Clippy `unnecessary_unwrap` |
-| 7 | `flexible-references` | 不要な `&Box<T>`、`&Vec<T>`、`&String` を検出 | Clippy `borrowed_box` / `ptr_arg` |
+| 7 | `flexible-references` | 不要な `&Box<T>`、`&Vec<T>`、`&String`、`&Option<T>` を検出 | Clippy `borrowed_box` / `ptr_arg` / `ref_option` |
 | 8 | `derivable-impls` | deriveで置換できる手書き `Default` など、Clippyの対応範囲を検出 | Clippy `derivable_impls` |
 | 9 | `new-default` | 対象となる引数なし公開コンストラクタに `Default` を要求 | Clippy `new_without_default` |
 | 10 | `len-is-empty` | 公開 `len()` に対応する `is_empty()` を要求 | Clippy `len_without_is_empty` |
 | 11 | `missing-docs` | 公開APIの文書の欠落を検出。自明なAPIなどで省略する場合は例外を指定 | rustc `missing_docs` |
 | 12 | `safety-docs` | unsafe APIのSafety節の欠落を検出 | Clippy `missing_safety_doc` |
 | 13 | `safety-comments` | unsafe block / implの安全性コメントの欠落を検出 | Clippy `undocumented_unsafe_blocks` |
-| 14 | `glob-imports` | glob importを制限。inline moduleの `super::*`、非leaf moduleからの子moduleの公開再exportは許可 | 構文解析 |
-| 15 | `non-leaf-implementation` | 非leaf moduleの実装を制限。test / FFI moduleの扱いに注意し、結合コードには例外を指定 | 構文解析 |
-| 16 | `rustfmt-skip` | `#[rustfmt::skip]` を制限。生成コード・手動整列には例外を指定 | 構文解析 |
+| 14 | `glob-imports` | glob importを制限。inline moduleの `super::*`、関数本体内の `use Enum::*`（最終segmentがUpperCamelCase）、非leaf moduleからの子moduleの公開再exportは許可 | 構文解析 |
+| 15 | `non-leaf-implementation` | 非leaf moduleの実装を制限。module宣言・`use`・test module（`test` / `tests` / `#[cfg(test)]`）・`#[cxx::bridge]` は許可し、結合コードには例外を指定 | 構文解析 |
+| 16 | `rustfmt-skip` | `#[rustfmt::skip]`（`rustfmt::skip::macros(...)` などを含む）を制限。生成コード・手動整列には例外を指定 | 構文解析 |
 | 17 | `non-exhaustive` | 指定packageの公開enum・全fieldが公開されたstructに `#[non_exhaustive]` を要求 | Clippy `exhaustive_enums` / `exhaustive_structs` |
 | 18 | `catch-unwind` | `std::panic::catch_unwind` を制限。防御目的で許可する箇所には例外を指定 | Clippy `disallowed_methods` |
 | 19 | `poison-access` | `std::sync::PoisonError` の `into_inner` / `get_ref` / `get_mut` を制限 | Clippy `disallowed_methods` |
-| 20 | `extension-trait-names` | 指定したextension traitの名前に `Ext` suffixを要求 | 構文解析 |
-| 21 | `options-default` | 指定した公開options型が `Default` を実装することを確認 | Rustコンパイル検査 |
+| 20 | `options-default` | 指定した公開options型が `Default` を実装することを確認 | Rustコンパイル検査 |
 
-`enabled = true` では1〜13を検査する。14〜21は適用対象や裁量例外の設定が必要なため、`extra_rules` で追加する。
-例えば、全21項目を使用するpolicyは次のように記述する。`my-library` と型のpathは実際のpackage・定義に置き換える。
+`enabled = true` では1〜13を検査する。14〜20は適用対象や裁量例外の設定が必要なため、`extra_rules` で追加する。
+例えば、全20項目を使用するpolicyは次のように記述する。`my-library` と型のpathは実際のpackage・定義に置き換える。
 
 ```toml
 [style]
@@ -120,11 +119,9 @@ extra_rules = [
     "non-exhaustive",
     "catch-unwind",
     "poison-access",
-    "extension-trait-names",
     "options-default",
 ]
 api_packages = ["my-library"]
-extension_traits = ["my-library::foreign_type::ForeignTypeExt"]
 options_structs = ["my-library::options::Options"]
 # 使用するツールチェーンを固定する場合:
 # toolchain = "1.85.0"
@@ -140,7 +137,7 @@ path = "crates/my-library/src/generated/*"
 reason = "生成元の配置を維持する"
 ```
 
-`api_packages` はpackage名で指定する。`extension_traits` と `options_structs` は `package::module::Item` の完全一致で指定し、存在しない対象はエラーになる。
+`api_packages` はpackage名で指定する。`options_structs` は `package::module::Item` の完全一致で指定し、存在しない対象はエラーになる。
 `options-default` は別crateから参照できる公開library型が対象で、型引数が必要なgeneric型は指定できない。
 外部の一時crateから `Default` 境界をコンパイル検査するため、指定pathは公開APIのpathとする。
 検査用lockfileは親リポジトリのlockfileを一時領域へコピーし、その一時領域でのみoffline解決する。親のmanifest・lockfileは変更しない。
@@ -151,11 +148,13 @@ reason = "生成元の配置を維持する"
 無効なcfg配下の外部moduleなど、解析結果からmodule pathを復元できないファイルでは、itemの限定を省略してpath単位の例外を指定する。
 基本ルールをプロジェクト全体で無効にする場合は、例えば `disabled_rules = ["missing-docs"]` を `[style]` に指定する。
 
-構文検査は探索したRustソースを対象とし、無効なcfg内のコードも検査する。macroのtokenや生成コードは展開しない。
+構文検査は探索したRustソースを対象とし、無効なcfg内のコードも検査する。macroのtokenはRust構文として解釈せず（16進リテラルのみ検査する）、生成コードは展開しない。
+`format` はプロジェクトのrustfmt設定をそのまま使う。`max_width` を上書きしないため、`cargo fmt` の結果は常に検査を通過する。有効な `max_width` が100を超える場合は、その設定ファイルを違反として報告する。
+`flexible-references` の `ref_option` はClippy 1.83以降で利用できる。
 Clippyは `[analysis]` のtarget・feature・cfgに従って、workspaceの全targetを検査する。全feature・全targetの組合せを自動的に網羅するものではない。
 `analysis.cfg` とCargo設定の `rustflags` を併用する場合は、既存のflagsを含む `RUSTFLAGS` または `CARGO_ENCODED_RUSTFLAGS` を明示する。後者は引数をU+001Fで区切る。既存のCargo flagsを暗黙に上書きする構成は実行エラーにする。
 `poison-access` はMutexに限定せず、RwLockなどから得た同じ `PoisonError` APIも対象となる。
-Clippyの既存設定は引き継ぎ、今回の禁止APIを加えた一時設定で実行する。診断はrule IDと位置を含めて既存の検査結果へ集約し、違反があれば非ゼロ終了する。
+Clippyの既存設定は引き継ぎ、今回の禁止APIを加えた一時設定で実行する。ただし規則の対象範囲を固定するため、`allow-unwrap-in-tests = true`、`check-private-items = true`、`avoid-breaking-exported-api = false` は上書きする。診断はrule IDと位置を含めて既存の検査結果へ集約し、違反があれば非ゼロ終了する。
 Rust APIでは `Report.style_diagnostics` からrule ID・ファイル・行・列・対象itemを取得できる。同じ違反はCLI互換のため `Report.errors` にも含まれる。
 
 ## 役割宣言
