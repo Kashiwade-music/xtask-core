@@ -243,6 +243,36 @@ fn scoped_exceptions_preserve_sibling_and_other_rule_violations() {
 }
 
 #[test]
+fn exception_items_name_the_module_path_of_a_file_module() {
+    let policy = concat!(
+        "[style]\nenabled=true\n",
+        "disabled_rules=['format','import-granularity','unstable-features','checked-unwrap','flexible-references','derivable-impls','new-default','len-is-empty','missing-docs','safety-docs','safety-comments']\n",
+        "[[style.exceptions]]\nrule='unwrap'\npath='src/inner.rs'\nitem='inner::reviewed'\nreason='Fixture names an item of a file module by its module path'\n"
+    );
+    let directory = fixture(
+        &[
+            (
+                "src/lib.rs",
+                "//! Role: Declare one file module.\nmod inner;\n",
+            ),
+            (
+                "src/inner.rs",
+                "//! Role: Hold one reviewed and one unreviewed unwrap.\npub(crate) fn reviewed(value: Option<u8>) -> u8 { value.unwrap() }\npub(crate) fn unreviewed(value: Option<u8>) -> u8 { value.unwrap() }\n",
+            ),
+        ],
+        policy,
+    );
+    let report = check_unchanged(directory.path());
+    let unwraps: Vec<_> = report
+        .style_diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.rule == StyleRule::Unwrap)
+        .collect();
+    assert_eq!(unwraps.len(), 1, "{:#?}", report.errors);
+    assert_eq!(unwraps[0].item.as_deref(), Some("inner::unreviewed"));
+}
+
+#[test]
 fn unstable_features_are_rejected_and_disabled_style_never_uses_its_toolchain() {
     let directory = fixture(
         &[(

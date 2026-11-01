@@ -211,7 +211,14 @@ fn source_items(analysis: &Analysis, file: &Path) -> Vec<SourceItem> {
             .graph
             .modules
             .iter()
-            .filter(|module| std::fs::canonicalize(&module.file).ok().as_deref() == Some(file))
+            // `file` has lost its Windows verbatim prefix (see `check`); compare like with like.
+            .filter(|module| {
+                std::fs::canonicalize(&module.file)
+                    .ok()
+                    .map(|canonical| without_verbatim_prefix(&canonical))
+                    .as_deref()
+                    == Some(file)
+            })
             .min_by_key(|module| module.id.len())
         {
             bases.insert(
