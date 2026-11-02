@@ -15,6 +15,7 @@ mod model;
 mod resolve;
 mod role;
 mod symbols;
+mod thread_local_items;
 mod visitor;
 
 pub use model::{AnalysisOptions, DEFAULT_MAX_ROLE_CHARS, Module, ModuleGraph, Reference};

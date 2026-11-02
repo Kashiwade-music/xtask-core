@@ -98,7 +98,17 @@ pub(crate) fn analyze(
         }
     }
     // Finite monotone fixed point handles chained reexports and glob imports.
-    for external_fallback in [false, true] {
+    for (external_fallback, generated_values) in [(false, false), (true, false), (true, true)] {
+        // Macro providers must reach their fixed point before generated values exist.
+        if generated_values {
+            crate::thread_local_items::register(
+                &sources,
+                &mut tables,
+                &textual,
+                &mut strong,
+                options,
+            )?;
+        }
         loop {
             let previous = tables.clone();
             for (owner, imports) in &uses {
