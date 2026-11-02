@@ -317,6 +317,14 @@ mod consumer {
     );
     assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
     assert!(result.diagnostics[0].contains("crate::missing"));
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.ends_with("::VALUE")),
+        "{:?}",
+        result.diagnostics
+    );
 }
 
 #[test]
@@ -413,4 +421,230 @@ mod consumer {{
             );
         }
     }
+}
+
+#[test]
+fn standard_library_globs_keep_standard_thread_local_statics() {
+    for glob in ["use std::cell::*;", "use std::sync::*;"] {
+        let source = format!(
+            r#"
+//! Role: Test root.
+mod declarations {{
+    //! Role: Standard glob next to thread-local declarations.
+    {glob}
+    thread_local! {{ pub static BARE: u8 = 1; }}
+    std::thread_local! {{ pub static QUALIFIED: u8 = 2; }}
+}}
+mod consumer {{
+    //! Role: Valid generated static imports.
+    use crate::declarations::{{BARE, QUALIFIED}};
+}}
+"#
+        );
+        let result = graph(&source);
+        assert!(
+            result.diagnostics.is_empty(),
+            "{glob}: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result
+                .edges
+                .iter()
+                .any(|edge| edge.from == "crate::consumer" && edge.to == "crate::declarations")
+        );
+    }
+}
+
+#[test]
+fn external_crate_globs_do_not_create_bare_statics() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod declarations {
+    //! Role: External glob with an unknown macro provider.
+    use external::*;
+    thread_local! { pub static FAKE: u8 = 1; }
+}
+mod consumer {
+    //! Role: Invalid generated static import.
+    use crate::declarations::FAKE;
+}
+"#,
+    );
+    assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+    assert!(result.diagnostics[0].ends_with("::FAKE"));
+}
+
+#[test]
+fn explicit_standard_import_makes_bare_thread_local_standard() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod declarations {
+    //! Role: Explicit standard macro import.
+    use std::thread_local;
+    thread_local! { pub static VALUE: u8 = 1; }
+}
+mod consumer {
+    //! Role: Valid generated static import.
+    use crate::declarations::VALUE;
+}
+"#,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn user_defined_thread_local_macros_are_not_standard() {
+    // Default options leave thread_local untrusted, so a user macro does not make the module opaque.
+    // Control: without a user macro the same declaration is indexed under the same options.
+    let directory = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let root = directory.path().join("lib.rs");
+    fs::write(
+        &root,
+        r#"
+//! Role: Test root.
+mod declarations {
+    //! Role: The standard macro.
+    thread_local! { pub static FAKE: u8 = 1; }
+}
+mod consumer {
+    //! Role: Valid generated static import.
+    use crate::declarations::FAKE;
+}
+"#,
+    )
+    .unwrap();
+    let control = analyze(&root, &AnalysisOptions::default()).unwrap();
+    assert!(
+        control
+            .diagnostics
+            .iter()
+            .all(|diagnostic| !diagnostic.ends_with("::FAKE")),
+        "{:?}",
+        control.diagnostics
+    );
+    for (name, source) in [
+        (
+            "same module",
+            r#"
+//! Role: Test root.
+mod declarations {
+    //! Role: A user macro with the standard name.
+    macro_rules! thread_local { ($($t:tt)*) => {}; }
+    thread_local! { pub static FAKE: u8 = 1; }
+}
+mod consumer {
+    //! Role: Invalid generated static import.
+    use crate::declarations::FAKE;
+}
+"#,
+        ),
+        (
+            "macro_use child",
+            r#"
+//! Role: Test root.
+#[macro_use]
+mod macros {
+    //! Role: A user macro with the standard name.
+    macro_rules! thread_local { ($($t:tt)*) => {}; }
+}
+mod declarations {
+    //! Role: Invocation of the macro_use user macro.
+    thread_local! { pub static FAKE: u8 = 1; }
+}
+mod consumer {
+    //! Role: Invalid generated static import.
+    use crate::declarations::FAKE;
+}
+"#,
+        ),
+        (
+            "macro_export import",
+            r#"
+//! Role: Test root.
+mod macros {
+    //! Role: An exported user macro with the standard name.
+    #[macro_export]
+    macro_rules! thread_local { ($($t:tt)*) => {}; }
+}
+mod declarations {
+    //! Role: Invocation of the imported user macro.
+    use crate::thread_local;
+    thread_local! { pub static FAKE: u8 = 1; }
+}
+mod consumer {
+    //! Role: Invalid generated static import.
+    use crate::declarations::FAKE;
+}
+"#,
+        ),
+    ] {
+        let directory = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let root = directory.path().join("lib.rs");
+        fs::write(&root, source).unwrap();
+        let result = analyze(&root, &AnalysisOptions::default()).unwrap();
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.ends_with("::FAKE")),
+            "{name}: {:?}",
+            result.diagnostics
+        );
+    }
+}
+
+#[test]
+fn inline_nested_module_statics_import_by_path() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod a {
+    //! Role: Outer inline module.
+    pub mod b {
+        //! Role: Inner inline module.
+        thread_local! { pub(crate) static Y: u8 = 1; }
+    }
+}
+mod consumer {
+    //! Role: Valid generated static import.
+    use crate::a::b::Y;
+}
+"#,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .edges
+            .iter()
+            .any(|edge| edge.from == "crate::consumer" && edge.to == "crate::a::b")
+    );
+}
+
+#[test]
+fn invalid_thread_local_body_is_an_error() {
+    let directory = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let root = directory.path().join("lib.rs");
+    fs::write(
+        &root,
+        r#"
+//! Role: Test root.
+mod declarations {
+    //! Role: Malformed standard declaration.
+    thread_local! { pub static BROKEN u8 = 1; }
+}
+"#,
+    )
+    .unwrap();
+    let mut options = AnalysisOptions::default();
+    options.trusted_macros.insert("thread_local".into());
+    let error = analyze(&root, &options).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("invalid thread_local declaration"),
+        "{error}"
+    );
 }

@@ -46,6 +46,23 @@ fn imports_unknown_thread_local(
     Ok(false)
 }
 
+fn is_standard_crate(name: &str) -> bool {
+    name == "std" || name == "core" || name == "alloc"
+}
+
+/// Reports whether a module glob-imports an external crate other than the standard ones.
+fn has_unknown_external_glob(tables: &Tables, module: &str) -> bool {
+    tables
+        .get(module)
+        .and_then(|table| table.get("$external_globs"))
+        .is_some_and(|targets| {
+            targets.iter().any(|target| {
+                matches!(target, Target::External(path)
+                if !path.first().is_some_and(|first| is_standard_crate(first)))
+            })
+        })
+}
+
 fn uncertain_binding(
     source: &Source,
     name: &str,
@@ -74,6 +91,21 @@ fn uncertain_binding(
             }
             let targets = resolve_path(&source.module.id, &binding.path, tables, None, None);
             if targets.is_empty() {
+                if binding.glob
+                    && binding.path.first().is_some_and(|first| {
+                        is_standard_crate(first)
+                            && resolve_path(
+                                &source.module.id,
+                                std::slice::from_ref(first),
+                                tables,
+                                None,
+                                Some(Namespace::Type),
+                            )
+                            .is_empty()
+                    })
+                {
+                    continue;
+                }
                 return true;
             }
             if binding.glob && targets.iter().any(|target| {
@@ -151,9 +183,7 @@ pub(crate) fn register(
                 .iter()
                 .map(|part| part.ident.to_string())
                 .collect::<Vec<_>>();
-            let unknown_glob = tables
-                .get(&source.module.id)
-                .is_some_and(|table| table.contains_key("$external_globs"));
+            let unknown_glob = has_unknown_external_glob(tables, &source.module.id);
             let bare = item.mac.path.is_ident("thread_local")
                 && !unknown_glob
                 && !unknown_macro_use
