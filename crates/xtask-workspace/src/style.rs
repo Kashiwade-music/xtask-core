@@ -233,23 +233,8 @@ impl StylePolicy {
         if self.api_packages.iter().collect::<BTreeSet<_>>().len() != self.api_packages.len() {
             return Err("style.api_packages contains duplicate package names".into());
         }
-        for (rule, populated, field) in [
-            (
-                StyleRule::NonExhaustive,
-                !self.api_packages.is_empty(),
-                "api_packages",
-            ),
-            (
-                StyleRule::OptionsDefault,
-                !self.options_structs.is_empty(),
-                "options_structs",
-            ),
-        ] {
-            if self.is_enabled(rule) && !populated {
-                return Err(format!(
-                    "style rule `{rule}` requires nonempty style.{field}"
-                ));
-            }
+        if self.is_enabled(StyleRule::NonExhaustive) && self.api_packages.is_empty() {
+            return Err("style rule `non-exhaustive` requires nonempty style.api_packages".into());
         }
         Ok(())
     }
@@ -317,7 +302,6 @@ mod tests {
             "extra_rules=['glob-imports']\ndisabled_rules=['glob-imports']",
             "extra_rules=['non-exhaustive']",
             "extra_rules=['extension-trait-names']",
-            "extra_rules=['options-default']",
             "extension_traits=['my-api::ReadExt']",
             "options_structs=['Options']",
             "options_structs=['api::bad::']",
@@ -350,6 +334,16 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn options_default_can_be_enabled_before_options_types_exist() {
+        let policy = Policy::from_toml(
+            "[style]\nenabled=true\nextra_rules=['options-default']\noptions_structs=[]\n",
+        )
+        .unwrap();
+        assert!(policy.style.is_enabled(StyleRule::OptionsDefault));
+        assert!(policy.style.options_structs.is_empty());
     }
 
     #[test]
