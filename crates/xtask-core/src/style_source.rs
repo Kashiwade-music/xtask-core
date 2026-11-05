@@ -199,11 +199,16 @@ impl<'ast> Visit<'ast> for Checker<'ast, '_> {
                     .module_items
                     .iter()
                     .any(|item| matches!(item, Item::Mod(module) if module.ident == child_path[0]));
-            if !inline_super && !block_enum && !child_reexport {
+            let allowed = self
+                .policy
+                .allowed_globs
+                .iter()
+                .any(|allowed| *allowed == path.join("::"));
+            if !inline_super && !block_enum && !child_reexport && !allowed {
                 self.emit(
                     StyleRule::GlobImports,
                     span,
-                    "glob import requires an explicit exception outside inline super imports, enum variants in function bodies and non-leaf child re-exports",
+                    "glob import requires an explicit exception outside inline super imports, enum variants in function bodies, non-leaf child re-exports and allowed globs",
                 );
             }
         }

@@ -107,6 +107,7 @@ cfg = ["custom_cfg"]
 trusted_attributes = ["serde"]
 trusted_derives = ["Deserialize", "Serialize"]
 trusted_macros = ["proptest", "prop_assert"]
+trusted_globs = ["framework::prelude"]
 
 [style]
 enabled = true
@@ -157,6 +158,9 @@ mod config {
 `trusted_attributes`、`trusted_derives`、`trusted_macros` には、module構造に影響しないとみなす項目を指定する。
 trusted指定したfunction-like macroの呼出し（呼出し箇所に書かれたpathで完全一致）は展開しないため、その中の参照は解析されない。
 
+他crateからのglob importはどのmacro・derive・attributeでも提供しうるため、それを含むmoduleでは `vec!` や `#[derive(Clone)]` の提供元を特定できない。
+`trusted_globs` には、macro・derive・attributeを提供しないと分かっているglob import（frameworkの型とtraitのpreludeなど）を `crate::module` のpathで指定する。
+
 ## 出力
 
 ```text
@@ -201,7 +205,7 @@ architecture/
 | 11 | `missing-docs` | 公開itemの文書化 | rustc `missing_docs` |
 | 12 | `safety-docs` | unsafe関数の `# Safety` 節 | Clippy `missing_safety_doc` |
 | 13 | `safety-comments` | unsafe block・implの `SAFETY:` コメント | Clippy `undocumented_unsafe_blocks` |
-| 14 | `glob-imports` | glob importの禁止。inline moduleの `super::*`、関数本体内の `use Enum::*`、非leaf moduleの `pub use child::*` は許可 | 構文解析 |
+| 14 | `glob-imports` | glob importの禁止。inline moduleの `super::*`、関数本体内の `use Enum::*`、非leaf moduleの `pub use child::*`、`allowed_globs` のpathは許可 | 構文解析 |
 | 15 | `non-leaf-implementation` | 子moduleを持つmoduleは宣言・import・再exportのみ。test moduleと `#[cxx::bridge]` は許可 | 構文解析 |
 | 16 | `rustfmt-skip` | あらゆる形の `#[rustfmt::skip]` の禁止 | 構文解析 |
 | 17 | `non-exhaustive` | `api_packages` の公開enumと全field公開structに `#[non_exhaustive]` | Clippy `exhaustive_enums`、`exhaustive_structs` |
@@ -224,6 +228,7 @@ extra_rules = [
 disabled_rules = ["missing-docs"]
 api_packages = ["my-library"]
 options_structs = ["my-library::options::Options"]
+allowed_globs = ["framework::prelude"]
 toolchain = "1.85.0"      # 任意。rustupのツールチェーン名
 
 [[style.exceptions]]

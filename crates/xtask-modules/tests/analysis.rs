@@ -988,6 +988,20 @@ fn unknown_external_globs_require_known_macro_providers() {
 }
 
 #[test]
+fn trusted_external_globs_keep_std_macro_providers() {
+    let mut options = AnalysisOptions::default();
+    options.trusted_globs.insert("framework::prelude".into());
+    let result = graph(
+        &[(
+            "lib.rs",
+            "use framework::prelude::*; #[derive(Clone)] struct S; fn f(){assert!(true);}",
+        )],
+        options,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
 fn named_struct_patterns_use_the_type_namespace() {
     let result = graph(
         &[(

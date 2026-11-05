@@ -68,7 +68,8 @@ impl References<'_> {
         let mut symbols = self.tables.get(self.module).cloned().unwrap_or_default();
         symbols.extend(self.symbols());
         let unknown_glob = symbols.get("$external_globs").is_some_and(|targets| targets.iter().any(|target|
-            matches!(target, Target::External(path) if !path.first().is_some_and(|p| p == "std" || p == "core"))));
+            matches!(target, Target::External(path) if !path.first().is_some_and(|p| p == "std" || p == "core")
+                && !self.options.trusted_globs.contains(&path.join("::")))));
         let mut intrinsic = if unknown_glob {
             BTreeSet::new()
         } else {
@@ -640,7 +641,13 @@ impl<'ast> Visit<'ast> for References<'_> {
         } else {
             let mut symbols = self.tables.get(self.module).cloned().unwrap_or_default();
             symbols.extend(self.symbols());
-            let unknown_glob = symbols.get("$external_globs").is_some_and(|targets| targets.iter().any(|target| matches!(target, Target::External(path) if !path.first().is_some_and(|p| p == "std" || p == "core" || p == "alloc"))));
+            let unknown_glob = symbols.get("$external_globs").is_some_and(|targets| {
+                targets.iter().any(|target| {
+                    matches!(target, Target::External(path)
+                        if !path.first().is_some_and(|p| p == "std" || p == "core" || p == "alloc")
+                            && !self.options.trusted_globs.contains(&path.join("::")))
+                })
+            });
             if unknown_glob
                 || parts
                     .first()
