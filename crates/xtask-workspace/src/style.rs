@@ -141,6 +141,10 @@ pub struct StylePolicy {
     pub api_packages: Vec<String>,
     /// Optional rustup toolchain name. Components must be installed beforehand.
     pub toolchain: Option<String>,
+    /// Glob imports, as `crate::module` paths, the `glob-imports` rule accepts everywhere without
+    /// an exception, such as a framework's prelude. List them in `[analysis] trusted_globs` too
+    /// when they come from another crate.
+    pub allowed_globs: Vec<String>,
 }
 
 impl StylePolicy {

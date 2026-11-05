@@ -117,6 +117,7 @@ cfg = ["custom_cfg"]
 trusted_attributes = ["serde"]
 trusted_derives = ["Deserialize", "Serialize"]
 trusted_macros = ["proptest", "prop_assert"]
+trusted_globs = ["framework::prelude"]
 
 [style]
 enabled = true
@@ -176,6 +177,12 @@ are assumed not to affect module structure. Calls to a trusted function-like
 macro, matched by the exact path written at the call site, are not expanded,
 so references inside them are not analyzed.
 
+A glob import from another crate could provide any macro, derive or attribute,
+so the analyzer cannot tell where `vec!` or `#[derive(Clone)]` come from in a
+module that has one. `trusted_globs` names such imports by their `crate::module`
+path when they are known to provide no macros, derives or attributes, such as a
+framework's prelude of types and traits.
+
 ## Output
 
 ```text
@@ -228,7 +235,7 @@ exceptions and are added through `extra_rules`.
 | 11 | `missing-docs` | Public items are documented. | rustc `missing_docs` |
 | 12 | `safety-docs` | Unsafe functions document a `# Safety` section. | Clippy `missing_safety_doc` |
 | 13 | `safety-comments` | Unsafe blocks and impls have a `SAFETY:` comment. | Clippy `undocumented_unsafe_blocks` |
-| 14 | `glob-imports` | No glob imports, except `super::*` in inline modules, `use Enum::*` in function bodies and `pub use child::*` in non-leaf modules. | syntax |
+| 14 | `glob-imports` | No glob imports, except `super::*` in inline modules, `use Enum::*` in function bodies, `pub use child::*` in non-leaf modules and the paths in `allowed_globs`. | syntax |
 | 15 | `non-leaf-implementation` | Modules with child modules contain only declarations, imports and re-exports; test modules and `#[cxx::bridge]` are allowed. | syntax |
 | 16 | `rustfmt-skip` | No `#[rustfmt::skip]` in any form. | syntax |
 | 17 | `non-exhaustive` | Public enums and all-public structs in `api_packages` are `#[non_exhaustive]`. | Clippy `exhaustive_enums`, `exhaustive_structs` |
@@ -251,6 +258,7 @@ extra_rules = [
 disabled_rules = ["missing-docs"]
 api_packages = ["my-library"]
 options_structs = ["my-library::options::Options"]
+allowed_globs = ["framework::prelude"]
 toolchain = "1.85.0"      # optional rustup toolchain
 
 [[style.exceptions]]

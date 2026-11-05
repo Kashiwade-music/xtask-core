@@ -143,6 +143,7 @@ fn analyze_workspace(
                     trusted_attributes: settings.trusted_attributes.clone(),
                     trusted_derives: settings.trusted_derives.clone(),
                     trusted_macros: settings.trusted_macros.clone(),
+                    trusted_globs: settings.trusted_globs.clone(),
                     max_role_chars,
                 };
                 let context = format!(

@@ -304,6 +304,7 @@ fn analysis_settings_default_to_host_with_cargo_default_features() {
         trusted_attributes: Default::default(),
         trusted_derives: Default::default(),
         trusted_macros: Default::default(),
+        trusted_globs: Default::default(),
     };
     assert_eq!(AnalysisSettings::default(), expected);
     assert_eq!(Policy::default().analysis, expected);
@@ -326,6 +327,7 @@ fn analysis_settings_parse_cargo_cfg_and_trusted_expansions_with_other_rules() {
         "trusted_attributes=['macro_lib::second','macro_lib::first','macro_lib::second']\n",
         "trusted_derives=['derive_lib::Marker']\n",
         "trusted_macros=['proptest','prop_assert','proptest']\n",
+        "trusted_globs=['framework::prelude']\n",
         "[limits]\nmax_code_lines=25\nmax_role_chars=160\n",
         "[visible_to]\ncore=['app*']\n"
     ))
@@ -341,6 +343,7 @@ fn analysis_settings_parse_cargo_cfg_and_trusted_expansions_with_other_rules() {
             trusted_attributes: ["macro_lib::first".into(), "macro_lib::second".into()].into(),
             trusted_derives: ["derive_lib::Marker".into()].into(),
             trusted_macros: ["prop_assert".into(), "proptest".into()].into(),
+            trusted_globs: ["framework::prelude".into()].into(),
         }
     );
     assert_eq!(policy.limits.max_code_lines, 25);

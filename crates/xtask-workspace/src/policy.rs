@@ -95,6 +95,10 @@ pub struct AnalysisSettings {
     pub trusted_attributes: BTreeSet<String>,
     pub trusted_derives: BTreeSet<String>,
     pub trusted_macros: BTreeSet<String>,
+    /// External glob imports, as `crate::module` paths, known to provide no macros, derives or
+    /// attributes, such as a framework's prelude of types and traits. Other external globs make
+    /// macro and derive providers unknowable.
+    pub trusted_globs: BTreeSet<String>,
 }
 
 impl Default for AnalysisSettings {
@@ -108,6 +112,7 @@ impl Default for AnalysisSettings {
             trusted_attributes: BTreeSet::new(),
             trusted_derives: BTreeSet::new(),
             trusted_macros: BTreeSet::new(),
+            trusted_globs: BTreeSet::new(),
         }
     }
 }

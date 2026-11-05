@@ -54,6 +54,17 @@ fn glob_exceptions_distinguish_inline_super_and_leaf_reexports() {
 }
 
 #[test]
+fn allowed_globs_need_no_exception() {
+    let mut settings = policy(vec![StyleRule::GlobImports]);
+    settings.allowed_globs = vec!["framework::prelude".into()];
+    let diagnostics = fixture(
+        "use framework::prelude::*; use framework::other::*;",
+        &settings,
+    );
+    assert_eq!(diagnostics.len(), 1);
+}
+
+#[test]
 fn glob_enum_variants_are_allowed_only_inside_function_bodies() {
     let diagnostics = fixture(
         concat!(

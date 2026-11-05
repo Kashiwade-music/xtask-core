@@ -15,6 +15,8 @@ pub struct AnalysisOptions {
     pub trusted_derives: BTreeSet<String>,
     /// これらの macro の展開・token は解析しない。生成・内包される参照は source-level 解析の外。
     pub trusted_macros: BTreeSet<String>,
+    /// External glob imports (`crate::module`) known to provide no macros, derives or attributes.
+    pub trusted_globs: BTreeSet<String>,
     /// Positive maximum number of Unicode scalar values in a Role description.
     pub max_role_chars: usize,
 }
@@ -27,6 +29,7 @@ impl Default for AnalysisOptions {
             trusted_attributes: BTreeSet::new(),
             trusted_derives: BTreeSet::new(),
             trusted_macros: BTreeSet::new(),
+            trusted_globs: BTreeSet::new(),
             max_role_chars: DEFAULT_MAX_ROLE_CHARS,
         }
     }
