@@ -1,2 +1,5 @@
 # Preserve the vendored ELK bundle bytes and its recorded SHA-256.
 crates/xtask-layout/vendor/elkjs/elk.bundled.js -text -whitespace
+# Keep the recorded ELK baseline byte-for-byte.
+dev/layout-baseline/kivact/*.json -text -whitespace
+dev/layout-baseline/xtask-core/*.json -text -whitespace
