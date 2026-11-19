@@ -62,7 +62,7 @@
 | M10 | 採用 | 照合で確かめた。行数の対象に、すべての Cargo target の `src_path` を無条件に入れる | 付属書 C の C2b | `custom_target_roots_are_counted` |
 | M11 | 採用 | parse の表に失敗も記憶する。正規化した path で引く | 付属書 M の M3a | `parse_cache_keeps_failures` |
 | M12 | 採用（範囲を限定） | item の属性の評価と診断は loader だけが行い、構成ごとの有効な item の列を作る。resolve と visitor は item の cfg を評価しない。本体の中の cfg は visitor だけが評価する。別の「構成別の view」の型は作らない（有効な item の列で足りる） | 付属書 M の M3a | `invalid_cfg_reported_once` |
-| M13 | 採用 | `ModuleGraph` の契約（id の昇順、`modules[0]` が root、parent は自分より小さい index、root は無効でも残る）と、並べ替えと付け替えを一か所（`finish`）で行うことを定めた。手で作った値の違反は encode の検証が報告する | 付属書 M の M3a、付属書 A 2.5 節 | `modules_are_sorted_with_parents_first`、`disabled_root_keeps_root_module` |
+| M13 | 採用 | `ModuleGraph` の契約（id の昇順、空でなければ `modules[0]` が root、parent は自分より小さい index、root が cfg で無効なら空。W2 の差戻し 7 で、既存の試験に合わせて「無効でも残る」を改めた）と、並べ替えと付け替えを一か所（`finish`）で行うことを定めた。手で作った値の違反は encode の検証が報告する | 付属書 M の M3a、付属書 A 2.5 節 | `modules_are_sorted_with_parents_first`、`cfg_excluded_modules_do_not_require_roles` |
 | M14 | 採用 | `MacroGrammar` の variant、名前の表、書式の暗黙の取込みの規則（escape、幅・精度の `name$`、明示の引数の優先、literal でない場合）を定めた | 付属書 M の M3c | `format_capture_rules`、`macro_grammar_table` |
 | M15 | 採用 | 照合で確かめた。fixture の helper が `generate-lockfile --offline` で lock を作る | 付属書 M の M1「既存の試験の移行」 | 既存の試験が通る |
 | M16 | 採用 | 数の上限の型を今と同じ `usize` にし、`max_code_lines` の上限 1000 も付けない（契約を狭めない） | 付属書 M の M1 | 文書の点検 |

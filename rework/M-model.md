@@ -224,6 +224,8 @@ cargo test -p xtask-source
 |---|---|---|
 | すべての既存の試験 | `analyze` と `AnalysisOptions` を新しい API（`analyze(root, &settings, &[configuration])` の 1 件目）に書き換える。期待値は変えない | M3a |
 | `static_inner_doc_attributes_and_block_docs_have_the_same_semantics`（`tests/roles.rs`） | 4 つ目の source（`//! General module documentation.\n//! Role: ...`）だけ、期待値を「role が `Err`、診断に `Role must be the first line of the first inner doc` を含む」に変える。他の 3 つは変えない | M3c |
+| `root_only_api_matches_analysis_limits_and_preserves_default_api`（`tests/roles.rs`） | 契約の変更（D2：`crate_role`、`crate_role_with_limit`、`DEFAULT_MAX_ROLE_CHARS` を消した）。`root_role_limit_applies_to_the_root_module_alone` に名前を変え、消した API の assert と、その API のためだけの入力（`mod missing_file; include!(..)`）を除く。解析を通す assert（上限 1・2・既定 80・81 での root の Role と診断）は変えない | M3a |
+| `zero_limit_is_a_configuration_error_in_all_configurable_apis`（`tests/roles.rs`） | 契約の変更（D2）。`zero_limit_is_a_configuration_error` に名前を変え、`crate_role_with_limit` の assert を除く。解析の誤りの assert は変えない | M3a |
 | `formatted_macro_patterns_guards_and_json_values_are_references`（`tests/analysis.rs`） | source から `serde_json::json!(..)` の行を除き、期待値の辺から、その行だけが作っていた辺を除く。他（書式・pattern・guard）は変えない。json の振舞いは新しい試験 `json_requires_trust` が確かめる | M3c |
 
 表に無い既存の試験が通らなくなったら STOP する。
@@ -260,19 +262,19 @@ cargo test -p xtask-source
    pub enum ModuleKind { File, Inline }
    ```
 
-   - **契約**：`modules` は id の昇順。`modules[0]` は root（id `crate`、`parent == None`）。他の module は `parent == Some(i)` で `i` は自分の index より小さい（親の id は子の id の真の接頭辞なので、id の昇順で必ず先に来る）。root の `#![cfg(..)]` が偽でも root は残る（item と子を持たない）。
+   - **契約**：`modules` は id の昇順。`modules[0]` は root（id `crate`、`parent == None`）。他の module は `parent == Some(i)` で `i` は自分の index より小さい（親の id は子の id の真の接頭辞なので、id の昇順で必ず先に来る）。ただし root の `#![cfg(..)]` が偽なら、`modules` は空で、診断も無い（既存の試験 `cfg_excluded_modules_do_not_require_roles` の契約を保つ。root を残すと Role の欠落の診断が出てしまう）。利用側は `modules.first()` で root を得る。
    - **index の付け替えは一か所で行う。** loader は見つけた順（子が先）に module を並べ、親は loader の中の番号で持つ。最後の関数 `fn finish(sources) -> Vec<Module>` が、id で並べ替え、旧 → 新の表を作り、`parent` と辺の端を一度に付け替える。他の場所で並べ替えない。
    - `role` の `Err` は Role の診断の文（diagnostics にも入る）。
    - loader は cfg で無効にした `mod` を記録する。resolve の `format!("{owner}::{}")` による無効の再判定（`resolve.rs` の 2 か所）を消す。
 4. **属性の評価の担当（I8、B8、C1）。**
-   - item に付いた属性（`cfg`、`cfg_attr`、`path`、`macro_use` など）の評価と診断は **loader だけ**が行う。loader は構成ごとに、module ごとの「有効な item の index の列」を作る。resolve と visitor は、この列だけをたどり、item の cfg を評価しない。
+   - item に付いた属性（`cfg`、`cfg_attr`、`path`、`macro_use` など）の評価と診断は **loader だけ**が行う。loader は構成ごとに、module ごとの「有効な item の列」を作る。列の要素は `(item の index, cfg_attr を展開した後の attribute の列)` の組にする。resolve と visitor は、この列だけをたどり、item の attribute が要るときは列の展開済みの attribute を使う。`cfg::enabled` と `cfg::effective` を item の attribute に対して呼ぶのは loader だけ（visitor から呼ばない）。
    - 関数の本体の中の文・式の `cfg` は、visitor が評価する（loader は本体に下りない）。一つの属性を評価する担当は、どちらか一つだけ。
    - inline module の属性は、親の module の item として loader が一度だけ評価・診断する（子の `source.attrs` では診断しない）。
 5. **cfg の値（B5、C1）。**
    - `cfg(true)` は真、`cfg(false)` は偽にする。
    - 二つ以上の segment の `Meta::Path` は誤りにする。
    - item の cfg の誤りと式の cfg の誤りを、どちらも「診断を一つ出して、その item・式を無効とみなす」に統一する。解析は止めない。
-6. **誤りの位置（B7）。** loader と cfg の誤りの文の先頭に、`{file}:{line}: ` を付ける。line は `span.start().line`（`span-locations` が有効）。
+6. **誤りの位置（B7）。** loader の誤りと、すべての cfg の誤り（item の cfg は loader、関数の本体の中の文・式の cfg は visitor が出す）の文の先頭に、`{file}:{line}: ` を付ける。line は `span.start().line`（`span-locations` が有効）。visitor は、その module の `Source` のファイルの path を使う。
 7. **loader の path と directory の所有（B6、S5）。**
    - loader が扱うファイルの path は、すべて `xtask_source::normalize` で正規化する。`role::root` の非正規の path も同じにする。
    - `Context.inline: bool` と `explicit_path` の組を、`enum DirOwnership { ModRs(PathBuf), NonModRs(PathBuf), Inline(PathBuf) }` に替える。
@@ -287,7 +289,6 @@ cargo test -p xtask-source
 - **`errors_have_location`**：不正な `#[path]` の誤りの文が、`lib.rs:` を含む。
 - **`invalid_cfg_reported_once`**：`#[cfg(a::b)] mod x {}` の inline module で、一つの構成の結果の診断に、その cfg の誤りがちょうど 1 件ある。
 - **`modules_are_sorted_with_parents_first`**：`crate`、`crate::a`、`crate::a::x`、`crate::a_b` の module を持つ crate で、`modules[0].id == "crate"`、すべての `parent` が自分の index より小さく、`crate::a::x` の parent が `crate::a` の index。
-- **`disabled_root_keeps_root_module`**：root が `#![cfg(any())]` の crate で、`modules.len() == 1`、`modules[0].id == "crate"`。
 
 #### 確認
 

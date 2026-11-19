@@ -581,7 +581,7 @@ Node の item の高さを `max(size.height, (max(左辺の link の数, 右辺�
 ### 4.5 試験
 
 - **`forward_span_three`**：Root Fixed、node a, c, e, b の列が `[0, 1, 2, 3]`（層 0, 2, 4, 6）で、segment は a→b だけ。c と e が層 2 と層 4 を残すので、結果は層 0〜6 の 7 層。a→b の Dummy は層 1, 2, 3, 4, 5 に作られ、Dummy だけの層 1, 3, 5 が消えて、Dummy が 2 個（層 2 と 4 の、新しい層 1 と 2）、`layer_count` が 4、a→b の link が 3 本、path が 3 Step（すべて forward）になる。
-- **`backward_dummy_layer_removed`**：Root Fixed、node a, c, b の列が `[0, 1, 2]`（層 0, 2, 4）で、segment は b→a だけ（逆向き）。手順のとおり作った後、Dummy だけの層 1 と 3 が消える。結果の path の Step は 5 個で、向きは `[true, false, false, false, true]`、各 link の `left` の層 + 1 が `right` の層に等しい。
+- **`backward_dummy_layer_removed`**：Root Fixed、node a, c, b の列が `[0, 1, 2]`（層 0, 2, 4）で、segment は b→a だけ（逆向き）。4.1 節の shift（`need_min = l(a) - 1 = -1` なので `shift = 1`）で、a, c, b は層 1, 3, 5、TurnEast は層 6、TurnWest は層 0、Dummy は層 5, 4, 3, 2, 1 に作られ、`layer_count` は 7、path は 8 Step になる。Dummy だけの層は 2 と 4 で、これを消すと `layer_count` が 5、path の Step が 6 個で、向きは `[true, false, false, false, false, true]` になる。各 link の `left` の層 + 1 が `right` の層に等しい。
 - **`label_in_middle`**：層 0 → 2 のラベル付きで、層 1 が Label になる。
 - **`backward_makes_turns`**：Root Optimize、層 a=1 → b=0 の segment で、TurnEast が層 3、TurnWest が層 0、`layer_count` が 4 になる。
   - shift した後の層は from が 2、to が 1。

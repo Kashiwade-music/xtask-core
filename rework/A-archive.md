@@ -468,7 +468,7 @@ struct Drawing {
 2. 続けて、`drawn` が true の `targets` を `(package, target, kind, mode)` の昇順に並べる（Normal が Test より先）。
    - `kind` は `kinds` の `as_str()` を `+` でつないだ文字列で、`DiagramKind::Modules.kind` にも使う。
    - 題は `{package}::{target} ({kind}, {normal|test}): module dependencies`。
-3. **crate の Role**：package ごとに `primary_target` の target の、Normal の `Outcome::Analyzed(graph)` の root module（`graph.modules[0]`。付属書 M の M3a の契約）の role（`ok()`）を使う。無ければ None。図を作らない target でも使う。
+3. **crate の Role**：package ごとに `primary_target` の target の、Normal の `Outcome::Analyzed(graph)` の root module（`graph.modules.first()`。付属書 M の M3a の契約。root が cfg で無効なら `modules` は空）の role（`ok()`）を使う。無ければ None。図を作らない target でも使う。
 4. 並べ終えてから、crate の item の `open` を決める（2.4 節）。
 
 ### 2.4 crate 依存図
@@ -515,7 +515,7 @@ struct Drawing {
 - **edge**：`graph.edges` の順に作る。from と to は module の index の node、style は Normal、ラベルは無し。from == to のものは除く。
 - **層**：`Layering::Optimize`。
 
-`ModuleGraph` の親の検査（旧い `module_clusters` の重複・欠落・閉路の検査）は書かない。`ModuleGraph` の契約（付属書 M の M3a：`modules[0]` が root、他の module の parent は自分より小さい index）を信頼する。契約に反する値は、xtask-core の `xtask_archive::encode` の検証が誤りとして報告する。
+`ModuleGraph` の親の検査（旧い `module_clusters` の重複・欠落・閉路の検査）は書かない。`ModuleGraph` の契約（付属書 M の M3a：空でなければ `modules[0]` が root、他の module の parent は自分より小さい index）を信頼する。`modules` が空なら、item・region・node・edge の無い Graph になり、`draw` は余白だけの Drawn の図を作る。契約に反する値は、xtask-core の `xtask_archive::encode` の検証が誤りとして報告する。
 
 ### 2.6 `draw`
 
