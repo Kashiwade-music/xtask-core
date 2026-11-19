@@ -129,6 +129,7 @@ fn link_weight(chains: &Chains, link: &Link) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    //! Role: 縦方向の位置（port の揃えと間隔）を定める処理の試験。
     use super::vertical;
     use crate::level::{Chains, Item, ItemKind, Link, Order};
     use crate::model::Size;

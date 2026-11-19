@@ -467,6 +467,7 @@ fn finish(mut pending: Vec<Pending>) -> Vec<Source> {
 
 #[cfg(test)]
 mod tests {
+    //! Role: ソースの読み込みと解析結果の cache（失敗も保存）の試験。
     use super::*;
     use crate::model::Settings;
     use std::collections::BTreeSet;
