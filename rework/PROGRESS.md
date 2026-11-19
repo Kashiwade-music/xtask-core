@@ -24,10 +24,10 @@
 
 | unit | wave | lane | 状態 |
 |---|---|---|---|
-| L1 | W1 | 1 | 未着手 |
-| A1 | W1 | 2 | 未着手 |
-| M1 | W1 | 3 | 未着手 |
-| M2 | W1 | 4 | 未着手 |
+| L1 | W1 | 1 | 実装済み・W1 の tier b 待ち（a3b6dd8 → merge 済み） |
+| A1 | W1 | 2 | 実装済み・W1 の tier b 待ち（5cadc2b → merge 済み） |
+| M1 | W1 | 3 | 差戻し（OPEN.md の 1〜4） |
+| M2 | W1 | 4 | 差戻し（OPEN.md の 5） |
 | L2 | W2 | 1 | 未着手 |
 | L6 | W2 | 1（L2 の後） | 未着手 |
 | L3 | W2 | 2 | 未着手 |
@@ -53,4 +53,4 @@
 
 ## wave の記録
 
-（wave ごとに `W<W> merged <commit>: tier b 成功|失敗` の行を書く）
+- `W1 merged e13ecfe: tier b 失敗`（check は成功、xtask-archive・xtask-source・xtask-workspace・xtask-layout --lib の試験は成功。xtask-policy の試験 1 件が失敗：OPEN.md の 1。差戻しのため W2 は起動しない。作業指示書 1.4 節）
