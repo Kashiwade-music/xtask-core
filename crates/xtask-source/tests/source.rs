@@ -186,3 +186,41 @@ fn directory_symlink_cycles_terminate_without_omitting_original_files() {
     std::os::unix::fs::symlink(&src, src.join("loop")).unwrap();
     assert_eq!(rust_files(temp.path()).unwrap(), vec![src.join("lib.rs")]);
 }
+
+#[cfg(windows)]
+#[test]
+fn normalize_strips_verbatim() {
+    let temp = tempfile::tempdir().unwrap();
+    let normalized = xtask_source::normalize(temp.path()).unwrap();
+    assert!(!normalized.to_string_lossy().starts_with(r"\\?\"));
+    assert_eq!(
+        xtask_source::normalize(&normalized).unwrap(),
+        normalized,
+        "normalize must be idempotent"
+    );
+}
+
+#[test]
+fn nested_package_skipped() {
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = temp.path().join("tests/fixture");
+    fs::create_dir_all(&fixture).unwrap();
+    fs::write(
+        fixture.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\n",
+    )
+    .unwrap();
+    fs::write(fixture.join("nested.rs"), "fn main() {}").unwrap();
+    fs::write(temp.path().join("tests/kept.rs"), "fn main() {}").unwrap();
+    assert_eq!(
+        rust_files(temp.path()).unwrap(),
+        vec![temp.path().join("tests/kept.rs")]
+    );
+}
+
+#[test]
+fn nbsp_is_not_whitespace() {
+    // U+00A0 is Unicode whitespace but not Rust whitespace, so the `#!` line
+    // is an interpreter directive, not the start of an inner attribute.
+    assert_eq!(code_line_count("#!\u{a0}[allow(x)]\nfn main() {}"), 1);
+}
