@@ -260,3 +260,22 @@ fn draw_produces_valid_archive() {
     };
     assert_eq!(scene.nodes.len(), 3);
 }
+
+#[test]
+fn self_dev_dependency_is_skipped() {
+    let workspace = workspace(
+        vec![package("a"), package("b")],
+        vec![
+            normal("a", "b"),
+            dependency("a", "a", DependencyKind::Dev, None),
+        ],
+    );
+    let plans = plan(&Input {
+        workspace: &workspace,
+        targets: Vec::new(),
+    });
+    let Content::Drawn(scene) = &draw(&plans[0]).content else {
+        panic!("the crate diagram should be drawn");
+    };
+    assert_eq!(scene.edges.len(), 1);
+}

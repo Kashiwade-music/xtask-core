@@ -121,11 +121,14 @@ type Edges = (
     Vec<(EdgeStyle, Option<Vec<String>>)>,
 );
 
-/// 依存の辺。順は workspace.edges の順。
+/// 依存の辺。順は workspace.edges の順。自分への依存（dev-dependencies で feature を有効にする書き方）は辺にしない。
 fn edges(dependencies: &[Dependency], index: &BTreeMap<&str, usize>) -> Result<Edges, String> {
     let mut layout_edges = Vec::new();
     let mut drawn_edges = Vec::new();
-    for dependency in dependencies {
+    for dependency in dependencies
+        .iter()
+        .filter(|dependency| dependency.from != dependency.to)
+    {
         let (style, label) = edge_label(dependency);
         let label = label.map(|value| node_text(&value));
         layout_edges.push(xtask_layout::Edge {

@@ -1,6 +1,6 @@
 //! Role: 図のファイルの符号化・復号・検証と、文字の折り返しの試験を定義する。
 
-use crate::codec::{wrap, write_body};
+use crate::codec::{wrap, write_body, write_unchecked};
 use crate::style::measure;
 use crate::{
     Archive, Content, DecodeError, Diagram, DiagramKind, Edge, EdgeStyle, Item, Label, Mode, Node,
@@ -294,4 +294,46 @@ fn measure_wraps() {
     let block = measure("abcdef", 10.0, 18.0, 20.0);
     assert_eq!(block.lines, vec!["abc".to_string(), "def".to_string()]);
     assert_eq!(block.height, 36.0);
+}
+
+/// 試験の module 図の数。予算（8 × 本体の長さ + 4096）を、符号の費用（Diagram の大きさ）が超える数。
+const MODULE_COUNT: usize = 2500;
+
+/// 一文字の名前を、index の mixed radix の桁から作る（index の昇順が、module 図の kind の昇順と一致する）。
+fn letter(digit: usize) -> String {
+    char::from(b'a' + digit as u8).to_string()
+}
+
+/// 最小の module 図（名前は一文字、題は空、解析しなかった図）。index の昇順に kind が厳密に増える。
+fn minimal_module(index: usize) -> Diagram {
+    let package = letter(index / (52 * 26));
+    let target = letter((index / 52) % 26);
+    let kind = letter((index / 2) % 26);
+    let mode = if index % 2 == 0 {
+        Mode::Normal
+    } else {
+        Mode::Test
+    };
+    Diagram {
+        kind: module_kind(&package, &target, &kind, mode),
+        title: String::new(),
+        content: Content::Skipped(String::new()),
+    }
+}
+
+#[test]
+fn encode_rejects_what_decode_would_reject() {
+    let mut diagrams = vec![sample().diagrams.remove(0)];
+    diagrams.extend((0..MODULE_COUNT).map(minimal_module));
+    let archive = Archive {
+        root_name: String::new(),
+        diagrams,
+        notices: Vec::new(),
+    };
+    assert_eq!(encode(&archive), Err("archive is too large".to_string()));
+    let (body, _) = write_unchecked(&archive).unwrap();
+    assert_eq!(
+        decode(&wrap(&body)),
+        Err(DecodeError::Corrupt("allocation budget exceeded".into()))
+    );
 }
