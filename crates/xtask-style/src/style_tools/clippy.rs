@@ -7,8 +7,7 @@ use serde_json::Value;
 use xtask_policy::{StyleRule, StyleSettings};
 
 use super::common::{cargo, cfg_environment, failure, feature_args};
-use crate::model::{StyleDiagnostic, StyleReport};
-use crate::style::{StyleInput, enabled};
+use crate::model::{StyleDiagnostic, StyleInput, StyleReport, enabled};
 
 pub(super) fn check(input: &StyleInput<'_>, report: &mut StyleReport) {
     // A workspace run preserves cross-package feature selection and dependency

@@ -9,8 +9,7 @@ use syn::visit::{self, Visit};
 use syn::{Attribute, Item, ItemMod, ItemUse, Meta, UseTree, Visibility};
 use xtask_policy::{StyleRule, StyleSettings};
 
-use crate::model::StyleDiagnostic;
-use crate::style::enabled;
+use crate::model::{StyleDiagnostic, enabled};
 
 /// What one pass over the source files found: violations, read and parse
 /// errors, and the item index used to name the item that a line belongs to.
