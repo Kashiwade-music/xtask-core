@@ -13,6 +13,9 @@ pub(crate) const DERIVES: &[(&str, &str)] = &[
     ("PartialOrd", "cmp"),
 ];
 
+/// The attribute macros that the standard prelude provides. An unknown external glob may hide them.
+pub(crate) const PRELUDE_ATTRIBUTES: &[&str] = &["test", "bench", "global_allocator", "test_case"];
+
 pub(crate) fn derive(path: &[String]) -> bool {
     let [provider, module, name] = path else {
         return false;

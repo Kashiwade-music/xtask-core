@@ -4,8 +4,8 @@ use crate::{
     loader::{Source, located},
     model::{Env, Settings},
     symbols::{
-        Import, Layout, Modules, Namespace, Scope, Target, Textual, is_local_macro,
-        local_macro_targets,
+        Block, Import, Layout, Modules, Namespace, Scope, Target, Textual, is_local_macro,
+        is_trusted_glob, local_macro_targets,
     },
 };
 use proc_macro2::TokenStream;
@@ -32,7 +32,7 @@ pub(crate) struct Enabled {
 pub(crate) struct Standard {
     /// The enabled statics of the standard calls, as (module, name).
     pub(crate) declared: Vec<(usize, String)>,
-    /// The enabled statics of each trusted call at module level, by (module, item index).
+    /// The enabled statics of each standard or trusted call at module level, by (module, item index).
     pub(crate) calls: BTreeMap<(usize, usize), Vec<Enabled>>,
     /// The cfg diagnostics of the statics. An invalid cfg disables only its own static.
     pub(crate) diagnostics: Vec<String>,
@@ -65,14 +65,6 @@ pub(crate) fn enabled_statics(
     Ok((enabled, diagnostics))
 }
 
-/// How a `thread_local!` call is recognized, syntactically. The visitor visits the statics of
-/// both kinds; only the calls that resolve to the standard macro declare names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Provider {
-    Qualified,
-    Alias,
-}
-
 /// Whether a `use` path names the standard `thread_local` macro.
 fn is_standard_import(path: &[String]) -> bool {
     matches!(
@@ -84,25 +76,21 @@ fn is_standard_import(path: &[String]) -> bool {
     )
 }
 
-/// The provider of a macro call that names `thread_local`, or `None` for any other macro.
-/// The names are those of the module's own `use` items, not those reached by a reexport.
-pub(crate) fn provider(path: &syn::Path, imports: &[Import]) -> Option<Provider> {
-    let parts = path
-        .segments
-        .iter()
-        .map(|segment| segment.ident.to_string())
-        .collect::<Vec<_>>();
-    if parts == ["std", "thread_local"] {
-        return Some(Provider::Qualified);
+/// Whether a macro call's path names `thread_local`: the standard `std::thread_local`, or a bare
+/// name that is `thread_local` or an alias of it. The names are those of the module's own `use`
+/// items, not those reached by a reexport.
+pub(crate) fn names_thread_local(path: &syn::Path, imports: &[Import]) -> bool {
+    let text = ast::path_text(path);
+    if text == "std::thread_local" {
+        return true;
     }
-    if path.leading_colon.is_some() || parts.len() != 1 {
-        return None;
+    if path.leading_colon.is_some() || path.segments.len() != 1 {
+        return false;
     }
-    let name = parts[0].as_str();
-    let aliased = imports
-        .iter()
-        .any(|import| import.alias.as_deref() == Some(name) && is_standard_import(&import.path));
-    (name == "thread_local" || aliased).then_some(Provider::Alias)
+    text == "thread_local"
+        || imports.iter().any(|import| {
+            import.alias.as_deref() == Some(text.as_str()) && is_standard_import(&import.path)
+        })
 }
 
 /// Whether a module's `#[macro_use] extern crate` may import the `thread_local` macro.
@@ -182,25 +170,11 @@ pub(crate) fn standard_statics(
         layout,
         scopes: first,
     };
-    let macro_use = sources
-        .iter()
-        .enumerate()
-        .filter(|(_, source)| imports_unknown_thread_local(source))
-        .map(|(module, _)| module)
-        .collect::<BTreeSet<_>>();
     let mut result = Standard::default();
     for (module, source) in sources.iter().enumerate() {
-        let macro_use_visible = macro_use_visible(layout, &macro_use, module);
         for (index, (item, _)) in source.items().into_iter().enumerate() {
             let Item::Macro(item) = item else { continue };
-            let standard = is_standard_call(
-                &modules,
-                textual,
-                module,
-                &item.mac.path,
-                macro_use_visible,
-                env,
-            );
+            let standard = is_standard_call(&modules, textual, module, &item.mac.path, &[], env);
             let trusted = is_trusted_call(&modules, textual, module, item, env);
             if !standard && !trusted {
                 continue;
@@ -226,12 +200,32 @@ pub(crate) fn standard_statics(
                     .declared
                     .extend(enabled.iter().map(|s| (module, s.item.ident.to_string())));
             }
-            if trusted {
-                result.calls.insert((module, index), enabled);
-            }
+            // The visitor visits the statics of every standard and trusted call.
+            result.calls.insert((module, index), enabled);
         }
     }
     Ok(result)
+}
+
+/// For each module, whether it or an ancestor has a `#[macro_use] extern crate` that may import
+/// `thread_local`.
+pub(crate) fn macro_use_visible(sources: &[Source], parents: &[Option<usize>]) -> Vec<bool> {
+    let direct = sources
+        .iter()
+        .map(imports_unknown_thread_local)
+        .collect::<Vec<_>>();
+    (0..sources.len())
+        .map(|module| {
+            let mut current = Some(module);
+            while let Some(index) = current {
+                if direct[index] {
+                    return true;
+                }
+                current = parents.get(index).copied().flatten();
+            }
+            false
+        })
+        .collect()
 }
 
 /// Whether the visitor visits the statics of a module-level macro call: a trusted call of a
@@ -255,48 +249,34 @@ fn is_trusted_call(
             &item.mac.path,
             &[],
         ))
-        && provider(&item.mac.path, &modules.layout.uses[module]).is_some()
+        && names_thread_local(&item.mac.path, &modules.layout.uses[module])
 }
 
-/// Whether a module, or one of its ancestors, has a `#[macro_use]` that may import `thread_local`.
-fn macro_use_visible(layout: &Layout, macro_use: &BTreeSet<usize>, module: usize) -> bool {
-    let mut current = Some(module);
-    while let Some(index) = current {
-        if macro_use.contains(&index) {
-            return true;
-        }
-        current = layout.parents.get(index).copied().flatten();
-    }
-    false
-}
-
-/// Whether a module-level macro call is the standard `thread_local!`. When the macro namespace
-/// resolves the path, the call is standard only if every target is `std::thread_local`.
-/// Otherwise it is standard when its path is bare `thread_local` or `std::thread_local`, and
-/// nothing in the module could bind that name to another provider.
-fn is_standard_call(
+/// Whether a macro call, at module level or in the given blocks, is the standard `thread_local!`.
+/// When the macro namespace resolves the path, the call is standard only if every target is
+/// `std::thread_local`. Otherwise it is standard when its path is bare `thread_local` or
+/// `std::thread_local`, and nothing in its scopes could bind that name to another provider.
+pub(crate) fn is_standard_call(
     modules: &Modules,
     textual: &Textual,
     module: usize,
     path: &syn::Path,
-    macro_use: bool,
+    blocks: &[Block],
     env: Env,
 ) -> bool {
-    let targets = local_macro_targets(modules, textual, module, path, &[]);
+    let targets = local_macro_targets(modules, textual, module, path, blocks);
     if !targets.is_empty() {
         return targets.iter().all(|target| {
             matches!(target, Target::External(external)
                 if external.iter().map(String::as_str).eq(["std", "thread_local"]))
         });
     }
-    let unknown_glob = modules
-        .scope(module)
-        .is_some_and(|scope| !scope.external_globs.is_empty());
-    let segments = path
-        .segments
+    let macro_use = modules.layout.macro_use[module];
+    let unknown_glob = blocks
         .iter()
-        .map(|segment| segment.ident.to_string())
-        .collect::<Vec<_>>();
+        .map(|block| &block.items)
+        .chain(modules.scope(module))
+        .any(|scope| !scope.external_globs.is_empty());
     let settings = env.settings;
     let bare = path.is_ident("thread_local")
         && !unknown_glob
@@ -308,10 +288,7 @@ fn is_standard_call(
             &mut BTreeSet::new(),
             settings,
         );
-    let qualified = segments
-        .iter()
-        .map(String::as_str)
-        .eq(["std", "thread_local"])
+    let qualified = ast::path_text(path) == "std::thread_local"
         && (path.leading_colon.is_some()
             || !unknown_glob
                 && !uncertain(modules, module, "std", &mut BTreeSet::new(), settings)
@@ -340,9 +317,11 @@ fn uncertain(
         }
         let targets = modules.resolve(module, &[], &import.path, None);
         if targets.is_empty() {
-            // A trusted glob is known to provide no macros (see `Settings::trusted_globs`).
-            let trusted = settings.trusted_globs.contains(&import.path.join("::"));
-            if import.glob && (trusted || is_standard_glob(modules, module, &import.path)) {
+            // A trusted glob is known to provide no macros (see `is_trusted_glob`).
+            let trusted = import.glob
+                && is_trusted_glob(&import.path, settings)
+                && starts_outside(modules, module, &import.path);
+            if trusted {
                 continue;
             }
             return true;
@@ -359,17 +338,17 @@ fn uncertain(
     false
 }
 
-/// Whether a glob import names the standard library, whose first segment is not a local name.
-fn is_standard_glob(modules: &Modules, module: usize, path: &[String]) -> bool {
+/// Whether the first segment of a path names no local type, so that the path is not reached
+/// through a local name.
+fn starts_outside(modules: &Modules, module: usize, path: &[String]) -> bool {
     path.first().is_some_and(|first| {
-        matches!(first.as_str(), "std" | "core" | "alloc")
-            && modules
-                .resolve(
-                    module,
-                    &[],
-                    std::slice::from_ref(first),
-                    Some(Namespace::Type),
-                )
-                .is_empty()
+        modules
+            .resolve(
+                module,
+                &[],
+                std::slice::from_ref(first),
+                Some(Namespace::Type),
+            )
+            .is_empty()
     })
 }

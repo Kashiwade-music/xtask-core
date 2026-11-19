@@ -655,3 +655,37 @@ fn trusted_external_globs_keep_std_macro_providers() {
     );
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
 }
+
+#[test]
+fn block_glob_reaches_block_derive() {
+    // The block's own `use` items are applied before its items' attributes are expanded.
+    for source in [
+        "fn f() { use ext::*; #[derive(Clone)] struct S; }",
+        "fn f() { use other::Clone; #[derive(Clone)] struct S; }",
+    ] {
+        let result = graph(&[("lib.rs", source)], Options::default());
+        assert!(
+            result
+                .diagnostics
+                .contains(&"crate: derive macro expansion is unsupported: Clone".to_string()),
+            "{source}: {:?}",
+            result.diagnostics
+        );
+    }
+}
+
+#[test]
+fn prelude_attribute_under_unknown_glob() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "mod c { use ext::*; #[test] fn f() {} #[inline] fn g() {} }",
+        )],
+        Options {
+            cfg: BTreeSet::from(["test".into()]),
+            ..Default::default()
+        },
+    );
+    assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+    assert!(result.diagnostics[0].contains("test"));
+}

@@ -567,3 +567,29 @@ fn invalid_cfg_on_impl_fn_is_one_diagnostic() {
         .count();
     assert_eq!(reported, 1, "{:?}", result.diagnostics);
 }
+
+#[test]
+fn extern_crate_does_not_hide_glob_value() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "extern crate alloc; mod a { pub fn alloc() {} } mod g { pub use crate::a::*; } mod m { use crate::g::*; fn h() { alloc(); } }",
+        )],
+        Options::default(),
+    );
+    assert!(
+        edges(&result).contains(&("crate::m", "crate::a")),
+        "{:?}",
+        edges(&result)
+    );
+}
+
+#[test]
+fn raw_identifier_module_file() {
+    let result = graph(
+        &[("lib.rs", "mod r#type;"), ("type.rs", "pub fn f() {}")],
+        Options::default(),
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(result.modules.iter().any(|m| m.id == "crate::type"));
+}

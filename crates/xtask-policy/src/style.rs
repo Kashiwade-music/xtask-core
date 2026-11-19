@@ -268,6 +268,9 @@ fn check_exceptions(exceptions: &[StyleException]) -> Result<(), String> {
         }
         let path = exception.path.replace('\\', "/");
         let prefix = path.strip_suffix('*').unwrap_or(&path);
+        if path == "*" {
+            return Err("exception path must name a file or a directory prefix".into());
+        }
         if path.is_empty()
             || path.starts_with('/')
             || prefix.is_empty()

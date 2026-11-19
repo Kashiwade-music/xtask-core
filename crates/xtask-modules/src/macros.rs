@@ -19,7 +19,8 @@ pub(crate) enum MacroGrammar {
     /// An expression, `,`, a pattern and an optional `if` guard, then, when `trailing_format`,
     /// an optional format string and its arguments. For example `matches!` and `assert_matches!`.
     Matches { trailing_format: bool },
-    /// The arguments are not parsed. For example `compile_error!`, whose argument is a string.
+    /// The arguments are not parsed and have no references. For example `compile_error!`, whose
+    /// argument is a string, and `stringify!`, whose tokens are text.
     Opaque,
 }
 
@@ -38,7 +39,8 @@ pub(crate) fn grammar(name: &str) -> Option<MacroGrammar> {
         "assert_matches" | "debug_assert_matches" => Matches {
             trailing_format: true,
         },
-        "compile_error" => Opaque,
+        "compile_error" | "stringify" | "concat" | "env" | "option_env" | "file" | "line"
+        | "column" | "module_path" | "cfg" | "include_str" | "include_bytes" => Opaque,
         _ => return None,
     })
 }
