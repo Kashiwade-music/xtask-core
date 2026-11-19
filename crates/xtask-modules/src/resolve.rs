@@ -5,7 +5,7 @@ use crate::{
     loader::{Loaded, Source},
     model::{Env, ModuleKind},
     symbols::{
-        Glob, Import, Layout, Modules, NAMESPACES, Namespace, Scope, Textual, child_index,
+        Glob, Import, Layout, Modules, NAMESPACES, Namespace, Scope, Target, Textual, child_index,
         declarations, use_imports,
     },
     thread_local_items,
@@ -19,33 +19,23 @@ pub(crate) fn analyze(loaded: Loaded, env: Env) -> Result<ModuleGraph, String> {
         sources,
         diagnostics: loading,
     } = loaded;
-    let ids = sources
-        .iter()
-        .map(|s| s.module.id.clone())
-        .collect::<Vec<_>>();
-    let mut scopes = sources.iter().map(|_| Scope::default()).collect::<Vec<_>>();
-    let uses = collect(&sources, &ids, &mut scopes);
     let layout = Layout {
-        ids,
+        ids: sources.iter().map(|s| s.module.id.clone()).collect(),
         parents: sources.iter().map(|s| s.module.parent).collect(),
-        uses,
+        uses: sources.iter().map(module_uses).collect(),
     };
-    let registrations = thread_local_items::register(&sources, &layout, &mut scopes, env)?;
-    add_externs(&sources, &layout.ids, &mut scopes);
-    // The local paths settle first, so that an external path is only a fallback.
-    settle(&mut scopes, &layout, env, false);
-    settle(&mut scopes, &layout, env, true);
+    let textual = textual_macros(&sources, &layout);
+    // The names are settled twice, each time from empty tables. The first pass has no statics of
+    // the standard thread_local macro. Each call is judged on it, and the second pass declares
+    // the statics of the standard calls.
+    let first = tables(&sources, &layout, &[], env);
+    let statics = thread_local_items::standard_statics(&sources, &layout, &first, &textual, env)?;
+    let scopes = tables(&sources, &layout, &statics, env);
     let modules = Modules {
         layout: &layout,
         scopes: &scopes,
     };
     let mut diagnostics = loading.into_iter().collect::<BTreeSet<_>>();
-    diagnostics.extend(thread_local_items::confirm(
-        &modules,
-        &sources,
-        &registrations,
-    ));
-    let textual = textual_macros(&sources, &layout);
     let opaque = crate::visitor::opaque_modules(&sources, &modules, &textual, env);
     let mut edges = BTreeSet::new();
     for (module, source) in sources.iter().enumerate() {
@@ -81,10 +71,45 @@ pub(crate) fn analyze(loaded: Loaded, env: Env) -> Result<ModuleGraph, String> {
     })
 }
 
-/// Declares the items of every module, and collects its `use` items. Returns the imports of
-/// each module.
-fn collect(sources: &[Source], ids: &[String], scopes: &mut [Scope]) -> Vec<Vec<Import>> {
-    let mut uses = sources.iter().map(|_| Vec::new()).collect::<Vec<_>>();
+/// The imports of a module's `use` items.
+fn module_uses(source: &Source) -> Vec<Import> {
+    source
+        .items()
+        .into_iter()
+        .filter_map(|(item, _)| match item {
+            Item::Use(item) => Some(use_imports(item)),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// The names of every module, settled from empty tables: the declarations, the statics of the
+/// given standard thread_local calls, and the extern crates of the root. The local paths settle
+/// first, so that an external path is only a fallback.
+fn tables(
+    sources: &[Source],
+    layout: &Layout,
+    statics: &[(usize, String)],
+    env: Env,
+) -> Vec<Scope> {
+    let mut scopes = sources.iter().map(|_| Scope::default()).collect::<Vec<_>>();
+    declare(sources, &layout.ids, &mut scopes);
+    for (owner, name) in statics {
+        scopes[*owner]
+            .declared
+            .entry((Namespace::Value, name.clone()))
+            .or_default()
+            .insert(Target::Item(*owner, Namespace::Value));
+    }
+    add_externs(sources, &layout.ids, &mut scopes);
+    settle(&mut scopes, layout, env, false);
+    settle(&mut scopes, layout, env, true);
+    scopes
+}
+
+/// Declares the items of every module, and the alias of each named import.
+fn declare(sources: &[Source], ids: &[String], scopes: &mut [Scope]) {
     for (owner, source) in sources.iter().enumerate() {
         for (item, attributes) in source.items() {
             // A #[macro_export] macro is also declared at the crate root, wherever it is defined.
@@ -109,12 +134,10 @@ fn collect(sources: &[Source], ids: &[String], scopes: &mut [Scope]) -> Vec<Vec<
                     if let Some(alias) = &import.alias {
                         scopes[owner].explicit.entry(alias.clone()).or_default();
                     }
-                    uses[owner].push(import);
                 }
             }
         }
     }
-    uses
 }
 
 /// The extern crates of the root are visible in every module, unless the module declares the name.
