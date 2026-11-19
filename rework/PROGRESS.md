@@ -117,3 +117,5 @@ K5（図のファイルの大きさ）と K6（検査の時間）は CP で測�
 - K6 検査の時間：`check` を暖機の後に 3 回測った。0.772、0.758、0.752 秒。中央値 0.758 秒（基準 1.203 × 1.05 = 1.263 秒以下）。達成。
 - AC-1：`git ls-files` に `.js`・`.cjs`・`.html`・`.css` は無い。node の無い PATH で `check --write` は図のファイルを書いたが、循環参照の違反（差戻し 20）で終了コードが 1。未達。
 - tier c の途中：`cargo fmt --all --check` 成功。`cargo +1.85.0 check --workspace --all-targets --locked` 成功（let チェーンを 1.85 で通る形に直した後、`c45ab73` を merge）。`cargo test --workspace` 成功（失敗 0）。viewer の fmt・clippy・`KIVACT_TEST_MIRROR=off cargo test --workspace` 成功。`cargo clippy --workspace --all-targets -- -D warnings` は差戻し 19 で未達。`cargo run -p xtask-core -- check` は差戻し 20 で未達（違反 23 件のうち、Role と行数は解消済み、循環 10 件が残る）。viewer の `check --root` も循環 2 件（xtask-render）が残る。
+
+- `CP fixes merged c4ad8bd`：let チェーンを Rust 1.85 で通る形に（`c45ab73`）、テストモジュールの Role と analysis のテストの分割（`8c8d83d`）、テストの共有 helper を analysis 専用に移動（`e41f0b0`）。`cargo clippy --workspace --all-targets -- -D warnings` の残りは差戻し 19（cli.rs）だけ。`cargo run -p xtask-core -- check` の残りは差戻し 20（循環参照、xtask-core で 10 件、viewer で 2 件）だけ。CP は差戻し 19 と 20 の解消を待つ。
