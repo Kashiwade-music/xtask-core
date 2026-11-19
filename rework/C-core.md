@@ -137,6 +137,7 @@ cargo clippy -p xtask-style --all-targets -- -D warnings
 | `integration/arch_map.rs` の全 6 件 | 削除（HTML を消した）。図の中身・target の選択・解析の失敗・何も書かないことは、上の維持・置換の試験が確かめる | C2a |
 | `tests/style.rs` の全件 | 維持：`Report.style`・`Output::None` の API に合わせる。`check_unchanged` の「`architecture` の directory が無い」の assert は「`target/xtask` が無い」に替える。通知（`checked 20 style rules`、例外の理由、`unused style exception` が無いこと）の assert は `Report.notes` で変えない | C2c |
 | `wildcard_exceptions_cannot_suppress_invalid_rule_targets`（tests/style.rs） | 契約の変更（W-B10）：例外の `path='*'` を `path='src/*'` に替える（`*` だけの path は policy の読込みで誤りになるため）。無効な selector が抑制されないことの assert は変えない | C2c |
+| `missing_and_surplus_arguments_return_usage_errors`（`src/cli.rs`） | 契約の変更（X-B8、設計書 5.1 節：`--root` の値は次の引数をそのまま使い、`-` で始まる値も受け付ける）。入力から `["check", "--root", "--help"]` を除く（`--help` は root の値になる）。他の入力と期待値は変えない | C2a |
 | `src/` の単体試験（cli、config、run など） | API の追従。消した機能（prune、no_write、arch_map、graphs）の試験は消す | C2a |
 
 ---
