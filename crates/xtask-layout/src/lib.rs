@@ -1,14 +1,37 @@
-//! Role: ELKによるレイアウト要求と配置結果の公開APIを提供する。
-//! ELK owns node placement and orthogonal edge routes; SVG decoration is separate.
-
+//! Role: 直交の階層配置の公開 API を提供する。
+//! Native layered layout: regions bottom-up, network simplex, orthogonal channels.
+mod acyclic;
+mod chains;
+mod check;
+mod hierarchy;
+mod layering;
+mod level;
+mod metrics;
 mod model;
-mod prepare;
-mod runtime;
-mod validate;
+mod order;
+mod position;
+mod route;
+mod simplex;
 
+pub use metrics::Metrics;
 pub use model::{
-    Direction, EDGE_FONT_SIZE, EdgeRequest, EdgeStyle, FONT_FAMILY, LINE_HEIGHT, LayoutRequest,
-    NODE_FONT_SIZE, NodeRequest, Point, REGION_FONT_SIZE, REGION_LINE_HEIGHT, RegionRequest,
-    Request, Scene, SceneEdge, SceneLabel, SceneNode, SceneRegion, TITLE_FONT_SIZE,
+    Edge, Graph, Layering, Layout, LayoutError, Node, Point, Rect, Region, Route, Size,
 };
-pub use runtime::{LayoutSession, layout, layout_with_node};
+
+/// 要求を検証して配置し、出力の不変条件を確かめて返す。
+pub fn layout(graph: &Graph) -> Result<Layout, LayoutError> {
+    check::input(graph)?;
+    let layout = hierarchy::layout(graph)?;
+    check::output(graph, &layout).map_err(LayoutError::Internal)?;
+    Ok(layout)
+}
+
+/// 出力の不変条件（付属書 L 10.2 節）を確かめる。
+pub fn verify(graph: &Graph, layout: &Layout) -> Result<(), String> {
+    check::output(graph, layout)
+}
+
+/// 折れ線の指標。ELK の結果にも使えるよう f64 で受け取る。
+pub fn metrics(width: f64, height: f64, routes: &[Vec<(f64, f64)>]) -> Metrics {
+    metrics::compute(width, height, routes)
+}
