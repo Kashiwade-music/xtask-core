@@ -47,7 +47,7 @@
 | A2 | W4 | 1 | 統合済み（b9abc85） |
 | V3 | W4 | 2 | 統合済み（1bb506f。GUI 試験 8 件は成功） |
 | C3 | W4 | 3 | 統合済み（0867ef9） |
-| C2a | W5 | 1 | 未着手 |
+| C2a | W5 | 1 | 差戻し（OPEN.md の 18。c5cd12c は 34a4460 で merge 済み） |
 | C2b | W5 | 1（C2a の後） | 未着手 |
 | C2c | W5 | 1（C2b の後） | 未着手 |
 
@@ -86,3 +86,16 @@
 - W5 は C2 が C1 に依存するため、差戻し 15・16 の解消を待つ。CP は差戻し 15〜17 の解消を待つ。
 
 - `W5 partial merged 34a4460: L9 と C2a を merge（C2a は差戻し 18）`（非 core の check、xtask-layout lib 48 が成功。xtask-core は C2b まで compile できない。M3d は実行中）
+
+- `W5 partial merged 6505d34: L9（5355dd3）と M3d（9f2f8ea）を merge。C2a は差戻し 18（34a4460）`（xtask-modules：lib 3、analysis 63、roles 17、thread_local 24、clippy が成功。xtask-layout：lib 48、基準の試験 2 件（release）が成功。xtask-core は C2b まで compile できない。C2b と C2c は C2a の差戻しのため未起動）
+
+### K1〜K4（W5、commit 6505d34、`baseline_report`、L9 の後）
+
+| 指標 | 目標 | 実測 | 判定 |
+|---|---|---|---|
+| K1 交差数の比 | 1.55 以下（DEC-22 で改定） | 1.50 | 達成 |
+| K2 折れの数の比 | 1.3 以下 | 1.13 | 達成 |
+| K3 面積の比 | 1.5 以下 | 0.54 | 達成 |
+| K4 配置の時間の和（121 件） | 3.0 秒以下 | 1.816 秒 | 達成 |
+
+K5（図のファイルの大きさ）と K6（検査の時間）は CP で測る。
