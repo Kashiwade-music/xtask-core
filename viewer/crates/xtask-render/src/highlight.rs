@@ -1,7 +1,7 @@
 //! Role: item の近傍（依存先・依存元と辺）と、item の矩形を求める。
 use xtask_archive::Scene;
 
-use crate::{Highlight, Picture, R};
+use crate::model::{Highlight, Picture, R};
 
 /// item を端に持つ edge と、その反対の端の item。item 自身も含む。
 pub fn neighbors(scene: &Scene, item: u32) -> Highlight {
