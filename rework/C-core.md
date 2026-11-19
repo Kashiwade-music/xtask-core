@@ -452,7 +452,6 @@ cargo clippy -p xtask-core --all-targets -- -D warnings
    - `json!` と `Token!` の特別扱いを止めたので、使う repository は `trusted_macros` に書くこと。信頼した macro の中の参照は依存の辺にならないこと。
    - `cfg(true)` に対応したこと。
    - `trusted_globs` は「その glob を未知の提供元とみなさない」意味で、glob が与える attribute・macro を使うなら `trusted_attributes`・`trusted_macros` にも書くこと。`allowed_globs`（style）とは別に書く必要があること（設計書 DEC-9）。
-   - `thread_local!` は `thread_local!`・`std::thread_local!` と、同じ module の `use std::thread_local as X;` の別名で呼ぶこと（DEC-19）。
    - Role は最初の inner doc の最初の行に置くこと。
 
 ### 確認

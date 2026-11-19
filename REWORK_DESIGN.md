@@ -437,7 +437,7 @@ pub fn metrics(width: f64, height: f64, routes: &[Vec<(f64, f64)>]) -> Metrics;
 | D-I4 | 収束の clone | 対応（worklist） | M3b | `rg "previous == tables"` が 0 件 |
 | D-I5 | 二重の処理 | 対応 | M3a | `block_use_is_processed_once` |
 | D-I6 | 部分木の clone | 対応 | M3a | loader が `ItemMod` を clone しない（目で確かめる） |
-| D-I7 | thread_local の再計算 | 対応（構文から一回） | M3b | `rg "fn uncertain_binding"` が 0 件 |
+| D-I7 | thread_local の再計算 | 対応（一回目の表と、集めた import の列で一回だけ判定） | M3b | `rg "imports\(" crates/xtask-modules/src/thread_local_items.rs` が 0 件 |
 | D-I8 | cfg の再評価 | 対応（item の cfg は loader だけが評価する） | M3a | `invalid_cfg_reported_once` |
 | D-I9 | 文字列の id | 対応 | M3b | resolve の module が `usize` |
 | D-I10 | options の clone | 対応（package ごとに一回作り、共有） | C2b | `rg "settings.clone()"` が 0 件 |
@@ -482,7 +482,7 @@ pub fn metrics(width: f64, height: f64, routes: &[Vec<(f64, f64)>]) -> Metrics;
 | DEC-16 | 並列化は「入力ごとに一つの scoped thread、同時の数は CPU の数まで」にする。終わった thread は drop の guard が channel で知らせる | 結果は `join` で受け取るので、共有の枠・処理中の印・番兵が要らない。panic した入力だけが `Err` になり、全入力に必ず結果が一つ付く。`R: Send` だけで済む。thread の終わりで proc-macro2 の span の記録も解放される |
 | DEC-17 | 構造は `--all-features`・platform の絞込み無しの metadata 一回から作る。依存の辺は Cargo の宣言から作り、依存先の同一性は path の依存なら path、同名の registry の依存はその resolve で決める。選んだ構成の feature は別の一回で求め、その失敗は解析の環境の失敗として扱う | lock は全部の依存を持つので、構造の metadata は lock があれば必ず解決でき、無効な optional の依存も構造の検査から外れない。target や feature の設定の誤りで、行数・可視性などの独立な検査を止めない |
 | DEC-18 | 名前付きの `use` と item の宣言の名前は、構文から先に決める。glob を隠すかどうかは名前の有無だけで決まるので、glob の伝播は単調に増え、worklist で収束する。名前付きの `use` は三つの名前空間すべてで glob を隠す（近似） | 後から隠すことによる取消しが無くなる。名前付きの use の名前空間は解決するまで分からないため、安全側の近似にする |
-| DEC-19 | `thread_local!` と認めるのは、`thread_local`・`std::thread_local`・`::std::thread_local` の書き方と、同じ module の `use std::thread_local [as X];` の別名だけ | 名前の解決の前に宣言を決められる（DEC-18） |
+| DEC-19 | `thread_local!` を std のものと認める規則は、旧い実装の規則（Macro の名前空間で `std::thread_local` に解決される別名・再公開を含む。提供元が不確かなら static を作らない）を変えない。名前解決を二回にし、一回目の表で判定してから static を宣言に足し、二回目を空の表から行う | 既存の `tests/thread_local.rs` がこの規則を固定している。static は Value の名前空間なので、判定に使う Macro の名前空間は二回で変わらず、各回の解決は単調に保てる（DEC-18） |
 | DEC-20 | style の options-default の probe は、selector ごとの crate のままにする（一括化しない） | 一つの crate にまとめると、名前の解決の誤りで他の selector の型検査の診断が出なくなる |
 | DEC-21 | viewer の木は、単クリックで選び、Enter かダブルクリックで開く | 固定の Kivact の tree の振舞い（`on_activate`）に合わせる。選択を遷移につなぐ effect を作らない |
 
@@ -520,7 +520,6 @@ xtask-core を取り込むリポジトリは、submodule を更新するとき�
 | policy の最上位の `output` | `[diagrams] output` |
 | `json!`・`Token!` を使うリポジトリ | `trusted_macros` に書く。その中の参照は依存の辺にならない |
 | Role の位置 | 最初の inner doc の最初の行に置く |
-| `thread_local!` を別の module の別名で呼ぶコード | `thread_local!` か `std::thread_local!` で呼ぶ |
 | 例外の `path = "*"` | `src/*` など、directory の接頭辞にする |
 | root の `Cargo.toml` | `[profile.dev.package.xtask-layout] opt-level = 3` を足す |
 

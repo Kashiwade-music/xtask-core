@@ -328,7 +328,7 @@ cargo test -p xtask-modules
      | 名前付き field の `struct`、`enum`、`union`、`trait`、`type`、`mod`、`extern crate` | Type |
      | `macro_rules!`（`#[macro_export]`）、`macro` | Macro |
 
-   - **キーは解決の前に決める。** `declared` のキーと、`explicit` のキー（名前付きの use の最後の segment か別名。値は空の集合から始める）は、構文から先にすべて作る（手順 3 の 1）。解決は値の集合を増やすだけで、キーを足さない。
+   - **キーは解決の前に決める。** `declared` のキーと、`explicit` のキー（名前付きの use の最後の segment か別名。値は空の集合から始める）は、構文から先にすべて作る（手順 3 の 1）。thread_local の static のキーだけは、一回目の解決の後に足し、二回目の解決を空の表から行う（手順 3）。一回の解決の中では、値の集合を増やすだけで、キーを足さない。
    - **引き `lookup(scope, ns, name)`**：`declared[(ns, name)]` か `explicit[name]` のどちらかのキーがあれば、その二つの和を返す（値が空でもキーがあれば glob を隠す）。どちらも無ければ `globbed[(ns, name)]` を返す。これで局所の宣言が同じ名前空間の glob を隠し（B1）、別の名前空間の glob は隠さない。
    - **glob の import**（`use p::*`）：p の見える名前（`declared` のキー、`explicit` のキー、`globbed` のキー）について、名前空間ごとに `lookup(p, ns, name)` を自分の `globbed[(ns, name)]` に足す。`explicit` のキーは三つの名前空間すべてに足す。p の `external_globs` も自分の `external_globs` に足す（名前と同じ規則で伝わる。M04）。glob の path が複数の module に解決されたら、すべての module から足す（B4）。
    - **検索と供給は同じ `lookup` を使う。** 隠された名前は、glob で次の module に伝わらない。
@@ -337,24 +337,30 @@ cargo test -p xtask-modules
 2. **外部 glob の判定の一本化（B2）。** `fn is_trusted_glob(path, settings) -> bool` を一つだけ作り、glob を `external_globs` に入れるかどうかの判定に使う。
    - std・core・alloc の path と `trusted_globs` の path を信頼する。
    - 「未知の外部 glob がある」は、引きの道筋の scope の `external_globs` が空でないことと同じにする。
-3. **解決の手順（S1、I4、DEC-18、DEC-19）。** `(external_fallback, generated_values)` の bool の組の loop を、次の明示の手順に替える。
-   1. **集める**（構文だけ）：module ごとに `declared` と `explicit` のキー、glob の import の列、自分の `external_globs` を作る。`thread_local!` の static もここで `declared` に足す（手順 6）。
-   2. `resolve(Fallback::LocalOnly)`：worklist で、局所の path だけを解決する。
-   3. `resolve(Fallback::External)`：worklist で、解決できない名前付きの import を外部の path として足す（今の `apply_import` の `external_fallback` の規則）。
-   4. **thread_local の提供元の確認**（手順 6）。
+3. **解決の手順（S1、I4、DEC-18、DEC-19）。** `(external_fallback, generated_values)` の bool の組の loop を、次の明示の手順に替える。名前解決は二回行い、二回とも表を空から作る（前の回の表を引き継がない）。
+   1. **集める**（構文だけ）：module ごとに `declared` と `explicit` のキー、import の列（名前付きと glob。path と、名前付きなら束縛の名前）、自分の `external_globs` を作る。`thread_local!` の static はまだ足さない。
+   2. **一回目の解決**：`resolve(Fallback::LocalOnly)`、続けて `resolve(Fallback::External)`。結果の表を「一回目の表」と呼ぶ。
+      - `Fallback::LocalOnly` は局所の path だけを解決する。`Fallback::External` は、解決できない名前付きの import を外部の path として足す（今の `apply_import` の `external_fallback` の規則）。
+   3. **thread_local の判定と登録**（手順 6）：一回目の表で、各 `thread_local!` の呼出しが std のものかを決め、std のものの static だけを、その module の `declared` の Value のキーに足す。
+   4. **二回目の解決**：手順 1 の結果に、手順 3 の static のキーを足したものから、表を空から作り直し、`resolve(Fallback::LocalOnly)`、`resolve(Fallback::External)` を行う。これが最終の表で、visitor はこれだけを使う。
 
-   `resolve` の worklist：最初はすべての module を入れる。module を取り出して、その import をすべて適用する。`apply_import` は「自分の表の値が増えたか」を返す。増えたら、その module を `use` で参照する module（名前付きでも glob でも）を worklist に戻す。キーは増えないので、値の集合が単調に増えるだけで、有限の回数で止まる。表全体の clone と比較（`previous == tables`）は消す。
+   各回の中では、キーは解決の前に決まっていて増えないので、値の集合は単調に増え、worklist は有限の回数で止まる（M02）。static は Value の名前空間にしか足さないので、提供元の判定に使う Macro の名前空間の解決は、一回目と二回目で変わらない。二回目を空から作るので、一回目に glob で伝わった値が、後から足した static に隠されずに残ることは無い。
+
+   `resolve` の worklist：最初はすべての module を入れる。module を取り出して、その import をすべて適用する。`apply_import` は「自分の表の値が増えたか」を返す。増えたら、その module を `use` で参照する module（名前付きでも glob でも）を worklist に戻す。表全体の clone と比較（`previous == tables`）は消す。
 4. **名前空間（S3）。** `References.namespace` の field と、save/restore の 6 か所を消す。`fn reference(&mut self, path: &[String], namespace: Namespace)` に名前空間を引数で渡す。
 5. **局所の束縛（S4）。** 局所の scope の値を `enum LocalBinding { Generic, Value, Item(Target) }` にする。空集合と `{LocalValue}` の番兵をやめる。`Target::LocalValue` を消す。module の直下と block の中は、visitor の引数の `Context::Module` と `Context::Block` で区別する。`scopes.is_empty()` による判定をやめる。
 6. **thread_local!（B11、DEC-19）。** std の `thread_local!` を、組込みの文法として扱う。
-   - **登録（手順 3 の 1、構文だけ）**：macro の呼出しの path が `thread_local`、`std::thread_local`、`::std::thread_local` のどれか、または同じ module の `use std::thread_local as X;`（`::std` も同じ）で入れた別名 `X` のとき、`thread_local_items.rs` の `Statics` で一回だけ parse し、宣言した名前を `declared` の Value に足す。型と初期化式の参照は visitor が visit する。
-   - **提供元の確認（手順 3 の 4、解決の後）**：path が `std::thread_local` か `::std::thread_local` なら確か。そうでなければ、次のどれかに当たるとき不確かとし、`{module}: macro provider cannot be established: thread_local` の診断を一つ出す。登録は取り消さない（診断で不確かさを報告する）。
-     - その module か外側に、`thread_local` という名前の局所の macro（`macro_rules!`、Macro の名前空間の宣言）がある。
-     - `explicit` の `thread_local` が std 以外の path に解決された。
-     - 引きの道筋の `external_globs` が空でない（glob で伝わったものを含む）。
-     - `#[macro_use] extern crate` が `thread_local` を与えうる（今の `imports_unknown_thread_local` の規則）。
-   - `trusted_macros` に無くても、確かな thread_local には診断を出さない。
-   - `uncertain_binding`（`imports()` を呼び直す関数）は消す。確認は解決済みの表を使う（I7）。
+   - **判定の規則は旧い実装と同じにする。** 旧い `thread_local_items.rs` の `register`（`git show e7eb600:crates/xtask-modules/src/thread_local_items.rs`）の規則を、一回目の表の上でそのまま行う。既存の `tests/thread_local.rs` の全件が、この規則を固定している（期待値は変えない）。呼出し `M!{..}`（cfg で有効なもの）が std のものになるのは、次のどれか。
+     1. M の path を Macro の名前空間で一回目の表で引いた結果が空でなく、そのすべてが `Target::External(["std", "thread_local"])`。別名・別の module の再公開（`pub use std::thread_local as tls;` を `crate::macros::tls!` で呼ぶなど）も、これで決まる。
+     2. 1 の結果が空で、path が `thread_local` の一語で、次のどれにも当たらない：その module の道筋に未知の外部 glob がある（`external_globs`）、その module か祖先が `thread_local` を与えうる `#[macro_use] extern crate` を持つ（旧い `imports_unknown_thread_local` の規則）、`thread_local` の束縛が不確か（下の `uncertain`）。
+     3. 1 の結果が空で、path が `std::thread_local` で、先頭に `::` があるか、または「未知の外部 glob が無く、`std` の束縛が不確かでなく、`std` が局所の Type に解決されない」。
+   - **`uncertain(module, name)`**（旧い `uncertain_binding` の規則。`imports()` を呼び直さず、手順 3 の 1 で集めた import の列と一回目の表を使う。I7）：module の import のうち、glob のものと、束縛の名前が `name` のものについて、順に次を調べる。訪問済みの module の集合で再帰を止める。
+     - 一回目の表でその import の path の解決先が空なら：glob で、path の先頭が std・core・alloc で、その先頭が局所の Type に解決されないなら飛ばす。それ以外は不確か（true）。
+     - glob で、解決先に局所の module があれば、その module について `uncertain` を再帰で調べ、true なら true。
+   - std のものと決まった呼出しは、`thread_local_items.rs` の `Statics` で一回だけ parse し、cfg で有効な static の名前を `declared` の Value のキーに足す。parse の誤りは今と同じ誤り（`invalid thread_local declaration`）。型と初期化式の参照は visitor が visit する。
+   - std のものでない呼出しには static を作らない。診断は visitor の `visit_macro` が今の規則で出す（提供元が不明、未対応の macro など）。この手順で診断を足さない。
+   - `trusted_macros` に無くても、std の thread_local には診断を出さない。
+   - 旧い `visit_macro` は 80 行を超える。thread_local の判定を手順 6 の関数に移した後も超えるなら、作業指示書 0.4 節の「STOP にせず直すもの」として、意味のある helper（文法の表の引き、提供元の判定、引数の visit など）に分ける。
 7. **二重の処理の削除（I2、I5）。**
    - `intrinsic_derives()` は、attribute に `derive` があるときだけ求める。
    - block の中の `use` は一回だけ処理する（`visit_block` と `visit_item_use` の二重を止める）。
@@ -384,6 +390,7 @@ cargo test -p xtask-modules
 - **`trusted_glob_allows_thread_local`**：trusted_globs に `framework::prelude` を入れ、`use framework::prelude::*; thread_local!{...}` で、診断が空になる。
 - **`untrusted_glob_makes_thread_local_uncertain`**：`use framework::prelude::*; thread_local!{ static C: u8 = 0; }`（trusted_globs が空）で、`macro provider cannot be established: thread_local` の診断がある。
 - **`thread_local_type_reference`**：`thread_local!{ static C: RefCell<crate::cache::C> = ... }` で、`crate::cache` への辺がある。
+- **既存の `tests/thread_local.rs`**：全件を期待値を変えずに通す（手順 6 の規則は、この試験が固定する旧い振舞い）。
 - **`block_use_is_processed_once`**：block の中の `use crate::a::f;` の誤り（解決できない局所の import）の診断が 1 件だけ出る。
 
 #### 確認

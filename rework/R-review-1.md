@@ -51,7 +51,7 @@
 | ID | 判定 | 回答 | 変更先 | 確かめ方 |
 |---|---|---|---|---|
 | M01 | 採用 | 照合で、import 自体が辺になることを確かめた。glob の供給元（a）と直接の import 先（g）を別の module にした fixture に替えた | 付属書 M の M3b | `local_thread_local_shadows_glob` |
-| M02 | 採用 | 宣言と名前付きの use のキーを解決の前に構文から決め、検索と供給を同じ `lookup` にした。隠すかどうかはキーの有無だけで決まるので、伝播は単調で worklist が正しく止まる。thread_local の static も解決の前に登録する | 設計書 DEC-18・DEC-19、付属書 M の M3b | `shadowed_name_is_not_forwarded`（並びを逆にした形を含む）、`three_level_reexport_chain` |
+| M02 | 採用 | 宣言と名前付きの use のキーを解決の前に構文から決め、検索と供給を同じ `lookup` にした。隠すかどうかはキーの有無だけで決まるので、伝播は単調で worklist が正しく止まる。thread_local の static は、一回目の解決の表で旧い規則のとおりに判定してから足し、二回目の解決を空の表から行う（W2 の差戻し 9・10 で、既存の試験に合わせて改めた） | 設計書 DEC-18・DEC-19、付属書 M の M3b | `shadowed_name_is_not_forwarded`（並びを逆にした形を含む）、`three_level_reexport_chain` |
 | M03 | 採用 | 宣言と glob の表を `(名前空間, 名前)` のキーにした。名前付きの use は解決まで名前空間が分からないので、三つの名前空間すべてで隠す近似にした（DEC-18） | 付属書 M の M3b | `declared_type_does_not_hide_glob_value` |
 | M04 | 採用 | `external_globs` を、名前と同じ規則で glob を通して伝える | 付属書 M の M3b | `external_glob_reexport_keeps_uncertainty` |
 | M05 | 採用 | 照合で衝突を確かめた。移行の表で、該当の試験の 4 つ目の source の期待値を変えることを明示した | 付属書 M の M3「既存の試験の移行」 | `role_must_be_first` |
