@@ -3,8 +3,10 @@ use crate::{
     ast, cfg,
     loader::{Source, located},
     model::{Env, Settings},
-    symbols::{Import, Layout, Modules, Namespace, Scope, Target, Textual},
-    visitor::{is_local_macro, local_macro_targets},
+    symbols::{
+        Import, Layout, Modules, Namespace, Scope, Target, Textual, is_local_macro,
+        local_macro_targets,
+    },
 };
 use proc_macro2::TokenStream;
 use std::{
