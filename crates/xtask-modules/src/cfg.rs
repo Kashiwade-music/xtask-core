@@ -6,7 +6,7 @@ use syn::{Attribute, Meta, Token, punctuated::Punctuated};
 /// `all(..)`, `any(..)`, or `not(..)`.
 enum Predicate {
     Bool(bool),
-    Meta(Meta),
+    Meta(Box<Meta>),
 }
 
 impl syn::parse::Parse for Predicate {
@@ -14,7 +14,7 @@ impl syn::parse::Parse for Predicate {
         if input.peek(syn::LitBool) {
             return Ok(Self::Bool(input.parse::<syn::LitBool>()?.value));
         }
-        Ok(Self::Meta(input.parse()?))
+        Ok(Self::Meta(Box::new(input.parse()?)))
     }
 }
 
@@ -56,7 +56,7 @@ fn expand(meta: Meta, env: Env, result: &mut Vec<Meta>) -> Result<(), String> {
                 let Predicate::Meta(attr) = attr else {
                     return Err("invalid cfg_attr".into());
                 };
-                expand(attr, env, result)?;
+                expand(*attr, env, result)?;
             }
         }
     } else {
