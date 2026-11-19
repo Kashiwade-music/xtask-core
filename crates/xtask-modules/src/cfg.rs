@@ -154,13 +154,12 @@ pub(crate) fn expansion_diagnostics(
                 .parse_args_with(Punctuated::<syn::Path, Token![,]>::parse_terminated)
                 .map_err(|e| e.to_string())?;
             for derive in derives {
-                let derive = derive
+                let path = derive
                     .segments
                     .iter()
                     .map(|s| s.ident.to_string())
-                    .collect::<Vec<_>>()
-                    .join("::");
-                let path = derive.split("::").map(str::to_owned).collect::<Vec<_>>();
+                    .collect::<Vec<_>>();
+                let derive = path.join("::");
                 if !intrinsic_derives.contains(&derive)
                     && !crate::intrinsic::derive(&path)
                     && !env.settings.trusted_derives.contains(&derive)

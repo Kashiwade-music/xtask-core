@@ -3,8 +3,10 @@ use crate::{
     ast, cfg, loader,
     model::{Env, Reference},
     symbols::{
-        Namespace, Symbols, Tables, Target, apply_import, declaration, imports, resolve_path,
+        Block, Import, LocalBinding, Modules, NAMESPACES, Namespace, Scope, Target, Textual,
+        declarations, use_imports,
     },
+    thread_local_items,
 };
 use std::{collections::BTreeSet, path::Path};
 use syn::{
@@ -12,30 +14,42 @@ use syn::{
     spanned::Spanned,
     visit::{self, Visit},
 };
+
+/// Where an item is: directly in a module, or inside a block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Context {
+    Module,
+    Block,
+}
+
 pub(crate) struct References<'a> {
-    pub(crate) module: &'a str,
+    /// The index of the module being visited.
+    pub(crate) module: usize,
+    pub(crate) modules: Modules<'a>,
+    /// Textual-scope `macro_rules!` names per module.
+    pub(crate) textual: &'a Textual,
     /// The file of the module, which its cfg errors are located in.
     pub(crate) file: &'a Path,
-    pub(crate) tables: &'a Tables,
-    /// Textual-scope `macro_rules!` names per module.
-    pub(crate) textual: &'a Tables,
     pub(crate) env: Env<'a>,
     /// Modules whose trusted crate-local item macros may define items we cannot see.
-    pub(crate) opaque: &'a BTreeSet<String>,
-    pub(crate) scopes: Vec<Symbols>,
-    pub(crate) namespace: Namespace,
+    pub(crate) opaque: &'a BTreeSet<usize>,
+    /// The blocks and generic parameters around the node being visited, innermost last.
+    pub(crate) blocks: Vec<Block>,
     pub(crate) edges: &'a mut BTreeSet<Reference>,
     pub(crate) diagnostics: &'a mut BTreeSet<String>,
 }
 
 impl References<'_> {
+    fn id(&self) -> String {
+        self.modules.layout.ids[self.module].clone()
+    }
+
     /// Evaluates the attributes of an expression, statement, or associated item once: the cfg
     /// predicates decide whether the node is visited, and an enabled node's expansions are reported.
     /// Module items are not passed here; the loader evaluated them.
     pub(crate) fn enabled(&mut self, attrs: &[syn::Attribute]) -> bool {
         // Most expression and statement nodes have no attributes. They cannot
-        // disable code or require expansion, so avoid cloning the module and
-        // local symbol tables just to compute unused intrinsic derive names.
+        // disable code or require expansion.
         if attrs.is_empty() {
             return true;
         }
@@ -58,6 +72,7 @@ impl References<'_> {
             }
         }
     }
+
     /// Reports an invalid cfg, located at its attribute, and so disables the node.
     fn cfg_error(&mut self, attrs: &[syn::Attribute], error: &str) {
         let line = attrs
@@ -65,43 +80,53 @@ impl References<'_> {
             .find(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
             .or(attrs.first())
             .map_or(1, |attr| attr.span().start().line);
-        self.diagnostics
-            .insert(loader::located(self.file, line, error));
+        let message = loader::located(self.file, line, error);
+        self.diagnostics.insert(message);
     }
+
     /// Reports the attribute expansions that this analysis does not model. The attributes
     /// are the expanded ones.
     pub(crate) fn expansions(&mut self, metas: &[syn::Meta]) {
         if metas.is_empty() {
             return;
         }
-        match cfg::expansion_diagnostics(metas, self.env, &self.intrinsic_derives()) {
+        let intrinsic = if metas.iter().any(|meta| meta.path().is_ident("derive")) {
+            self.intrinsic_derives()
+        } else {
+            BTreeSet::new()
+        };
+        let id = self.id();
+        match cfg::expansion_diagnostics(metas, self.env, &intrinsic) {
             Ok(diagnostics) => {
                 for diagnostic in diagnostics {
-                    self.diagnostics
-                        .insert(format!("{}: {diagnostic}", self.module));
+                    let message = format!("{id}: {diagnostic}");
+                    self.diagnostics.insert(message);
                 }
             }
             Err(error) => {
-                self.diagnostics.insert(format!("{}: {error}", self.module));
+                let message = format!("{id}: {error}");
+                self.diagnostics.insert(message);
             }
         }
     }
-    fn symbols(&self) -> Symbols {
-        let mut symbols = Symbols::new();
-        for scope in &self.scopes {
-            for (name, target) in scope {
-                symbols.insert(name.clone(), target.clone());
-            }
-        }
-        symbols
+
+    /// The module's scope and the blocks' scopes: the names that an import or a path may see.
+    fn visible_scopes(&self) -> impl Iterator<Item = &Scope> {
+        self.blocks
+            .iter()
+            .map(|block| &block.items)
+            .chain(self.modules.scope(self.module))
     }
+
+    /// Whether an unknown external glob import is visible from here.
+    fn unknown_glob_visible(&self) -> bool {
+        self.visible_scopes()
+            .any(|scope| !scope.external_globs.is_empty())
+    }
+
+    /// The derives that are the standard ones, for the names visible here.
     fn intrinsic_derives(&self) -> BTreeSet<String> {
-        let mut symbols = self.tables.get(self.module).cloned().unwrap_or_default();
-        symbols.extend(self.symbols());
-        let unknown_glob = symbols.get("$external_globs").is_some_and(|targets| targets.iter().any(|target|
-            matches!(target, Target::External(path) if !path.first().is_some_and(|p| p == "std" || p == "core")
-                && !self.env.settings.trusted_globs.contains(&path.join("::")))));
-        let mut intrinsic = if unknown_glob {
+        let mut intrinsic = if self.unknown_glob_visible() {
             BTreeSet::new()
         } else {
             crate::intrinsic::DERIVES
@@ -109,76 +134,99 @@ impl References<'_> {
                 .map(|s| s.to_string())
                 .collect()
         };
-        for (name, targets) in symbols {
-            let external = targets
+        for name in self.visible_names() {
+            let external = NAMESPACES
                 .iter()
+                .flat_map(|namespace| {
+                    self.modules
+                        .lookup(self.module, &self.blocks, *namespace, &name)
+                })
                 .filter_map(|target| match target {
                     Target::External(path) => Some(path),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            if !external.is_empty() {
-                if external.iter().all(|path| crate::intrinsic::derive(path)) {
-                    intrinsic.insert(name);
-                } else {
-                    intrinsic.remove(&name);
-                }
+            if external.is_empty() {
+                continue;
+            }
+            if external.iter().all(|path| crate::intrinsic::derive(path)) {
+                intrinsic.insert(name);
+            } else {
+                intrinsic.remove(&name);
             }
         }
         intrinsic
     }
+
+    /// Every name that a visible scope or block binds, in any namespace.
+    fn visible_names(&self) -> BTreeSet<String> {
+        let mut names = BTreeSet::new();
+        for scope in self.visible_scopes() {
+            names.extend(scope.declared.keys().map(|(_, name)| name.clone()));
+            names.extend(scope.explicit.keys().cloned());
+            names.extend(scope.globbed.keys().map(|(_, name)| name.clone()));
+        }
+        for block in &self.blocks {
+            names.extend(block.locals.keys().map(|(_, name)| name.clone()));
+        }
+        names
+    }
+
     fn edge(&mut self, targets: BTreeSet<Target>) {
         let owners = targets
             .iter()
-            .filter_map(|t| match t {
-                Target::Module(o) | Target::Item(o, _) => Some(o),
-                _ => None,
-            })
+            .filter_map(Target::owner)
             .collect::<BTreeSet<_>>();
         let ambiguous = [Namespace::Type, Namespace::Value]
             .iter()
-            .any(|ns| targets.iter().filter(|t| t.matches(*ns)).count() > 1);
+            .any(|namespace| targets.iter().filter(|t| t.matches(*namespace)).count() > 1);
         if owners.len() > 1 && ambiguous {
-            self.diagnostics.insert(format!(
+            let message = format!(
                 "{}: ambiguous local path resolution: {targets:?}",
-                self.module
-            ));
+                self.id()
+            );
+            self.diagnostics.insert(message);
             return;
         }
-        for target in targets {
-            let owner = match target {
-                Target::Module(o) | Target::Item(o, _) => o,
-                Target::External(_) | Target::LocalValue => continue,
-            };
-            if owner != self.module {
+        self.add_edges(&owners);
+    }
+
+    /// Records an edge from this module to each owner that is another module.
+    fn add_edges(&mut self, owners: &BTreeSet<usize>) {
+        let from = self.id();
+        for owner in owners {
+            if *owner == self.module {
+                continue;
+            }
+            if let Some(to) = self.modules.layout.ids.get(*owner) {
+                let to = to.clone();
                 self.edges.insert(Reference {
-                    from: self.module.into(),
-                    to: owner,
+                    from: from.clone(),
+                    to,
                 });
             }
         }
     }
+
     /// Opaque modules that a path unresolved in the symbol tables passes through.
-    fn opaque_owners(&self, parts: &[String]) -> BTreeSet<String> {
-        let symbols = self.symbols();
+    fn opaque_owners(&self, parts: &[String]) -> BTreeSet<usize> {
         let mut owners = BTreeSet::new();
         for k in 1..parts.len() {
             if parts[k] == "super" {
                 continue;
             }
-            for target in resolve_path(
+            for target in self.modules.resolve(
                 self.module,
+                &self.blocks,
                 &parts[..k],
-                self.tables,
-                Some(&symbols),
                 Some(Namespace::Type),
             ) {
                 if let Target::Module(owner) = target
                     && self.opaque.contains(&owner)
                     && !self
-                        .tables
-                        .get(&owner)
-                        .is_some_and(|table| table.contains_key(&parts[k]))
+                        .modules
+                        .scope(owner)
+                        .is_some_and(|scope| scope.binds_any(&parts[k]))
                 {
                     owners.insert(owner);
                 }
@@ -186,20 +234,31 @@ impl References<'_> {
         }
         owners
     }
+
     /// Treat an unresolved name in an opaque module as a reference to that module.
     /// Returns whether the path was absorbed, so no unresolved-path diagnostic applies.
     fn opaque_reference(&mut self, parts: &[String]) -> bool {
         let owners = self.opaque_owners(parts);
         for owner in &owners {
-            self.edge(BTreeSet::from([Target::Module(owner.clone())]));
+            self.edge(BTreeSet::from([Target::Module(*owner)]));
         }
         !owners.is_empty()
     }
-    fn shadow(&mut self, ident: &syn::Ident) {
-        if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(ident.to_string(), BTreeSet::new());
+
+    /// Declares a generic parameter (or `Self`) of the innermost block: it hides the names of
+    /// both namespaces.
+    fn declare_generic(&mut self, ident: &syn::Ident) {
+        let name = ident.to_string();
+        if let Some(block) = self.blocks.last_mut() {
+            block
+                .locals
+                .insert((Namespace::Type, name.clone()), LocalBinding::Generic);
+            block
+                .locals
+                .insert((Namespace::Value, name), LocalBinding::Generic);
         }
     }
+
     fn bind_pattern(&mut self, pat: &syn::Pat) {
         struct Bindings(Vec<syn::Ident>);
         impl<'ast> Visit<'ast> for Bindings {
@@ -211,67 +270,101 @@ impl References<'_> {
         let mut bindings = Bindings(Vec::new());
         bindings.visit_pat(pat);
         for ident in bindings.0 {
-            if let Some(scope) = self.scopes.last_mut() {
-                scope.insert(ident.to_string(), BTreeSet::from([Target::LocalValue]));
+            if let Some(block) = self.blocks.last_mut() {
+                block
+                    .locals
+                    .insert((Namespace::Value, ident.to_string()), LocalBinding::Value);
             }
         }
     }
+
     fn generic_scope(&mut self, generics: &syn::Generics) {
-        self.scopes.push(Symbols::new());
+        self.blocks.push(Block::default());
         for parameter in &generics.params {
             match parameter {
-                syn::GenericParam::Type(p) => self.shadow(&p.ident),
-                syn::GenericParam::Const(p) => self.shadow(&p.ident),
+                syn::GenericParam::Type(p) => self.declare_generic(&p.ident),
+                syn::GenericParam::Const(p) => self.declare_generic(&p.ident),
                 _ => {}
             }
         }
     }
-    fn use_item(&mut self, item: &syn::ItemUse) {
-        let mut imports_list = Vec::new();
-        imports(
-            &item.tree,
-            if item.leading_colon.is_some() {
-                vec![String::new()]
-            } else {
-                Vec::new()
-            },
-            &mut imports_list,
-        );
-        let mut symbols = self.symbols();
-        let mut strong = symbols.keys().cloned().collect::<BTreeSet<_>>();
-        for import in &imports_list {
-            if let Some(alias) = &import.alias {
-                strong.insert(alias.clone());
-            }
-        }
-        for import in imports_list {
-            let targets = apply_import(
-                &import,
-                self.module,
-                self.tables,
-                &mut symbols,
-                &strong,
-                true,
+
+    /// The innermost block's scope for its `use` items.
+    fn block_items(&mut self) -> &mut Scope {
+        &mut self
+            .blocks
+            .last_mut()
+            .expect("a block scope is open for a block-level use")
+            .items
+    }
+
+    /// Records the edges of one import, and the diagnostic when a local path is unresolved.
+    fn import_edges(&mut self, import: &Import, targets: BTreeSet<Target>) {
+        let local = import
+            .path
+            .first()
+            .is_some_and(|first| matches!(first.as_str(), "crate" | "self" | "super"));
+        if targets.is_empty() && local && !self.opaque_reference(&import.path) {
+            let message = format!(
+                "{}: unresolved explicit local import: {}",
+                self.id(),
+                import.path.join("::")
             );
-            if targets.is_empty()
-                && import
-                    .path
-                    .first()
-                    .is_some_and(|p| matches!(p.as_str(), "crate" | "self" | "super"))
-                && !self.opaque_reference(&import.path)
-            {
-                self.diagnostics.insert(format!(
-                    "{}: unresolved explicit local import: {}",
-                    self.module,
-                    import.path.join("::")
-                ));
-            }
+            self.diagnostics.insert(message);
+        }
+        // A glob import names every module it resolves to, so it is not ambiguous.
+        if import.glob {
+            let owners = targets.iter().filter_map(Target::owner).collect();
+            self.add_edges(&owners);
+        } else {
             self.edge(targets);
         }
-        if let Some(scope) = self.scopes.last_mut() {
-            scope.extend(symbols);
+    }
+
+    /// The `use` items of a module, which were applied to its scope before the visit. Their
+    /// edges and unresolved paths are reported here.
+    fn module_use(&mut self, item: &syn::ItemUse) {
+        for import in use_imports(item) {
+            let targets = self
+                .modules
+                .import_targets(self.module, &self.blocks, &import, true);
+            self.import_edges(&import, targets);
         }
     }
+
+    /// Applies the `use` items of a block, once and in order. The block's names are declared
+    /// first, so that a name is visible throughout the block.
+    fn block_uses(&mut self, items: &[&syn::ItemUse]) {
+        let imports = items
+            .iter()
+            .flat_map(|item| use_imports(item))
+            .collect::<Vec<_>>();
+        for import in imports.iter().filter(|import| !import.glob) {
+            if let Some(alias) = &import.alias {
+                self.block_items()
+                    .explicit
+                    .entry(alias.clone())
+                    .or_default();
+            }
+        }
+        for import in imports {
+            let targets = self
+                .modules
+                .import_targets(self.module, &self.blocks, &import, true);
+            if import.glob {
+                let glob = self.modules.glob(&targets, self.env.settings);
+                self.block_items().add_glob(glob);
+            } else if let Some(alias) = &import.alias {
+                self.block_items()
+                    .explicit
+                    .entry(alias.clone())
+                    .or_default()
+                    .extend(targets.iter().cloned());
+            }
+            self.import_edges(&import, targets);
+        }
+    }
+
     fn condition(&mut self, expr: &syn::Expr) {
         match expr {
             syn::Expr::Let(binding) => {
@@ -284,6 +377,115 @@ impl References<'_> {
                 self.condition(&binary.right);
             }
             _ => self.visit_expr(expr),
+        }
+    }
+
+    /// Whether the scopes that a macro call sees name an unknown external glob.
+    fn macro_provider_unknown(&self, parts: &[String]) -> bool {
+        self.unknown_glob_visible()
+            || parts
+                .first()
+                .is_some_and(|name| name == "json" || name == "Token")
+    }
+
+    /// Records the references of a path in one namespace, and visits its qualified self and
+    /// the generic arguments of its segments.
+    fn path_in(&mut self, qself: Option<&syn::QSelf>, path: &syn::Path, namespace: Namespace) {
+        if let Some(qself) = qself {
+            self.visit_type(&qself.ty);
+        }
+        if path.leading_colon.is_none() {
+            self.reference(path, namespace);
+        }
+        for segment in &path.segments {
+            self.visit_path_arguments(&segment.arguments);
+        }
+    }
+
+    /// Resolves a path in one namespace, and records its edge or its unresolved-path diagnostic.
+    fn reference(&mut self, path: &syn::Path, namespace: Namespace) {
+        let parts = path
+            .segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect::<Vec<_>>();
+        let targets = self
+            .modules
+            .resolve(self.module, &self.blocks, &parts, Some(namespace));
+        if targets.is_empty() && self.opaque_reference(&parts) {
+            // Names defined by a trusted local item macro belong to its module.
+        } else if targets.is_empty()
+            && parts
+                .first()
+                .is_some_and(|p| matches!(p.as_str(), "crate" | "self" | "super"))
+        {
+            let message = format!(
+                "{}: unresolved explicit local path: {}",
+                self.id(),
+                parts.join("::")
+            );
+            self.diagnostics.insert(message);
+        }
+        self.edge(targets);
+    }
+
+    /// Visits a module-level item. Its module's `use` items are reported here.
+    pub(crate) fn module_item(&mut self, item: &Item) {
+        self.item(item, Context::Module);
+    }
+
+    fn item(&mut self, item: &Item, context: Context) {
+        match item {
+            // Child modules are visited separately in their own resolution environment.
+            Item::Mod(module) => {
+                if context == Context::Block {
+                    let message = format!(
+                        "{}: block-local module {} is unsupported",
+                        self.id(),
+                        module.ident
+                    );
+                    self.diagnostics.insert(message);
+                }
+                return;
+            }
+            // A block's `use` items are applied when the block begins, once.
+            Item::Use(item) => {
+                if context == Context::Module {
+                    self.module_use(item);
+                }
+                return;
+            }
+            _ => {}
+        }
+        let generics = match item {
+            Item::Enum(i) => Some(&i.generics),
+            Item::Struct(i) => Some(&i.generics),
+            Item::Union(i) => Some(&i.generics),
+            Item::Trait(i) => Some(&i.generics),
+            Item::Type(i) => Some(&i.generics),
+            Item::Impl(i) => Some(&i.generics),
+            _ => None,
+        };
+        if let Some(generics) = generics {
+            self.generic_scope(generics);
+            self.declare_generic(&syn::Ident::new("Self", proc_macro2::Span::call_site()));
+        }
+        visit::visit_item(self, item);
+        if generics.is_some() {
+            self.blocks.pop();
+        }
+    }
+
+    /// Visits the statics of a standard `thread_local!` body: their types and initializers.
+    fn standard_statics(&mut self, tokens: &proc_macro2::TokenStream) {
+        let Ok(statics) = thread_local_items::statics(tokens.clone()) else {
+            return;
+        };
+        for item in &statics {
+            if self.enabled(&item.attrs) {
+                self.visit_type(&item.ty);
+                self.visit_expr(&item.expr);
+            }
         }
     }
 }
@@ -303,22 +505,31 @@ impl<'ast> Visit<'ast> for References<'_> {
         }
     }
     fn visit_pat(&mut self, pat: &'ast syn::Pat) {
-        let previous = self.namespace;
-        self.namespace = Namespace::Value;
-        visit::visit_pat(self, pat);
-        self.namespace = previous;
-    }
-    fn visit_pat_struct(&mut self, pat: &'ast syn::PatStruct) {
-        let previous = self.namespace;
-        self.namespace = Namespace::Type;
-        visit::visit_pat_struct(self, pat);
-        self.namespace = previous;
+        match pat {
+            syn::Pat::Path(pat) => self.path_in(pat.qself.as_ref(), &pat.path, Namespace::Value),
+            syn::Pat::TupleStruct(pat) => {
+                self.path_in(pat.qself.as_ref(), &pat.path, Namespace::Value);
+                for elem in &pat.elems {
+                    self.visit_pat(elem);
+                }
+            }
+            syn::Pat::Struct(pat) => {
+                self.path_in(pat.qself.as_ref(), &pat.path, Namespace::Type);
+                for field in &pat.fields {
+                    self.visit_pat(&field.pat);
+                }
+            }
+            _ => visit::visit_pat(self, pat),
+        }
     }
     fn visit_expr_struct(&mut self, expr: &'ast syn::ExprStruct) {
-        let previous = self.namespace;
-        self.namespace = Namespace::Type;
-        visit::visit_expr_struct(self, expr);
-        self.namespace = previous;
+        self.path_in(expr.qself.as_ref(), &expr.path, Namespace::Type);
+        for field in &expr.fields {
+            self.visit_field_value(field);
+        }
+        if let Some(rest) = &expr.rest {
+            self.visit_expr(rest);
+        }
     }
     fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
         if self.enabled(ast::impl_attrs(item)) {
@@ -340,82 +551,18 @@ impl<'ast> Visit<'ast> for References<'_> {
             visit::visit_field_value(self, field);
         }
     }
+    /// A block-level item. Module items go through `module_item`.
     fn visit_item(&mut self, item: &'ast Item) {
-        // The attributes of the item were evaluated before the visit: by the loader for a
-        // module item, and by visit_block for a block item.
-        // Child modules are visited separately in their own resolution environment.
-        if let Item::Mod(module) = item {
-            if !self.scopes.is_empty() {
-                self.diagnostics.insert(format!(
-                    "{}: block-local module {} is unsupported",
-                    self.module, module.ident
-                ));
-            }
-            return;
-        }
-        let generics = match item {
-            Item::Enum(i) => Some(&i.generics),
-            Item::Struct(i) => Some(&i.generics),
-            Item::Union(i) => Some(&i.generics),
-            Item::Trait(i) => Some(&i.generics),
-            Item::Type(i) => Some(&i.generics),
-            Item::Impl(i) => Some(&i.generics),
-            _ => None,
-        };
-        if let Some(generics) = generics {
-            self.generic_scope(generics);
-            self.shadow(&syn::Ident::new("Self", proc_macro2::Span::call_site()));
-        }
-        visit::visit_item(self, item);
-        if generics.is_some() {
-            self.scopes.pop();
-        }
-    }
-    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
-        self.use_item(item);
+        self.item(item, Context::Block);
     }
     fn visit_path(&mut self, path: &'ast syn::Path) {
-        if path.leading_colon.is_none() {
-            let parts = path
-                .segments
-                .iter()
-                .map(|s| s.ident.to_string())
-                .collect::<Vec<_>>();
-            let targets = resolve_path(
-                self.module,
-                &parts,
-                self.tables,
-                Some(&self.symbols()),
-                Some(self.namespace),
-            );
-            if targets.is_empty() && self.opaque_reference(&parts) {
-                // Names defined by a trusted local item macro belong to its module.
-            } else if targets.is_empty()
-                && parts
-                    .first()
-                    .is_some_and(|p| matches!(p.as_str(), "crate" | "self" | "super"))
-            {
-                self.diagnostics.insert(format!(
-                    "{}: unresolved explicit local path: {}",
-                    self.module,
-                    parts.join("::")
-                ));
-            }
-            self.edge(targets);
-        }
-        visit::visit_path(self, path);
+        self.path_in(None, path, Namespace::Type);
     }
     fn visit_expr_path(&mut self, path: &'ast syn::ExprPath) {
-        let previous = self.namespace;
-        self.namespace = Namespace::Value;
-        visit::visit_expr_path(self, path);
-        self.namespace = previous;
+        self.path_in(path.qself.as_ref(), &path.path, Namespace::Value);
     }
     fn visit_type_path(&mut self, path: &'ast syn::TypePath) {
-        let previous = self.namespace;
-        self.namespace = Namespace::Type;
-        visit::visit_type_path(self, path);
-        self.namespace = previous;
+        self.path_in(path.qself.as_ref(), &path.path, Namespace::Type);
     }
     fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
         self.generic_scope(&item.sig.generics);
@@ -426,12 +573,10 @@ impl<'ast> Visit<'ast> for References<'_> {
             }
         }
         self.visit_block(&item.block);
-        self.scopes.pop();
+        self.blocks.pop();
     }
+    // The attributes of an associated item were evaluated by visit_impl_item and visit_trait_item.
     fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
-        if !self.enabled(&item.attrs) {
-            return;
-        }
         self.generic_scope(&item.sig.generics);
         self.visit_signature(&item.sig);
         for arg in &item.sig.inputs {
@@ -440,12 +585,9 @@ impl<'ast> Visit<'ast> for References<'_> {
             }
         }
         self.visit_block(&item.block);
-        self.scopes.pop();
+        self.blocks.pop();
     }
     fn visit_trait_item_fn(&mut self, item: &'ast syn::TraitItemFn) {
-        if !self.enabled(&item.attrs) {
-            return;
-        }
         self.generic_scope(&item.sig.generics);
         self.visit_signature(&item.sig);
         for arg in &item.sig.inputs {
@@ -456,10 +598,10 @@ impl<'ast> Visit<'ast> for References<'_> {
         if let Some(block) = &item.default {
             self.visit_block(block);
         }
-        self.scopes.pop();
+        self.blocks.pop();
     }
     fn visit_block(&mut self, block: &'ast syn::Block) {
-        self.scopes.push(Symbols::new());
+        self.blocks.push(Block::default());
         // Each block item's attributes are evaluated once here; a disabled item is skipped entirely.
         let active = block
             .stmts
@@ -469,26 +611,44 @@ impl<'ast> Visit<'ast> for References<'_> {
                 _ => true,
             })
             .collect::<Vec<_>>();
-        // Block items and imports are visible throughout the block, including before their declaration.
-        for (statement, _) in block.stmts.iter().zip(&active).filter(|(_, on)| **on) {
+        let live = block
+            .stmts
+            .iter()
+            .zip(&active)
+            .filter(|(_, on)| **on)
+            .map(|(statement, _)| statement)
+            .collect::<Vec<_>>();
+        // Block items are visible throughout the block, including before their declaration.
+        for statement in &live {
             if let syn::Stmt::Item(item) = statement
-                && let Some((name, target)) = declaration(item, self.module)
+                && !matches!(item, Item::Mod(_))
             {
-                self.scopes
-                    .last_mut()
-                    .unwrap()
-                    .insert(name, BTreeSet::from([target]));
+                for (namespace, name, target) in
+                    declarations(item, self.module, &self.modules.layout.ids)
+                {
+                    if let Some(block) = self.blocks.last_mut() {
+                        block
+                            .locals
+                            .insert((namespace, name), LocalBinding::Item(target));
+                    }
+                }
             }
         }
-        for (statement, _) in block.stmts.iter().zip(&active).filter(|(_, on)| **on) {
-            if let syn::Stmt::Item(Item::Use(item)) = statement {
-                self.use_item(item);
+        let uses = live
+            .iter()
+            .filter_map(|statement| match statement {
+                syn::Stmt::Item(Item::Use(item)) => Some(item),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        self.block_uses(&uses);
+        for statement in live {
+            // The block's `use` items were applied above.
+            if !matches!(statement, syn::Stmt::Item(Item::Use(_))) {
+                self.visit_stmt(statement);
             }
         }
-        for (statement, _) in block.stmts.iter().zip(&active).filter(|(_, on)| **on) {
-            self.visit_stmt(statement);
-        }
-        self.scopes.pop();
+        self.blocks.pop();
     }
     fn visit_local(&mut self, local: &'ast syn::Local) {
         if !self.enabled(&local.attrs) {
@@ -505,50 +665,50 @@ impl<'ast> Visit<'ast> for References<'_> {
         self.bind_pattern(&local.pat);
     }
     fn visit_expr_closure(&mut self, expr: &'ast syn::ExprClosure) {
-        self.scopes.push(Symbols::new());
+        self.blocks.push(Block::default());
         for pat in &expr.inputs {
             self.visit_pat(pat);
             self.bind_pattern(pat);
         }
         self.visit_return_type(&expr.output);
         self.visit_expr(&expr.body);
-        self.scopes.pop();
+        self.blocks.pop();
     }
     fn visit_expr_for_loop(&mut self, expr: &'ast syn::ExprForLoop) {
         self.visit_expr(&expr.expr);
-        self.scopes.push(Symbols::new());
+        self.blocks.push(Block::default());
         self.visit_pat(&expr.pat);
         self.bind_pattern(&expr.pat);
         self.visit_block(&expr.body);
-        self.scopes.pop();
+        self.blocks.pop();
     }
     fn visit_expr_if(&mut self, expr: &'ast syn::ExprIf) {
-        self.scopes.push(Symbols::new());
+        self.blocks.push(Block::default());
         self.condition(&expr.cond);
         self.visit_block(&expr.then_branch);
-        self.scopes.pop();
+        self.blocks.pop();
         if let Some((_, otherwise)) = &expr.else_branch {
             self.visit_expr(otherwise);
         }
     }
     fn visit_expr_while(&mut self, expr: &'ast syn::ExprWhile) {
-        self.scopes.push(Symbols::new());
+        self.blocks.push(Block::default());
         self.condition(&expr.cond);
         self.visit_block(&expr.body);
-        self.scopes.pop();
+        self.blocks.pop();
     }
     fn visit_arm(&mut self, arm: &'ast syn::Arm) {
         if !self.enabled(&arm.attrs) {
             return;
         }
-        self.scopes.push(Symbols::new());
+        self.blocks.push(Block::default());
         self.visit_pat(&arm.pat);
         self.bind_pattern(&arm.pat);
         if let Some((_, guard)) = &arm.guard {
             self.visit_expr(guard);
         }
         self.visit_expr(&arm.body);
-        self.scopes.pop();
+        self.blocks.pop();
     }
     fn visit_field(&mut self, field: &'ast syn::Field) {
         if self.enabled(&field.attrs) {
@@ -571,20 +731,27 @@ impl<'ast> Visit<'ast> for References<'_> {
             .contains(&macro_path_text(&item.mac.path))
         {
             let local_macro = local_macro_targets(
+                &self.modules,
+                self.textual,
                 self.module,
                 &item.mac.path,
-                self.tables,
-                self.textual,
-                Some(&self.symbols()),
+                &self.blocks,
             );
             if is_local_macro(&local_macro) {
                 self.edge(local_macro);
+            } else if thread_local_items::provider(
+                &item.mac.path,
+                &self.modules.layout.uses[self.module],
+            )
+            .is_some()
+            {
+                self.standard_statics(&item.mac.tokens);
             }
             return;
         }
-        self.diagnostics.insert(format!(
+        let message = format!(
             "{}: item macro expansion is unsupported: {}",
-            self.module,
+            self.id(),
             item.mac
                 .path
                 .segments
@@ -592,7 +759,8 @@ impl<'ast> Visit<'ast> for References<'_> {
                 .map(|s| s.ident.to_string())
                 .collect::<Vec<_>>()
                 .join("::")
-        ));
+        );
+        self.diagnostics.insert(message);
     }
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
         let parts = mac
@@ -602,11 +770,11 @@ impl<'ast> Visit<'ast> for References<'_> {
             .map(|s| s.ident.to_string())
             .collect::<Vec<_>>();
         let local_macro = local_macro_targets(
+            &self.modules,
+            self.textual,
             self.module,
             &mac.path,
-            self.tables,
-            self.textual,
-            Some(&self.symbols()),
+            &self.blocks,
         );
         if is_local_macro(&local_macro) {
             self.edge(local_macro);
@@ -616,18 +784,16 @@ impl<'ast> Visit<'ast> for References<'_> {
                 .trusted_macros
                 .contains(&macro_path_text(&mac.path))
             {
-                self.diagnostics.insert(format!(
+                let message = format!(
                     "{}: local macro expansion is unsupported: {}",
-                    self.module,
+                    self.id(),
                     parts.join("::")
-                ));
+                );
+                self.diagnostics.insert(message);
             }
             return;
         }
-        let previous_namespace = self.namespace;
-        self.namespace = Namespace::Macro;
-        self.visit_path(&mac.path);
-        self.namespace = previous_namespace;
+        self.path_in(None, &mac.path, Namespace::Macro);
         if self
             .env
             .settings
@@ -653,49 +819,39 @@ impl<'ast> Visit<'ast> for References<'_> {
                     .iter()
                     .any(|path| crate::intrinsic::macro_name(path).is_none())
             {
-                self.diagnostics.insert(format!(
+                let message = format!(
                     "{}: unsupported macro provider: {}",
-                    self.module,
+                    self.id(),
                     parts.join("::")
-                ));
+                );
+                self.diagnostics.insert(message);
                 return;
             }
             names.into_iter().next().unwrap().to_owned()
         } else if parts.len() > 1 {
             let known_local = mac.path.leading_colon.is_none()
                 && self
-                    .tables
-                    .get(self.module)
-                    .is_some_and(|table| table.contains_key(&parts[0]));
+                    .modules
+                    .scope(self.module)
+                    .is_some_and(|scope| scope.binds_any(&parts[0]));
             if known_local || crate::intrinsic::macro_name(&parts).is_none() {
-                self.diagnostics.insert(format!(
+                let message = format!(
                     "{}: qualified macro expansion is unsupported: {}",
-                    self.module,
+                    self.id(),
                     parts.join("::")
-                ));
+                );
+                self.diagnostics.insert(message);
                 return;
             }
             crate::intrinsic::macro_name(&parts).unwrap().to_owned()
         } else {
-            let mut symbols = self.tables.get(self.module).cloned().unwrap_or_default();
-            symbols.extend(self.symbols());
-            let unknown_glob = symbols.get("$external_globs").is_some_and(|targets| {
-                targets.iter().any(|target| {
-                    matches!(target, Target::External(path)
-                        if !path.first().is_some_and(|p| p == "std" || p == "core" || p == "alloc")
-                            && !self.env.settings.trusted_globs.contains(&path.join("::")))
-                })
-            });
-            if unknown_glob
-                || parts
-                    .first()
-                    .is_some_and(|name| name == "json" || name == "Token")
-            {
-                self.diagnostics.insert(format!(
+            if self.macro_provider_unknown(&parts) {
+                let message = format!(
                     "{}: macro provider cannot be established: {}",
-                    self.module,
+                    self.id(),
                     parts.join("::")
-                ));
+                );
+                self.diagnostics.insert(message);
                 return;
             }
             parts.last().cloned().unwrap_or_default()
@@ -707,10 +863,11 @@ impl<'ast> Visit<'ast> for References<'_> {
                 }
                 return;
             }
-            self.diagnostics.insert(format!(
+            let message = format!(
                 "{}: unsupported serde_json::json! argument grammar",
-                self.module
-            ));
+                self.id()
+            );
+            self.diagnostics.insert(message);
             return;
         }
         if name == "Token" {
@@ -737,13 +894,13 @@ impl<'ast> Visit<'ast> for References<'_> {
             }
             if let Ok(Matches(expr, pat, guard)) = syn::parse2(mac.tokens.clone()) {
                 self.visit_expr(&expr);
-                self.scopes.push(Symbols::new());
+                self.blocks.push(Block::default());
                 self.visit_pat(&pat);
                 self.bind_pattern(&pat);
                 if let Some(guard) = guard {
                     self.visit_expr(&guard);
                 }
-                self.scopes.pop();
+                self.blocks.pop();
                 return;
             }
         }
@@ -809,10 +966,8 @@ impl<'ast> Visit<'ast> for References<'_> {
         ) {
             return;
         }
-        self.diagnostics.insert(format!(
-            "{}: macro token analysis is unsupported: {name}",
-            self.module
-        ));
+        let message = format!("{}: macro token analysis is unsupported: {name}", self.id());
+        self.diagnostics.insert(message);
     }
 }
 
@@ -827,11 +982,11 @@ fn macro_path_text(path: &syn::Path) -> String {
 
 /// Targets a macro invocation path resolves to in the macro namespace.
 pub(crate) fn local_macro_targets(
-    module: &str,
+    modules: &Modules,
+    textual: &Textual,
+    module: usize,
     path: &syn::Path,
-    tables: &Tables,
-    textual: &Tables,
-    local: Option<&Symbols>,
+    blocks: &[Block],
 ) -> BTreeSet<Target> {
     let mut parts = path
         .segments
@@ -841,17 +996,17 @@ pub(crate) fn local_macro_targets(
     if path.leading_colon.is_some() {
         parts.insert(0, String::new());
     }
-    let targets = resolve_path(module, &parts, tables, local, Some(Namespace::Macro));
+    let targets = modules.resolve(module, blocks, &parts, Some(Namespace::Macro));
     if is_local_macro(&targets) || parts.len() != 1 || path.leading_colon.is_some() {
         return targets;
     }
     // Bare names also see textual-scope macro_rules of this module and its ancestors.
     let mut scope = Some(module);
     while let Some(current) = scope {
-        if let Some(found) = textual.get(current).and_then(|t| t.get(&parts[0])) {
+        if let Some(found) = textual.get(current).and_then(|table| table.get(&parts[0])) {
             return found.clone();
         }
-        scope = current.rsplit_once("::").map(|(parent, _)| parent);
+        scope = modules.layout.parents.get(current).copied().flatten();
     }
     targets
 }
@@ -866,12 +1021,12 @@ fn is_local_macro(targets: &BTreeSet<Target>) -> bool {
 /// Its expansion may define items, so unresolved names there are references to the module.
 pub(crate) fn opaque_modules(
     sources: &[loader::Source],
-    tables: &Tables,
-    textual: &Tables,
+    modules: &Modules,
+    textual: &Textual,
     env: Env,
-) -> BTreeSet<String> {
+) -> BTreeSet<usize> {
     let mut opaque = BTreeSet::new();
-    for source in sources {
+    for (module, source) in sources.iter().enumerate() {
         for (item, _) in source.items() {
             let Item::Macro(item) = item else { continue };
             if item.mac.path.is_ident("macro_rules")
@@ -883,13 +1038,13 @@ pub(crate) fn opaque_modules(
                 continue;
             }
             if is_local_macro(&local_macro_targets(
-                &source.module.id,
-                &item.mac.path,
-                tables,
+                modules,
                 textual,
-                None,
+                module,
+                &item.mac.path,
+                &[],
             )) {
-                opaque.insert(source.module.id.clone());
+                opaque.insert(module);
             }
         }
     }

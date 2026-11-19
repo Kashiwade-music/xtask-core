@@ -1122,3 +1122,116 @@ fn modules_are_sorted_with_parents_first() {
         Some("crate::a")
     );
 }
+
+#[test]
+fn declared_type_does_not_hide_glob_value() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "\nmod a { \n pub fn X() {} }\nmod b { \n use crate::a::*; type X = (); fn f() { X(); } }\n",
+        )],
+        Options::default(),
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(edges(&result).contains(&("crate::b", "crate::a")));
+}
+
+#[test]
+fn shadowed_name_is_not_forwarded() {
+    let forward = graph(
+        &[(
+            "lib.rs",
+            "\nmod a { \n pub fn f() {} }\nmod b { \n pub use crate::a::*; pub fn f() {} }\nmod c { \n use crate::b::*; fn g() { f(); } }\n",
+        )],
+        Options::default(),
+    );
+    assert!(!edges(&forward).contains(&("crate::c", "crate::a")));
+    assert!(edges(&forward).contains(&("crate::c", "crate::b")));
+    let reversed = graph(
+        &[(
+            "lib.rs",
+            "\nmod c { \n use crate::b::*; fn g() { f(); } }\nmod b { \n pub use crate::a::*; pub fn f() {} }\nmod a { \n pub fn f() {} }\n",
+        )],
+        Options::default(),
+    );
+    assert!(!edges(&reversed).contains(&("crate::c", "crate::a")));
+}
+
+#[test]
+fn three_level_reexport_chain() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "\nmod a { \n pub fn X() {} }\nmod b { \n pub use crate::a::*; }\nmod c { \n pub use crate::b::*; }\nmod d { \n use crate::c::*; fn f() { X(); } }\n",
+        )],
+        Options::default(),
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(edges(&result).contains(&("crate::d", "crate::a")));
+}
+
+#[test]
+fn external_glob_reexport_keeps_uncertainty() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "\nmod p { \n pub use ext::*; }\nmod c { \n use crate::p::*; #[derive(Clone)] struct S; }\n",
+        )],
+        Options::default(),
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.starts_with("crate::c:") && d.contains("Clone")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn block_glob_does_not_hide_module_glob() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "\nuse foo::*;\nfn f() { use std::fmt::*; #[derive(Clone)] struct S; }\n",
+        )],
+        Options::default(),
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.starts_with("crate:") && d.contains("Clone")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn glob_uses_every_resolved_module() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "\nmod a { \n pub fn f() {} }\nmod b { \n pub fn g() {} }\nmod p { \n pub use crate::a as pick;\n pub use crate::b as pick; }\nmod c { \n use crate::p::pick::*; fn h() { f(); g(); } }\n",
+        )],
+        Options::default(),
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(edges(&result).contains(&("crate::c", "crate::a")));
+    assert!(edges(&result).contains(&("crate::c", "crate::b")));
+}
+
+#[test]
+fn block_use_is_processed_once() {
+    let result = graph(
+        &[("lib.rs", "\nmod a { \n }\nfn f() { use crate::a::f; }\n")],
+        Options::default(),
+    );
+    let count = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.contains("unresolved explicit local import"))
+        .count();
+    assert_eq!(count, 1, "{:?}", result.diagnostics);
+}
