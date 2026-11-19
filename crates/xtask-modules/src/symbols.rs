@@ -268,8 +268,16 @@ impl Modules<'_> {
             let mut next = BTreeSet::new();
             for target in targets {
                 match target {
+                    // A segment that more segments follow names a module or a type: a
+                    // function or constant of the same name, such as a re-exported
+                    // `fn button` beside `mod button`, has no path below it.
                     Target::Module(owner) => {
-                        next.extend(self.member(owner, name, if last { namespace } else { None }));
+                        let wanted = if last {
+                            namespace
+                        } else {
+                            Some(Namespace::Type)
+                        };
+                        next.extend(self.member(owner, name, wanted));
                     }
                     // Associated functions and variants belong to the item's module.
                     Target::Item(owner, own) => {
