@@ -149,5 +149,9 @@ pub(crate) struct Piece {
 
 /// 段を配置する。layering → chains → order → position → route の順。
 pub(crate) fn run_level(input: &LevelInput) -> Result<LevelOutput, crate::LayoutError> {
-    todo!("L7")
+    let layers = crate::layering::assign(input)?;
+    let chains = crate::chains::build(input, &layers)?;
+    let order = crate::order::arrange(&chains)?;
+    let y = crate::position::vertical(&chains, &order)?;
+    crate::route::finish(input, &chains, &order, &y)
 }
