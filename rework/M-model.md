@@ -126,6 +126,17 @@
 | `visibility_checks_stale_providers_consumers_and_all_declared_edges` | xtask-workspace から消す。C2b が xtask-core に、同じ fixture・同じ期待値（誤り 3 件と、その 3 つの文）で作り直す（付属書 C の C2b） |
 | `registry_patch_workspace_edges_are_resolved_by_package_id` | 辺の期待値（2 本、どちらも `to == "core"`）と、`Cargo.lock` が変わらないことの期待値は変えない。`Cargo.lock` を消した後の誤りの文の期待値だけ、`cannot resolve registry dependency identity` から `cargo metadata failed` に変える（lock が無いと `load` の metadata が失敗するため）。`Cargo.lock` が作られないことの期待値は変えない |
 | `resolved_features` を呼ぶ試験 | 同じ fixture・同じ期待値で、`Workspace::load(..)?.features(&analysis)` を見る形に書き換える |
+| `analysis_settings_parse_cargo_cfg_and_trusted_expansions_with_other_rules`（policy） | 契約の変更（W-B3、W-S3：`all_features` と `features` の併用と、名前の重複を拒む）。入力から `all_features=true` の行を消し、`trusted_attributes` を `['macro_lib::second','macro_lib::first']`、`trusted_macros` を `['proptest','prop_assert']` にする（重複を除き、並べ替えの確認は残す）。期待値は変えず、`features` が `Features::Selected { features: {"app/left", "right"}, default_features: false }` であることを足す。拒む側は `all_features_cannot_combine_with_explicit_features` と、下の `duplicate_trusted_names_rejected` が確かめる |
+| `feature_closure_handles_cycles_dependency_entries_and_unknown_requests`（workspace） | 削除。確かめていた `Package::active_features` と `Package.features` を消した（B7）。feature の閉包は Cargo の resolve が求める（`features` の試験が確かめる） |
+| `diagram_targets_default_to_all_and_select_library_like_kinds`（workspace） | 分割。読込みの部分（既定が All、`all`・`lib`・`lib-bin` の名前、誤りの 3 つの入力）は policy の `diagram_targets_default_to_all_and_parse_by_name` に、期待値を変えずに移す。`includes` の部分（kind の組ごとの選択）は `DiagramTargets::includes` を消したので、xtask-core の `selected` の試験 `selection_by_diagram_targets`（付属書 C の C2b）に、同じ組と同じ期待値で移す |
+| `svg_output_defaults_with_and_without_other_policy_tables`（workspace） | 契約の変更（設計書 5.1 節、DEC-2）。policy の `diagram_output_defaults_with_and_without_other_policy_tables` にし、既定値の期待値を `architecture` から `target/xtask/architecture.xtaskmap` に、読む field を `diagrams().output()` に変える。入力の 5 つは変えない |
+| `svg_output_accepts_relative_absolute_and_space_containing_paths`（workspace） | 契約の変更（最上位の `output` を `[diagrams] output` に移した）。policy の `diagram_output_accepts_relative_absolute_and_space_containing_paths` にし、`output='..'` を `[diagrams]\noutput='..'` に替える。path の期待値は変えない |
+| `svg_output_rejects_blank_paths_wrong_types_and_unknown_fields`（workspace） | 契約の変更（同上）。policy の `diagram_output_rejects_blank_paths_wrong_types_and_unknown_fields` にし、拒む入力を `[diagrams]` の下の `output` に替える（`[output]
+path='architecture'` は `[diagrams.output]
+path='architecture'` に、`output='architecture'
+unknown=true` は `[diagrams]
+output='architecture'
+unknown=true` に替える）。最後の「`Policy` を直接作って `validate` を呼ぶ」部分は、field と `validate` を private にしたので消す（空白だけの path は TOML の入力の側で確かめている）。最上位の `output` が拒まれることは `output_moved` が確かめる |
 | 消した型・関数（policy の型、`check_visibility` 以外）を使う試験 | 新しい API に書き換える。期待値は変えない |
 
 ### 試験（足すもの）
@@ -138,6 +149,7 @@
 - `output_moved`：最上位の `output` が誤りになり、その文に `[diagrams] output` を含む。
 - `bare_wildcard_exception_rejected`：例外の `path = "*"` が誤りになり、`path = "src/*"` は受け付ける。
 - `target_kind_library`：`TargetKind::ProcMacro.is_library()` が true になる。
+- `duplicate_trusted_names_rejected`：`[analysis]\ntrusted_macros=['proptest','proptest']` が誤りになる。
 - `inactive_optional_path_dependency_is_an_edge`：member `app` が member `core` に `optional = true` の path の依存を持ち、feature で有効にしていないとき、`edges` に `app → core` がある。
 - `selection_run_only_when_needed`：`needs_selection_run` が、`Features::All` で target 無しなら false、`AnalysisSettings::default()`（既定の feature）なら true、`Features::All` で target 有りなら true。
 - `bad_feature_fails_only_features`：存在しない feature を選んだとき、`load` は成功し、`features` が `Err`。
@@ -170,7 +182,14 @@ cargo clippy -p xtask-policy --all-targets -- -D warnings
 4. **shebang の判定（B9）。** `starts_inner_attribute` の空白の判定を、Rust の空白（`' '`、`'\t'`、`'\n'`、`'\r'`、U+000B、U+000C、U+0085、U+200E、U+200F、U+2028、U+2029）に限る。
 5. **span の記録は、この crate では解放しない。** `proc_macro2::extra::invalidate_current_thread_spans()` は同じ thread の全 span を無効にし、呼出し側の AST を壊すので、library の中で呼ばない。span の記録は thread ごとにあり、解析の job の thread（付属書 C の C2b の `parallel::map`）と style の thread（C1）が終わるときに解放される。
 6. **探索の範囲（B8）。** `rust_files` は、`Cargo.toml` を含む directory（入れ子の別の package）に下りない。
-7. **未使用の API の削除。** `code_line_count` の寛容な fallback（使っているのが試験だけのもの）を消す。
+7. **寛容な fallback の削除。** `code_line_count` の、tokenize できないときに空でない行を数える fallback を消す。`pub fn code_line_count(source: &str) -> Result<usize, String>` を、今の `try_code_line_count` の本体にする（`try_code_line_count` という名前は消す。呼出し元は `check_files` と試験だけ）。
+
+### 既存の試験の移行
+
+| 試験 | 移行 |
+|---|---|
+| `tests/source.rs` の `assert_eq!(code_line_count(source), n)` の形の assert（全件） | API の追従：`assert_eq!(code_line_count(source), Ok(n))` にする。数は変えない |
+| `malformed_or_unreadable_files_are_errors`（`tests/source.rs`） | 契約の変更（手順 7）。`assert_eq!(code_line_count("fn main() {\nlet s = \"unterminated\n"), 2)` を、`code_line_count(..)` が `Err` で、文に `cannot tokenize` を含む、に替える。他の assert は変えない |
 
 ### 試験
 

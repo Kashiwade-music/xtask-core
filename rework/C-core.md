@@ -111,6 +111,7 @@ cargo clippy -p xtask-style --all-targets -- -D warnings
 - `dev/xtask/policy/workspace.toml`（M3c が所有した `trusted_macros` の行を除く）
 - `architecture/`（削除）
 - `.cargo/config.toml`
+- `.gitattributes`
 
 ### 既存の試験の移行（C2 全体）
 
@@ -368,7 +369,10 @@ cargo clippy -p xtask-style --all-targets -- -D warnings
 - `parallel::tests::every_input_may_panic`：3 個の入力がすべて panic しても、結果は 3 個の `Err`。
 - `parallel::tests::send_only_results`：`R = std::cell::Cell<u8>`（`Send` だが `Sync` でない）で compile でき、結果が入力の順に並ぶ。
 - `visibility_checks_stale_providers_consumers_and_all_declared_edges`：旧い xtask-workspace の同名の試験（`git show e7eb600:crates/xtask-workspace/src/tests.rs`）を、同じ fixture・同じ期待値（誤り 3 件と 3 つの文）で、`Workspace::load` と `visibility` を使って書く。
-- `selection_by_diagram_targets`：`selected` が、`Lib` で `[Bin]` に false、`LibBin` で `[Bin]` に true、`Lib` で `[ProcMacro]` に true。
+- `selection_by_diagram_targets`（旧い `diagram_targets_default_to_all_and_select_library_like_kinds` の `includes` の部分を移したもの。付属書 M の M1 の移行の表）：
+  - `[Lib]`、`[Cdylib, Rlib]`、`[ProcMacro]` は、`All`・`Lib`・`LibBin` のすべてで true。
+  - `[Bin]` は `All` と `LibBin` で true、`Lib` で false。
+  - `[Test]`、`[Bench]`、`[Example]`、`[CustomBuild]` は、`All` で true、`Lib` と `LibBin` で false。
 
 #### 確認
 
@@ -394,8 +398,9 @@ cargo test -p xtask-core --lib
    - `missing_policy_uses_default_in_run_and_analyze`：policy のファイルが無い一時のリポジトリで、`run` と `analyze` のどちらも成功する。
    - `custom_target_roots_are_counted`：`[[bin]] name = "tool" path = "tools/custom.rs" required-features = ["off"]`（feature は無効）の `tools/custom.rs` が 4 code 行、`max_code_lines = 3` のとき、`custom.rs` の行数の誤りが報告される。同じ file に構文の誤りを足しても、行数の誤りが報告される。
 3. **policy のファイル。** `dev/xtask/policy/workspace.toml` を次の内容にする（M3c の行を除く）。
-   - 最上位の `output` を消す。
+   - 最上位の `output = "architecture"` を消す。`[diagrams] output` は書かない（既定の `target/xtask/architecture.xtaskmap` を使う）。W1 以後の xtask-policy はこの行を拒むが、このファイルを読むのは W5 の `check` だけなので、ここで直せば間に合う。
    - `visible_to` を設計書 4.2 節の表に替える。
+   - `.gitattributes` から `crates/xtask-layout/vendor/elkjs/elk.bundled.js` の行を消す（L1 が vendor を消した）。
 4. **基準の取得の script の削除（AC-1）。**
    - `dev/layout-baseline/capture/tee.cjs` と `node-tee.cmd` を消す。
    - `dev/layout-baseline/README.md` の「取得方法」の節を、次の 1 文に替える：「Node.js と elkjs を使って取得した。改修で Node.js を削除したため、再取得の手段は無い。取得に使った script は commit `e7eb600` にある」。
