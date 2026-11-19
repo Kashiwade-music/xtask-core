@@ -139,86 +139,11 @@ pub(crate) fn expansion_diagnostics(
 ) -> Result<Vec<String>, String> {
     let mut diagnostics = Vec::new();
     for meta in metas {
-        let name = meta
-            .path()
-            .segments
-            .iter()
-            .map(|s| s.ident.to_string())
-            .collect::<Vec<_>>()
-            .join("::");
+        let name = path_text(meta.path());
         if name == "derive" {
-            let Meta::List(list) = meta else {
-                return Err("invalid derive attribute".into());
-            };
-            let derives = list
-                .parse_args_with(Punctuated::<syn::Path, Token![,]>::parse_terminated)
-                .map_err(|e| e.to_string())?;
-            for derive in derives {
-                let path = derive
-                    .segments
-                    .iter()
-                    .map(|s| s.ident.to_string())
-                    .collect::<Vec<_>>();
-                let derive = path.join("::");
-                if !intrinsic_derives.contains(&derive)
-                    && !crate::intrinsic::derive(&path)
-                    && !env.settings.trusted_derives.contains(&derive)
-                {
-                    diagnostics.push(format!("derive macro expansion is unsupported: {derive}"));
-                }
-            }
-        } else if !matches!(
-            name.as_str(),
-            "cfg"
-                | "path"
-                | "doc"
-                | "allow"
-                | "warn"
-                | "deny"
-                | "forbid"
-                | "expect"
-                | "deprecated"
-                | "must_use"
-                | "repr"
-                | "inline"
-                | "cold"
-                | "track_caller"
-                | "test"
-                | "ignore"
-                | "should_panic"
-                | "no_mangle"
-                | "export_name"
-                | "link_name"
-                | "link"
-                | "link_section"
-                | "used"
-                | "non_exhaustive"
-                | "no_implicit_prelude"
-                | "macro_export"
-                | "macro_use"
-                | "automatically_derived"
-                | "unsafe"
-                | "no_std"
-                | "no_main"
-                | "recursion_limit"
-                | "type_length_limit"
-                | "crate_name"
-                | "crate_type"
-                | "feature"
-                | "instruction_set"
-                | "target_feature"
-                | "default"
-                | "global_allocator"
-                | "windows_subsystem"
-                | "panic_handler"
-                | "proc_macro"
-                | "proc_macro_derive"
-                | "proc_macro_attribute"
-                | "debugger_visualizer"
-                | "collapse_debuginfo"
-                | "no_builtins"
-                | "naked"
-        ) && !is_tool_attribute(meta.path())
+            derive_diagnostics(meta, env, intrinsic_derives, &mut diagnostics)?;
+        } else if !is_modeled_attribute(&name)
+            && !is_tool_attribute(meta.path())
             && !env.settings.trusted_attributes.contains(&name)
         {
             diagnostics.push(format!("attribute macro expansion is unsupported: {name}"));
@@ -226,6 +151,102 @@ pub(crate) fn expansion_diagnostics(
     }
     Ok(diagnostics)
 }
+
+/// The path joined with `::`, as written.
+fn path_text(path: &syn::Path) -> String {
+    path.segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+/// Adds a diagnostic for each derive of a `derive` attribute that is neither intrinsic nor trusted.
+fn derive_diagnostics(
+    meta: &Meta,
+    env: Env,
+    intrinsic_derives: &std::collections::BTreeSet<String>,
+    diagnostics: &mut Vec<String>,
+) -> Result<(), String> {
+    let Meta::List(list) = meta else {
+        return Err("invalid derive attribute".into());
+    };
+    let derives = list
+        .parse_args_with(Punctuated::<syn::Path, Token![,]>::parse_terminated)
+        .map_err(|e| e.to_string())?;
+    for derive in derives {
+        let path = derive
+            .segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect::<Vec<_>>();
+        let derive = path.join("::");
+        if !intrinsic_derives.contains(&derive)
+            && !crate::intrinsic::derive(&path)
+            && !env.settings.trusted_derives.contains(&derive)
+        {
+            diagnostics.push(format!("derive macro expansion is unsupported: {derive}"));
+        }
+    }
+    Ok(())
+}
+
+/// Whether the analysis models an attribute by name, so that it gets no expansion diagnostic.
+fn is_modeled_attribute(name: &str) -> bool {
+    MODELED_ATTRIBUTES.contains(&name)
+}
+
+const MODELED_ATTRIBUTES: &[&str] = &[
+    "cfg",
+    "path",
+    "doc",
+    "allow",
+    "warn",
+    "deny",
+    "forbid",
+    "expect",
+    "deprecated",
+    "must_use",
+    "repr",
+    "inline",
+    "cold",
+    "track_caller",
+    "test",
+    "ignore",
+    "should_panic",
+    "no_mangle",
+    "export_name",
+    "link_name",
+    "link",
+    "link_section",
+    "used",
+    "non_exhaustive",
+    "no_implicit_prelude",
+    "macro_export",
+    "macro_use",
+    "automatically_derived",
+    "unsafe",
+    "no_std",
+    "no_main",
+    "recursion_limit",
+    "type_length_limit",
+    "crate_name",
+    "crate_type",
+    "feature",
+    "instruction_set",
+    "target_feature",
+    "default",
+    "global_allocator",
+    "windows_subsystem",
+    "panic_handler",
+    "proc_macro",
+    "proc_macro_derive",
+    "proc_macro_attribute",
+    "debugger_visualizer",
+    "collapse_debuginfo",
+    "no_builtins",
+    "naked",
+];
 
 /// Tool attributes (`rustfmt::`, `clippy::`, `diagnostic::`, `rust_analyzer::`)
 /// are inert for module analysis and need no expansion.
