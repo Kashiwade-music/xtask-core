@@ -328,9 +328,7 @@ dependencies = [
 name = "xtask-layout"
 version = "0.1.0"
 dependencies = [
- "serde",
  "serde_json",
- "tempfile",
 ]
 
 [[package]]
