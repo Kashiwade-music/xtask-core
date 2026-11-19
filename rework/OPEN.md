@@ -100,6 +100,17 @@ C2c（bb2425b、merge 済み c8679c0）の報告による。STOP は次の一件
 
 注（報告による。STOP ではない）：`failed_analysis_is_recorded_in_the_archive` は、構文の誤りの reason に `lib.rs` が含まれることを仮定している。図の名前は `target-kind-mode`（例 `fixture-lib-normal`）。`role_limits_reach_analysis_and_all_check_diagrams_with_api_precedence` は、表の名前のまま残した（名前の `api_precedence` は実態と合わない）。
 
+## 差戻し（CP の検査で新規、未解決）
+
+CP の tier c（作業指示書 2.3 節）の途中で見つかった。CP は次の二件が解消するまで完了を宣言できない。
+
+| # | 種別 | 場所 | 内容 | 必要な判断 |
+|---|---|---|---|---|
+| 19 | clippy | `crates/xtask-core/src/cli.rs`：`Command::Check(Config)` | `large_enum_variant`（272 バイト、閾値 200）。Box にすると設計書 5.1 の `Command` の形が変わり、`Config` を小さくすると 5.1 の `Config` の定義と食い違う。CP の `cargo clippy --workspace --all-targets -- -D warnings` を止める | 設計者が決める（前回の報告を参照） |
+| 20 | xtask の検査 | `cargo run -p xtask-core -- check`：`module reference cycle among: ...` | 循環参照の違反。xtask-archive（crate、codec）、xtask-diagram（crate、crate_graph、module_graph、scene）、xtask-layout（chains、layering、level、order、position、route）、xtask-modules（thread_local_items、visitor）、xtask-style（style、style_source、style_tools、style_tools::clippy、style_tools::probe）、viewer の xtask-render（crate、bridge、build、highlight、palette、route）。CP の検査（違反 0 件）を満たすには、モジュール間の参照を循環しない形に直す必要がある。直し方（どの型・関数をどの module に移すか）は付属書に無く、設計の判断が要る | 設計者が、循環の解消の方針を付属書に書く（例：共有の型を親の module へ移す、関数を呼ぶ側に寄せる、など） |
+
+Role の欠落（テストモジュール）と `analysis.rs` の行数超過は、機械的な違反なので fix lane（CP-fix2）で直す。
+
 ## 未解決の注意（設計者の判断が要る）
 
 M3a の fix lane（3f3c058）の報告による。STOP ではないが、付属書の手順と食い違う可能性がある。
