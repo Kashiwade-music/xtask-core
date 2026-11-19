@@ -1,0 +1,24 @@
+name: viewer-windows
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the viewer toolchain
+        working-directory: viewer
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: viewer
+      - name: Build
+        working-directory: viewer
+        run: cargo build --release --locked -p xtask-viewer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xtask-viewer-windows
+          path: viewer/target/release/xtask-viewer.exe
