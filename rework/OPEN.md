@@ -32,9 +32,9 @@ M3b の fix lane（0b36b98、merge 済み 17db880）の報告による。9・10 
 
 注（STOP ではない）：`crates/xtask-modules/src/cfg.rs` の `expansion_diagnostics` が 94 code 行で、作業指示書 0.2 の 6（1 関数 80 code 行）を超えたまま。fix の lane で分ける。
 
-## 差戻し（W2 の M3b の fix で新規、未解決）
+## 差戻し（W2 の M3b で新規、解消済み）
 
-M3b の fix lane（c2cf509、merge 済み 1963ea2）の報告による。差戻し 11 の試験の欄の改訂は反映済み。残るのは次の二件。
+12 と 13 は設計者が付属書 M3b を改訂（commit a535fd5）。fix lane（ab5d1e5）を merge して解消（6e3adb4）。xtask-modules の全件、clippy、viewer の tier b が成功。以下は解消の記録。
 
 | # | unit | 場所 | STOP の文（要旨） | 付属書の節 |
 |---|---|---|---|---|
