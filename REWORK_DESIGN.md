@@ -25,6 +25,7 @@
 | [rework/C-core.md](rework/C-core.md) | `xtask-style`（新設）、`xtask-core`、README |
 | [rework/V-viewer.md](rework/V-viewer.md) | viewer（`viewer/`）と GitHub Actions |
 | [rework/R-review-1.md](rework/R-review-1.md) | レビュー 1 の各指摘への回答（台帳） |
+| [rework/X-structure.md](rework/X-structure.md) | module の参照の閉路の解消（CP の差戻し 19・20） |
 
 ---
 
@@ -197,7 +198,7 @@ xtask-diagram = ["xtask-core"]
 - **library**：
 
   ```rust
-  pub enum Command { Help, Check(Config) }
+  pub enum Command { Help, Check(Box<Config>) }   // Config は大きいので Box（clippy の large_enum_variant。付属書 X の X7）
   pub fn parse_args(root: &Path, arguments: impl IntoIterator<Item = String>) -> Result<Command, String>;
   pub fn main(root: &Path) -> ExitCode;
   pub struct Config { pub root: PathBuf, pub policy: PathBuf, pub output: Output, pub analysis: Option<AnalysisSettings> }
@@ -320,6 +321,7 @@ pub fn metrics(width: f64, height: f64, routes: &[Vec<(f64, f64)>]) -> Metrics;
 3. `HashMap` と `HashSet` を、出力の順に影響する場所で使わない。
 4. 新しい依存は `miniz_oxide`（xtask-archive）と `kivact`（viewer）だけ。
 5. root の workspace は Rust 1.85 で compile できること（`rust-version`）。
+6. module の参照は閉路を作らない（このリポジトリの検査）。crate root は `mod`・`pub use`・他の module を呼ぶだけの公開の関数だけを持ち、型・定数・共有の関数は葉の module（`model.rs` など）に置く。下位の module は crate root の項目を参照せず、定義した module の path で参照する（付属書 X、DEC-24）。
 
 ### 6.4 試験と gate
 
@@ -486,6 +488,7 @@ pub fn metrics(width: f64, height: f64, routes: &[Vec<(f64, f64)>]) -> Metrics;
 | DEC-20 | style の options-default の probe は、selector ごとの crate のままにする（一括化しない） | 一つの crate にまとめると、名前の解決の誤りで他の selector の型検査の診断が出なくなる |
 | DEC-21 | viewer の木は、単クリックで選び、Enter かダブルクリックで開く | 固定の Kivact の tree の振舞い（`on_activate`）に合わせる。選択を遷移につなぐ effect を作らない |
 | DEC-22 | K1 の目標を 1.3 から 1.55 以下（回帰の防止）に改め、1.3 は後続（12 章）の階層をまたぐ交差の削減で目指す | W3 の測定で K1 は 1.50。交差は通路の配線ではなく並びの段で生じ（並びの段の交差 157,644、最終 157,312）、うち約 3 割は階層を下から配置すること（DEC-5）による（region を外して平らに配置すると、大きい 3 件で 39,814 → 30,763）。設計者が試した手直し（往復の回数を増やす：0.7% 減、三つの初めの並び：3% 減で並びの時間が 3 倍、境界の port の順を外側に合わせて二回配置する：かえって 2% 増）は、どれも 1.3 に届かない。届かせるには ELK の INCLUDE_CHILDREN のような階層をまたぐ並びが要り、本改修の範囲を超える。K2（1.13）と K3（0.54）は目標の中 |
+| DEC-24 | 型・定数・共有の関数は葉の module に置き、crate root と処理の module はそれを参照するだけにする（設計書 6.3 節の 6） | 付属書が型を crate root や処理の module に置いたため、このリポジトリの「module の参照の閉路の禁止」に 12 件違反した（CP の差戻し 20）。置き場所の規則を一つにすれば、どの crate も同じ形で閉路を避けられる |
 | DEC-23 | network simplex は、根の辺を足さず連結成分ごとに解き、交換では変わる部分だけを直す（L9） | W3 の測定で配置の時間の 99% が縦の座標の simplex だった。設計者の実装（`rework/reference/simplex.rs.txt`）で、Kivact の 121 件の時間の和が 19.6 秒から 2.5 秒になり、基準の全件で不変条件と決定性を満たした |
 
 ---

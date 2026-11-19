@@ -339,6 +339,19 @@ for i in 1 2 3; do /usr/bin/time -f %e cargo run -p xtask-core -- check > /dev/n
 | 2 | L9 | L 12 章 | `simplex.rs` は `rework/reference/simplex.rs.txt` を `git mv` で置き換え、一字一句変えない |
 | 3 | M3d | M の M3d | — |
 
+### CP の fix（付属書 X）
+
+| lane | unit | 付属書 | 追加の指示 |
+|---|---|---|---|
+| 1 | X1 → X7 | X の X1、X7 | — |
+| 2 | X2 | X の X2 | — |
+| 3 | X3 | X の X3 | — |
+| 4 | X4 | X の X4 | — |
+| 5 | X5 | X の X5 | — |
+| 6 | X6 | X の X6 | target は `target-viewer` |
+
+すべて merge した後、CP を最初から実行する。
+
 ### CP（W5 の後）
 
 2.3 節の tier c。差戻しが 0 件で、AC-1〜AC-7 と KPI を満たせば完了。`rework/PROGRESS.md` に `CP passed <commit>` を書いて commit し、push し、人間に PR の作成を依頼する。

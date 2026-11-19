@@ -156,7 +156,7 @@ cargo clippy -p xtask-style --all-targets -- -D warnings
 2. **CLI（S7、C1、C7、B8）。** `cli.rs` を次に替える。
 
    ```rust
-   pub enum Command { Help, Check(Config) }
+   pub enum Command { Help, Check(Box<Config>) }   // 付属書 X の X7
    pub fn parse_args(root: &Path, arguments: impl IntoIterator<Item = String>) -> Result<Command, String>
    pub fn main(root: &Path) -> ExitCode
    ```
