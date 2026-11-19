@@ -15,6 +15,8 @@ toml = "0.8"
 syn = { version = "2", features = ["full", "visit", "extra-traits"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 tempfile = "3"
+miniz_oxide = "0.8"
+xtask-archive = { path = "crates/xtask-archive" }
 xtask-source = { path = "crates/xtask-source" }
 xtask-workspace = { path = "crates/xtask-workspace" }
 xtask-modules = { path = "crates/xtask-modules" }
