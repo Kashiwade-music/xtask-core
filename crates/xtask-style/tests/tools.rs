@@ -243,6 +243,36 @@ fn format_uses_project_width_and_rejects_widths_over_the_limit() {
 }
 
 #[test]
+fn root_rustfmt_config_wins_over_outside_files() {
+    let fixture = fixture(
+        "pub fn function(\n    alpha: u32,\n    beta: u32,\n    gamma: u32,\n    delta: u32,\n    epsilon: u32,\n) -> u32 {\n    alpha + beta + gamma + delta + epsilon\n}\n",
+    );
+    std::fs::write(fixture.path().join("rustfmt.toml"), "max_width = 120\n").unwrap();
+    // A target outside the root, such as `[[bin]] path = "../ext/tool.rs"`.
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("tool.rs"), "fn main() {}\n").unwrap();
+    let project = load(fixture.path());
+    // The outside file comes first, so it would be the first file of the root group.
+    let files = [
+        outside.path().join("tool.rs"),
+        project.root.join("src/lib.rs"),
+    ];
+    let report = project.check(
+        &AnalysisSettings::default(),
+        &only(&[StyleRule::Format]),
+        &files,
+    );
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+    let widths: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.contains("max_width = 120"))
+        .collect();
+    assert_eq!(widths.len(), 1, "{:?}", report.diagnostics);
+    assert!(widths[0].path.ends_with("rustfmt.toml"));
+}
+
+#[test]
 fn flexible_references_include_borrowed_options() {
     let fixture = fixture("pub fn f(value: &Option<String>) -> bool { value.is_some() }\n");
     let project = load(fixture.path());
