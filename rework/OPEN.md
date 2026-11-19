@@ -11,6 +11,17 @@
 
 W2 の tier b（root の check、xtask-archive・xtask-policy・xtask-source・xtask-workspace・xtask-modules・xtask-layout の試験、clippy の三 crate、viewer の check と xtask-render の試験）は、`9e9ea2f` の時点で成功。ただし W2 のウェーブの中の M3b・M3c は未実施。
 
+## 差戻し（W2 の M3b で新規、未解決）
+
+M3b（commit 695c72a、merge 済み 27a56d3）の報告による。STOP の項目は次の二件。`thread_local` の試験 11 件が失敗しており、W2 のウェーブは完了できない。M3c は M3b の差戻しが解消するまで起動しない。
+
+| # | unit | 場所 | STOP の文（要旨） | 付属書の節 |
+|---|---|---|---|---|
+| 9 | M3b | `crates/xtask-modules/src/thread_local_items.rs`：`register`・`confirm` | 手順 6 の「登録は取り消さない（診断で不確かさを報告する）」と「`std::thread_local` の qualified は確か」は、既存の試験 10 件の期待値と食い違う。その期待値は「提供元が不確かなとき static を作らず診断を増やさない」「local の std module や local の `thread_local!` は提供元にならない」というもの。失敗した試験：`other_macro_providers_do_not_gain_static_declarations`、`local_std_module_is_not_the_standard_macro_provider`、`delayed_external_glob_provider_does_not_leave_a_generated_static`、`external_crate_globs_do_not_create_bare_statics`、`unknown_external_macro_use_does_not_infer_bare_standard_provider`、`unresolved_imports_behind_local_globs_remain_uncertain`、`unresolved_explicit_providers_and_globs_do_not_create_statics`、`effective_macro_use_attributes_only_block_selected_macro_names`、`resolved_value_imports_and_inactive_imports_preserve_standard_providers`、`user_defined_thread_local_macros_are_not_standard` | M-model.md の M3b の手順 6、DEC-19、既存の試験の移行（M3 全体） |
+| 10 | M3b | `thread_local_items.rs`：`provider` | 手順 6 と DEC-19 は、alias の登録を同じ module の `use std::thread_local as X` に限る。既存の試験 `standard_macro_alias_resolves_after_reexport` は、別 module の再公開（`crate::macros::tls`）を要求する。失敗中 | M-model.md の M3b の手順 6、DEC-19 |
+
+注（STOP ではない）：`crates/xtask-modules/src/visitor.rs` の `visit_macro` が 207 行で、作業指示書 0.2 の 6（1 関数 80 code 行）を超えたまま。意味のある helper に分ける必要がある。設計者の判断の後の fix で直す。
+
 ## 未解決の注意（設計者の判断が要る）
 
 M3a の fix lane（3f3c058）の報告による。STOP ではないが、付属書の手順と食い違う可能性がある。

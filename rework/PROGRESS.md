@@ -34,7 +34,7 @@
 | L4 | W2 | 3 | 統合済み（757fa60。W2 の途中の tier b 成功） |
 | L5 | W2 | 4 | 統合済み（eb5182d。W2 の途中の tier b 成功） |
 | M3a | W2 | 5 | 統合済み（20353c5、差戻し 7・8 は fix 3f3c058 で解消。ただし OPEN.md の「未解決の注意」の 1〜5 は設計者の判断待ち） |
-| M3b | W2 | 5（M3a の後） | 未着手（次に起動） |
+| M3b | W2 | 5（M3a の後） | 差戻し（OPEN.md の 9・10。695c72a は 27a56d3 で merge 済み。thread_local の試験 11 件が失敗、visit_macro が 207 行） |
 | M3c | W2 | 5（M3b の後） | 未着手 |
 | V1 | W2 | 6 | 統合済み（1adf297。viewer の tier b 成功） |
 | L7 | W3 | 1 | 未着手 |
@@ -58,3 +58,5 @@
 - `W2 partial fix merged 9e9ea2f: 途中の tier b 成功`（差戻し 6・7・8 の fix を merge。check、xtask-archive 12、xtask-policy 24、xtask-source 14、xtask-workspace 12、xtask-modules 89（unit 1、analysis 53、roles 16、thread_local 19）、xtask-layout 42、clippy の三 crate、viewer の check と xtask-render 8 が成功。M3b・M3c は未実施のため、W2 のウェーブは未完了）
 - `W2 merged 571b7b5: tier b 失敗`（root check は成功。失敗：xtask-layout の試験 1 件（OPEN.md の 6）、xtask-modules の試験 1 件（OPEN.md の 7）、xtask-modules の clippy 指摘 2 件（fix lane W2-5-fix で直す）。viewer の check と xtask-render の試験 8 件は成功）
 - `W1 fix merged d3641fc: tier b 成功`（fix lane f6685ca（M1）と 286038e（M2）を merge。check、xtask-archive 12、xtask-policy 24、xtask-source 14、xtask-workspace 12、xtask-layout --lib 10 が成功）
+
+- `W2 M3b merged 27a56d3: tier b 失敗`（xtask-modules の試験：unit 1、analysis 60、roles 16 が成功、thread_local の試験 11 件が失敗。差戻し 9・10（OPEN.md）。visit_macro が 207 行で 0.2 の 6 を超える。M3c は M3b の差戻しのため未起動。W2 のウェーブは未完了）
