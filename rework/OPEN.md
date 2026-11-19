@@ -100,7 +100,9 @@ C2c（bb2425b、merge 済み c8679c0）の報告による。STOP は次の一件
 
 注（報告による。STOP ではない）：`failed_analysis_is_recorded_in_the_archive` は、構文の誤りの reason に `lib.rs` が含まれることを仮定している。図の名前は `target-kind-mode`（例 `fixture-lib-normal`）。`role_limits_reach_analysis_and_all_check_diagrams_with_api_precedence` は、表の名前のまま残した（名前の `api_precedence` は実態と合わない）。
 
-## 差戻し（CP の検査で新規、未解決）
+## 差戻し（CP の検査で新規、解消済み）
+
+設計者が 72fa4f7 で解消した：19 は `Command::Check(Box<Config>)`（付属書 X の X7、commit 3d88062 で merge 済み）、20 は付属書 X の規則（型・共有の関数を葉の module に移す。X1〜X6 の commit で merge 済み）。CP は 3837c84 で通った（PROGRESS.md の「CP passed」を参照）。
 
 CP の tier c（作業指示書 2.3 節）の途中で見つかった。CP は次の二件が解消するまで完了を宣言できない。
 

@@ -119,3 +119,32 @@ K5（図のファイルの大きさ）と K6（検査の時間）は CP で測�
 - tier c の途中：`cargo fmt --all --check` 成功。`cargo +1.85.0 check --workspace --all-targets --locked` 成功（let チェーンを 1.85 で通る形に直した後、`c45ab73` を merge）。`cargo test --workspace` 成功（失敗 0）。viewer の fmt・clippy・`KIVACT_TEST_MIRROR=off cargo test --workspace` 成功。`cargo clippy --workspace --all-targets -- -D warnings` は差戻し 19 で未達。`cargo run -p xtask-core -- check` は差戻し 20 で未達（違反 23 件のうち、Role と行数は解消済み、循環 10 件が残る）。viewer の `check --root` も循環 2 件（xtask-render）が残る。
 
 - `CP fixes merged c4ad8bd`：let チェーンを Rust 1.85 で通る形に（`c45ab73`）、テストモジュールの Role と analysis のテストの分割（`8c8d83d`）、テストの共有 helper を analysis 専用に移動（`e41f0b0`）。`cargo clippy --workspace --all-targets -- -D warnings` の残りは差戻し 19（cli.rs）だけ。`cargo run -p xtask-core -- check` の残りは差戻し 20（循環参照、xtask-core で 10 件、viewer で 2 件）だけ。CP は差戻し 19 と 20 の解消を待つ。
+
+### CP passed 3837c84
+
+作業指示書 2.3 節の tier c を、X1〜X7 の merge の後に最初から実行した。すべて成功。
+
+| 項目 | 結果 |
+|---|---|
+| `cargo fmt --all --check` | 成功 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 成功（差戻し 19 は解消） |
+| `cargo +1.85.0 check --workspace --all-targets --locked` | 成功（AC-6） |
+| `cargo test --workspace` | 成功（失敗 0） |
+| `cargo test -p xtask-layout --release --test baseline` | 成功（2 件。AC-3） |
+| `cargo run -p xtask-layout --release --example baseline_report` | K1〜K4 達成（下表） |
+| `cargo run -p xtask-core -- check` | 違反 0 件（ok、9 crate、31 graph）。差戻し 20 は解消 |
+| `cargo run -p xtask-core -- check --root viewer` | ok（2 crate、7 graph） |
+| viewer の `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`KIVACT_TEST_MIRROR=off cargo test --workspace` | 成功（失敗 0） |
+| `git ls-files` の `.js`・`.cjs`・`.html`・`.css` | 0 件（AC-1） |
+| node の無い PATH での `cargo run -p xtask-core -- check --write` | 終了コード 0（AC-1、AC-2 の書出し） |
+
+| 指標 | 目標 | 実測 | 判定 |
+|---|---|---|---|
+| K1 交差数の比 | 1.55 以下（DEC-22） | 1.50 | 達成 |
+| K2 折れの数の比 | 1.3 以下 | 1.13 | 達成 |
+| K3 面積の比 | 1.5 以下 | 0.54 | 達成 |
+| K4 配置の時間の和（121 件） | 3.0 秒以下 | 1.871 秒 | 達成 |
+| K5 図のファイルの大きさ | 102400 バイト以下 | 17428 バイト | 達成 |
+| K6 検査の時間 | 1.263 秒以下（基準 1.203 × 1.05） | 中央値 0.827 秒（1.204、0.827、0.807） | 達成 |
+
+差戻し（OPEN.md）：すべて解消済み。
