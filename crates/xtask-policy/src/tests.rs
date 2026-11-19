@@ -277,15 +277,13 @@ fn analysis_settings_default_to_host_with_cargo_default_features() {
 
 #[test]
 fn analysis_settings_parse_cargo_cfg_and_trusted_expansions_with_other_rules() {
-    // STOP: this input has `all_features` with `features`, and repeated trusted names. The
-    // contract (M1 step 4) rejects both, so this test's expectation cannot hold.
     let policy = Policy::from_toml(concat!(
         "[analysis]\ntarget='x86_64-pc-windows-msvc'\n",
-        "features=['app/left','right']\nall_features=true\ndefault_features=false\n",
+        "features=['app/left','right']\ndefault_features=false\n",
         "cfg=['custom','platform=\"demo\"']\n",
-        "trusted_attributes=['macro_lib::second','macro_lib::first','macro_lib::second']\n",
+        "trusted_attributes=['macro_lib::second','macro_lib::first']\n",
         "trusted_derives=['derive_lib::Marker']\n",
-        "trusted_macros=['proptest','prop_assert','proptest']\n",
+        "trusted_macros=['proptest','prop_assert']\n",
         "trusted_globs=['framework::prelude']\n",
         "[limits]\nmax_code_lines=25\nmax_role_chars=160\n",
         "[visible_to]\ncore=['app*']\n"
@@ -293,6 +291,13 @@ fn analysis_settings_parse_cargo_cfg_and_trusted_expansions_with_other_rules() {
     .unwrap();
     let analysis = policy.analysis();
     assert_eq!(analysis.target(), Some("x86_64-pc-windows-msvc"));
+    assert_eq!(
+        analysis.features(),
+        &Features::Selected {
+            features: names(&["app/left", "right"]),
+            default_features: false,
+        }
+    );
     assert_eq!(analysis.cfg(), &names(&["custom", "platform=\"demo\""]));
     assert_eq!(
         analysis.trusted_attributes(),
@@ -347,6 +352,13 @@ fn all_features_cannot_combine_with_explicit_features() {
 }
 
 #[test]
+fn duplicate_trusted_names_rejected() {
+    let error =
+        Policy::from_toml("[analysis]\ntrusted_macros=['proptest','proptest']\n").unwrap_err();
+    assert!(error.contains("duplicate"), "{error}");
+}
+
+#[test]
 fn diagram_output_defaults_with_and_without_other_policy_tables() {
     let expected = Path::new("target/xtask/architecture.xtaskmap");
     assert_eq!(Policy::default().diagrams().output(), expected);
@@ -397,7 +409,7 @@ fn diagram_output_rejects_blank_paths_wrong_types_and_unknown_fields() {
         "[diagrams]\noutput=true\n",
         "[diagrams]\noutput=[]\n",
         "[diagrams]\noutput=['architecture']\n",
-        "[output]\npath='architecture'\n",
+        "[diagrams.output]\npath='architecture'\n",
         "[diagrams]\noutput='architecture'\nunknown=true\n",
     ] {
         assert!(Policy::from_toml(text).is_err(), "accepted {text}");
