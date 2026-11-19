@@ -35,10 +35,10 @@ pub fn view(state: AppState, initial: Option<PathBuf>) -> impl IntoView {
     row((side, main))
         .style(style().width(pct(100)).height(pct(100)))
         .on_file(move |event: FileEvent| {
-            if event.phase == FilePhase::Drop {
-                if let Some(path) = event.files.into_iter().next() {
-                    document::open(state, path, Reason::Open);
-                }
+            if event.phase == FilePhase::Drop
+                && let Some(path) = event.files.into_iter().next()
+            {
+                document::open(state, path, Reason::Open);
             }
         })
         .on_key(move |event: KeyEvent| on_key(state, event.key()))
