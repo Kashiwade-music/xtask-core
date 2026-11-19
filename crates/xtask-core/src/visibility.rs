@@ -1,5 +1,5 @@
 //! Role: 公開の依存の可視性（visible_to）を、Cargo の依存の辺と照らして検証する。
-use xtask_policy::Policy;
+use xtask_policy::{Policy, pattern_matches};
 use xtask_workspace::{Dependency, DependencyKind, Workspace};
 
 /// Check `visible_to` against the workspace: each provider must be a member, each pattern must
@@ -18,7 +18,10 @@ pub(crate) fn visibility(workspace: &Workspace, policy: &Policy) -> Vec<String> 
             ));
         }
         for pattern in patterns {
-            if !members.iter().any(|member| matches(pattern, member)) {
+            if !members
+                .iter()
+                .any(|member| pattern_matches(pattern, member))
+            {
                 errors.push(format!(
                     "`{provider}` visible_to `{pattern}` matches no workspace member"
                 ));
@@ -54,14 +57,6 @@ fn kind_name(kind: DependencyKind) -> &'static str {
         DependencyKind::Normal => "normal",
         DependencyKind::Dev => "dev",
         DependencyKind::Build => "build",
-    }
-}
-
-/// A pattern is a package name, or a prefix followed by a trailing `*`.
-fn matches(pattern: &str, name: &str) -> bool {
-    match pattern.strip_suffix('*') {
-        Some(prefix) => name.starts_with(prefix),
-        None => name == pattern,
     }
 }
 
