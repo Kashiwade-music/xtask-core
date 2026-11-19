@@ -5,13 +5,48 @@
 //! delimiters do count, so each end of a multiline literal counts independently.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 mod lines;
 
 pub use lines::code_line_count;
+
+/// Canonicalize `path` and remove the Windows verbatim prefix, so that every
+/// path reported or compared by xtask has one spelling.
+pub fn normalize(path: &Path) -> Result<PathBuf, String> {
+    let canonical =
+        fs::canonicalize(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok(without_verbatim_prefix(&canonical))
+}
+
+/// `\\?\C:\x` becomes `C:\x`, and `\\?\UNC\server\share\x` becomes
+/// `\\server\share\x`. Other paths are returned unchanged.
+fn without_verbatim_prefix(path: &Path) -> PathBuf {
+    let mut components = path.components();
+    if let Some(Component::Prefix(prefix)) = components.next() {
+        match prefix.kind() {
+            Prefix::VerbatimDisk(disk) => {
+                let mut simplified = PathBuf::from(format!("{}:", char::from(disk)));
+                simplified.push(components.as_path());
+                return simplified;
+            }
+            Prefix::VerbatimUNC(server, share) => {
+                let mut root = OsString::from(r"\\");
+                root.push(server);
+                root.push(r"\");
+                root.push(share);
+                let mut simplified = PathBuf::from(root);
+                simplified.push(components.as_path());
+                return simplified;
+            }
+            _ => {}
+        }
+    }
+    path.to_path_buf()
+}
 
 /// A source file whose physical code-line count exceeds the policy limit.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -25,6 +60,7 @@ pub struct LineViolation {
 ///
 /// Missing conventional source roots are allowed. Every other filesystem error
 /// is returned. Canonical directory identities prevent symlink recursion.
+/// Directories containing their own `Cargo.toml` (nested packages) are skipped.
 /// Custom Cargo target paths can be appended by the caller before `check_files`.
 pub fn rust_files(package_dir: &Path) -> Result<Vec<PathBuf>, String> {
     let metadata =
@@ -57,6 +93,10 @@ fn visit(
 ) -> Result<(), String> {
     let metadata = fs::metadata(path).map_err(|error| format!("{}: {error}", path.display()))?;
     if metadata.is_dir() {
+        // A directory with its own Cargo.toml is a nested package, not part of this one.
+        if path.join("Cargo.toml").is_file() {
+            return Ok(());
+        }
         let identity =
             fs::canonicalize(path).map_err(|error| format!("{}: {error}", path.display()))?;
         if !visited.insert(identity) {
@@ -96,8 +136,8 @@ pub fn check_files(files: &[PathBuf], limit: usize) -> Result<Vec<LineViolation>
     for path in identities.into_values() {
         let source =
             fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
-        let count = lines::try_code_line_count(&source)
-            .map_err(|error| format!("{}: {error}", path.display()))?;
+        let count =
+            code_line_count(&source).map_err(|error| format!("{}: {error}", path.display()))?;
         if count > limit {
             violations.push(LineViolation {
                 path: path.clone(),

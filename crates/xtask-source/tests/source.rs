@@ -14,7 +14,7 @@ fn physical_lines_exclude_nested_comments_and_string_contents() {
         "    \";\n",
         "}\n",
     );
-    assert_eq!(code_line_count(source), 4);
+    assert_eq!(code_line_count(source), Ok(4));
 }
 
 #[test]
@@ -22,7 +22,7 @@ fn escaped_newline_keeps_the_closing_delimiter_on_a_separate_line() {
     let source =
         "fn main() {\nlet s = \"open\\\n\";\nlet t = \"open\\\r\n    interior\\\n    \";\n}\n";
     // fn, first opener, first closer, second opener, second closer, closing brace.
-    assert_eq!(code_line_count(source), 6);
+    assert_eq!(code_line_count(source), Ok(6));
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn raw_literals_with_embedded_delimiters_and_prefixes() {
         "\";\n",
         "}\n",
     );
-    assert_eq!(code_line_count(source), 10);
+    assert_eq!(code_line_count(source), Ok(10));
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn lifetimes_labels_unicode_and_escaped_characters_do_not_hide_following_code() 
         "    s\n",
         "}\n",
     );
-    assert_eq!(code_line_count(source), 8);
+    assert_eq!(code_line_count(source), Ok(8));
 }
 
 #[test]
@@ -75,13 +75,13 @@ fn doc_comments_are_excluded_but_explicit_doc_attributes_count() {
         "\"]\n",
         "fn main() {}\n",
     );
-    assert_eq!(code_line_count(source), 3);
+    assert_eq!(code_line_count(source), Ok(3));
 }
 
 #[test]
 fn group_spans_do_not_mark_comment_only_interior_lines() {
     let source = "fn main(\n/* arguments */\n) {\n// body\n{\n/* nested */\n}\n}\n";
-    assert_eq!(code_line_count(source), 5);
+    assert_eq!(code_line_count(source), Ok(5));
 }
 
 #[test]
@@ -90,16 +90,16 @@ fn unicode_doc_span_and_file_preamble_keep_physical_lines() {
         code_line_count(
             "\u{feff}#!/usr/bin/env rust-script\n//! 寿\nfn main() {\nlet 界 = \"\ninside\n\";\n}\n"
         ),
-        4
+        Ok(4)
     );
-    assert_eq!(code_line_count("#![allow(dead_code)]\nfn main() {}"), 2);
+    assert_eq!(code_line_count("#![allow(dead_code)]\nfn main() {}"), Ok(2));
     assert_eq!(
         code_line_count("#! /* outer /* inner */ end */ [allow(dead_code)]\nfn main() {}"),
-        2
+        Ok(2)
     );
     assert_eq!(
         code_line_count("#! // ordinary comment\n[allow(dead_code)]\nfn main() {}"),
-        3
+        Ok(3)
     );
 }
 
@@ -112,7 +112,7 @@ fn empty_or_comment_only_files_have_zero_code_lines() {
         "/* nested /* yes */ */",
         "/// doc",
     ] {
-        assert_eq!(code_line_count(source), 0, "{source:?}");
+        assert_eq!(code_line_count(source), Ok(0), "{source:?}");
     }
 }
 
@@ -168,7 +168,11 @@ fn malformed_or_unreadable_files_are_errors() {
             .unwrap_err()
             .contains("cannot tokenize")
     );
-    assert_eq!(code_line_count("fn main() {\nlet s = \"unterminated\n"), 2);
+    assert!(
+        code_line_count("fn main() {\nlet s = \"unterminated\n")
+            .unwrap_err()
+            .contains("cannot tokenize")
+    );
     fs::write(&file, [0xff]).unwrap();
     assert!(check_files(std::slice::from_ref(&file), 1000).is_err());
     fs::remove_file(&file).unwrap();
@@ -185,4 +189,42 @@ fn directory_symlink_cycles_terminate_without_omitting_original_files() {
     fs::write(src.join("lib.rs"), "fn main() {}").unwrap();
     std::os::unix::fs::symlink(&src, src.join("loop")).unwrap();
     assert_eq!(rust_files(temp.path()).unwrap(), vec![src.join("lib.rs")]);
+}
+
+#[cfg(windows)]
+#[test]
+fn normalize_strips_verbatim() {
+    let temp = tempfile::tempdir().unwrap();
+    let normalized = xtask_source::normalize(temp.path()).unwrap();
+    assert!(!normalized.to_string_lossy().starts_with(r"\\?\"));
+    assert_eq!(
+        xtask_source::normalize(&normalized).unwrap(),
+        normalized,
+        "normalize must be idempotent"
+    );
+}
+
+#[test]
+fn nested_package_skipped() {
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = temp.path().join("tests/fixture");
+    fs::create_dir_all(&fixture).unwrap();
+    fs::write(
+        fixture.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\n",
+    )
+    .unwrap();
+    fs::write(fixture.join("nested.rs"), "fn main() {}").unwrap();
+    fs::write(temp.path().join("tests/kept.rs"), "fn main() {}").unwrap();
+    assert_eq!(
+        rust_files(temp.path()).unwrap(),
+        vec![temp.path().join("tests/kept.rs")]
+    );
+}
+
+#[test]
+fn nbsp_is_not_whitespace() {
+    // U+00A0 is Unicode whitespace but not Rust whitespace, so the `#!` line
+    // is an interpreter directive, not the start of an inner attribute.
+    assert_eq!(code_line_count("#!\u{a0}[allow(x)]\nfn main() {}"), Ok(1));
 }

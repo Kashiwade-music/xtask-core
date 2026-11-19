@@ -1,72 +1,54 @@
 //! Role: 静的な内側ドキュメントからモジュールの役割宣言を検証する。
-use std::{fs, path::Path};
+use std::path::Path;
 use syn::{AttrStyle, Attribute, Expr, Lit, Meta};
 
+/// A `Role:` line of an inner doc, with its place.
+struct Declaration {
+    /// The line, without its leading whitespace.
+    line: String,
+    /// Whether it is the first line of the first inner doc.
+    first: bool,
+    /// Whether its inner doc is not one line: it has a control character or a line separator.
+    multiline: bool,
+}
+
+/// The module's Role, or the diagnostic that explains why it has none. The Role is the first line
+/// of the first inner doc, and it is the only `Role:` line of the module.
 pub(crate) fn extract(
     attrs: &[Attribute],
     file: &Path,
     module: &str,
     max_role_chars: usize,
-) -> (Option<String>, Vec<String>) {
+) -> Result<String, String> {
     let context = format!("{} ({module})", file.display());
-    let mut declarations = Vec::new();
-    for attribute in attrs {
-        if !matches!(attribute.style, AttrStyle::Inner(_)) || !attribute.path().is_ident("doc") {
-            continue;
-        }
-        let Meta::NameValue(value) = &attribute.meta else {
-            continue;
-        };
-        let Expr::Lit(literal) = &value.value else {
-            continue;
-        };
-        let Lit::Str(text) = &literal.lit else {
-            continue;
-        };
-        let text = text.value();
-        for line in text.split('\n') {
-            let line = line.trim_start();
-            if line.starts_with("Role:") {
-                let invalid_line = text
-                    .chars()
-                    .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'));
-                declarations.push((line.to_string(), invalid_line));
-            }
-        }
-    }
+    let declarations = declarations(attrs);
     if declarations.is_empty() {
-        return (
-            None,
-            vec![format!(
-                "{context}: missing module role; add //! Role: <description>"
-            )],
-        );
+        return Err(format!(
+            "{context}: missing module role; add //! Role: <description>"
+        ));
     }
     if declarations.len() != 1 {
-        return (
-            None,
-            vec![format!(
-                "{context}: duplicate module Role declarations; exactly one is required"
-            )],
-        );
+        return Err(format!(
+            "{context}: duplicate module Role declarations; exactly one is required"
+        ));
+    }
+    let declaration = &declarations[0];
+    if !declaration.first {
+        return Err(format!(
+            "{context}: Role must be the first line of the first inner doc"
+        ));
     }
     let malformed = |reason: &str| {
-        (
-            None,
-            vec![format!(
-                "{context}: malformed module Role declaration: {reason}"
-            )],
-        )
+        Err(format!(
+            "{context}: malformed module Role declaration: {reason}"
+        ))
     };
-    if declarations[0].1 {
+    if declaration.multiline {
         return malformed("Role documentation must be a single line without control characters");
     }
-    let Some(description) = declarations[0].0.strip_prefix("Role: ") else {
+    let Some(description) = declaration.line.strip_prefix("Role: ") else {
         return malformed("use Role: followed by a space and a description");
     };
-    if description.chars().any(char::is_control) {
-        return malformed("description must not contain control characters");
-    }
     let description = description.trim();
     if description.is_empty() {
         return malformed("description must not be empty");
@@ -76,7 +58,50 @@ pub(crate) fn extract(
             "description must be at most {max_role_chars} Unicode characters"
         ));
     }
-    (Some(description.to_string()), Vec::new())
+    Ok(description.to_string())
+}
+
+/// The `Role:` lines of the inner docs, in order.
+fn declarations(attrs: &[Attribute]) -> Vec<Declaration> {
+    let mut declarations = Vec::new();
+    for (doc, text) in inner_docs(attrs).iter().enumerate() {
+        let multiline = text
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'));
+        for (line_index, line) in text.split('\n').enumerate() {
+            let line = line.trim_start();
+            if line.starts_with("Role:") {
+                declarations.push(Declaration {
+                    line: line.to_string(),
+                    first: doc == 0 && line_index == 0,
+                    multiline,
+                });
+            }
+        }
+    }
+    declarations
+}
+
+/// The texts of the static inner doc attributes, in order.
+fn inner_docs(attrs: &[Attribute]) -> Vec<String> {
+    attrs
+        .iter()
+        .filter(|attribute| {
+            matches!(attribute.style, AttrStyle::Inner(_)) && attribute.path().is_ident("doc")
+        })
+        .filter_map(|attribute| {
+            let Meta::NameValue(value) = &attribute.meta else {
+                return None;
+            };
+            let Expr::Lit(literal) = &value.value else {
+                return None;
+            };
+            let Lit::Str(text) = &literal.lit else {
+                return None;
+            };
+            Some(text.value())
+        })
+        .collect()
 }
 
 pub(crate) fn validate_limit(file: &Path, max_role_chars: usize) -> Result<(), String> {
@@ -87,13 +112,4 @@ pub(crate) fn validate_limit(file: &Path, max_role_chars: usize) -> Result<(), S
         ));
     }
     Ok(())
-}
-
-pub(crate) fn root(file: &Path, max_role_chars: usize) -> Result<String, String> {
-    validate_limit(file, max_role_chars)?;
-    let context = format!("{} (crate)", file.display());
-    let source = fs::read_to_string(file).map_err(|e| format!("{context}: {e}"))?;
-    let source = syn::parse_file(&source).map_err(|e| format!("{context}: {e}"))?;
-    let (role, diagnostics) = extract(&source.attrs, file, "crate", max_role_chars);
-    role.ok_or_else(|| diagnostics.join("\n"))
 }

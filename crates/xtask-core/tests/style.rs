@@ -4,7 +4,8 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use xtask_core::{Config, Report, StyleRule, run};
+use xtask_core::{Config, Report, run};
+use xtask_policy::StyleRule;
 
 const ALL_RULES: &str = "[style]\nenabled = true\nextra_rules = ['glob-imports', 'non-leaf-implementation', 'rustfmt-skip', 'non-exhaustive', 'catch-unwind', 'poison-access', 'options-default']\napi_packages = ['fixture']\noptions_structs = ['fixture::api::Options']\n";
 
@@ -57,17 +58,15 @@ fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
 
 fn check_unchanged(root: &Path) -> Report {
     let before = snapshot(root);
-    let mut config = Config::new(root);
-    config.no_write = true;
-    let report = run(&config).unwrap();
+    let report = run(&Config::new(root)).unwrap();
     assert_eq!(
         snapshot(root),
         before,
         "style check modified repository input"
     );
     assert!(
-        !root.join("architecture").exists(),
-        "--no-write created architecture artifacts"
+        !root.join("target/xtask").exists(),
+        "the default check wrote diagram artifacts"
     );
     report
 }
@@ -133,7 +132,7 @@ impl ValueExt for Values {
     );
     let report = check_unchanged(directory.path());
     assert!(report.is_success(), "{:#?}", report.errors);
-    assert!(report.style_diagnostics.is_empty());
+    assert!(report.style.is_empty());
     assert!(
         report
             .notes
@@ -179,7 +178,7 @@ pub fn skipped( ) { }
     );
     let report = check_unchanged(directory.path());
     let found: BTreeSet<_> = report
-        .style_diagnostics
+        .style
         .iter()
         .map(|diagnostic| diagnostic.rule)
         .collect();
@@ -191,13 +190,13 @@ pub fn skipped( ) { }
     assert!(
         missing.is_empty(),
         "missing rules {missing:?}; diagnostics: {:#?}; errors: {:#?}",
-        report.style_diagnostics,
+        report.style,
         report.errors
     );
     assert!(!report.is_success());
     assert!(
         report
-            .style_diagnostics
+            .style
             .iter()
             .all(|diagnostic| diagnostic.path.is_absolute()
                 && diagnostic.line > 0
@@ -221,7 +220,7 @@ fn scoped_exceptions_preserve_sibling_and_other_rule_violations() {
     );
     let report = check_unchanged(directory.path());
     let unwraps: Vec<_> = report
-        .style_diagnostics
+        .style
         .iter()
         .filter(|diagnostic| diagnostic.rule == StyleRule::Unwrap)
         .collect();
@@ -229,7 +228,7 @@ fn scoped_exceptions_preserve_sibling_and_other_rule_violations() {
     assert_eq!(unwraps[0].item.as_deref(), Some("unreviewed"));
     assert!(
         report
-            .style_diagnostics
+            .style
             .iter()
             .any(|diagnostic| diagnostic.rule == StyleRule::HexLiterals
                 && diagnostic.item.as_deref() == Some("reviewed"))
@@ -264,7 +263,7 @@ fn exception_items_name_the_module_path_of_a_file_module() {
     );
     let report = check_unchanged(directory.path());
     let unwraps: Vec<_> = report
-        .style_diagnostics
+        .style
         .iter()
         .filter(|diagnostic| diagnostic.rule == StyleRule::Unwrap)
         .collect();
@@ -301,7 +300,7 @@ fn unstable_features_are_rejected_and_disabled_style_never_uses_its_toolchain() 
     );
     let report = check_unchanged(directory.path());
     assert!(report.is_success(), "{:#?}", report.errors);
-    assert!(report.style_diagnostics.is_empty());
+    assert!(report.style.is_empty());
     assert!(
         !report
             .notes
@@ -341,7 +340,7 @@ fn wildcard_exceptions_cannot_suppress_invalid_rule_targets() {
         ),
     ] {
         let exception = format!(
-            "[[style.exceptions]]\nrule='{rule}'\npath='*'\nreason='This wildcard must not suppress an invalid target'\n"
+            "[[style.exceptions]]\nrule='{rule}'\npath='src/*'\nreason='This wildcard must not suppress an invalid target'\n"
         );
         let policy = optional_policy(&format!("'{rule}'"), settings, &exception);
         let directory = fixture(
@@ -397,7 +396,7 @@ fn exact_item_exceptions_work_for_options_selectors() {
     );
     let report = check_unchanged(directory.path());
     assert!(report.is_success(), "{:#?}", report.errors);
-    assert!(report.style_diagnostics.is_empty());
+    assert!(report.style.is_empty());
     assert!(
         report
             .notes
@@ -406,6 +405,53 @@ fn exact_item_exceptions_work_for_options_selectors() {
         "exception not applied: {:#?}",
         report.notes
     );
+    assert!(
+        !report
+            .notes
+            .iter()
+            .any(|note| note.contains("unused style exception")),
+        "{:#?}",
+        report.notes
+    );
+}
+
+#[test]
+fn item_exceptions_survive_analysis_environment_failure() {
+    let policy = concat!(
+        "[style]\nenabled=true\n",
+        "disabled_rules=['format','import-granularity','unstable-features','checked-unwrap','flexible-references','derivable-impls','new-default','len-is-empty','missing-docs','safety-docs','safety-comments']\n",
+        "[analysis]\ntarget='bogus-target-triple'\n",
+        "[[style.exceptions]]\nrule='hex-literals'\npath='src/a.rs'\nitem='a::reviewed'\nreason='Fixture names a file module item while module analysis is unavailable'\n"
+    );
+    let directory = fixture(
+        &[
+            (
+                "src/lib.rs",
+                "//! Role: Declare a file module under a failed analysis.\nmod a;\n",
+            ),
+            (
+                "src/a.rs",
+                "//! Role: Hold one reviewed and one unreviewed hex literal.\npub(crate) fn reviewed() -> u8 { 0xAA }\npub(crate) fn unreviewed() -> u8 { 0xBB }\n",
+            ),
+        ],
+        policy,
+    );
+    let report = check_unchanged(directory.path());
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|error| error.contains("module analysis")),
+        "the analysis environment failure is not reported: {:#?}",
+        report.errors
+    );
+    let hex: Vec<_> = report
+        .style
+        .iter()
+        .filter(|diagnostic| diagnostic.rule == StyleRule::HexLiterals)
+        .collect();
+    assert_eq!(hex.len(), 1, "{:#?}", report.style);
+    assert_eq!(hex[0].item.as_deref(), Some("a::unreviewed"));
     assert!(
         !report
             .notes

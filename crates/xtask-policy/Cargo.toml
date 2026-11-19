@@ -1,0 +1,14 @@
+[package]
+name = "xtask-policy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Repository policy loading and validation for xtask"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+toml.workspace = true
+
+[lints]
+workspace = true

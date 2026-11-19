@@ -1,6 +1,7 @@
 [workspace]
 members = ["crates/*"]
 resolver = "3"
+exclude = ["viewer"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,15 +16,21 @@ toml = "0.8"
 syn = { version = "2", features = ["full", "visit", "extra-traits"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 tempfile = "3"
+miniz_oxide = "0.8"
+xtask-archive = { path = "crates/xtask-archive" }
 xtask-source = { path = "crates/xtask-source" }
 xtask-workspace = { path = "crates/xtask-workspace" }
 xtask-modules = { path = "crates/xtask-modules" }
-xtask-graph = { path = "crates/xtask-graph" }
+xtask-policy = { path = "crates/xtask-policy" }
 xtask-layout = { path = "crates/xtask-layout" }
-xtask-svg = { path = "crates/xtask-svg" }
+xtask-style = { path = "crates/xtask-style" }
+xtask-diagram = { path = "crates/xtask-diagram" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = "warn"
+
+[profile.dev.package.xtask-layout]
+opt-level = 3

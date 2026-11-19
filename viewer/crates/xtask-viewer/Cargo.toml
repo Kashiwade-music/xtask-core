@@ -1,0 +1,14 @@
+[package]
+name = "xtask-viewer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kivact.workspace = true
+xtask-archive.workspace = true
+xtask-render.workspace = true
+
+[dev-dependencies]
+kivact = { workspace = true, features = ["test"] }
+tempfile = "3"

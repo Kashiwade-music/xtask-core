@@ -1,26 +1,27 @@
 //! Role: 検査と図出力のパス、およびpolicyを上書きする設定を定義する。
 use std::path::{Path, PathBuf};
-use xtask_workspace::AnalysisSettings;
+use xtask_policy::AnalysisSettings;
 
-/// Repository paths, policy overrides and write control for the shared checks.
+/// Repository paths, the diagram output choice and an optional analysis override.
 #[derive(Clone, Debug)]
 pub struct Config {
     pub root: PathBuf,
     pub policy: PathBuf,
-    /// Override the policy's SVG and HTML destination. Relative paths use `root`.
-    pub output: Option<PathBuf>,
-    /// Validate rules and diagram structure without writing source/diagram files
-    /// or invoking Node. Enabled style tools may still produce Cargo build output.
-    pub no_write: bool,
-    /// Compatibility flag: writing checks now prune stale module SVGs by default.
-    /// Incompatible with `no_write`. Diagrams for existing selected targets are
-    /// preserved when analysis fails, and inactive required-feature targets are kept.
-    pub prune: bool,
-    /// Override the policy's role-description limit in Unicode characters.
-    /// `None` uses the policy value, or 80 when no policy is available.
-    pub max_role_chars: Option<usize>,
+    /// Where `check` writes the architecture diagrams.
+    pub output: Output,
     /// Replace the policy's entire analysis section when set.
     pub analysis: Option<AnalysisSettings>,
+}
+
+/// Where the architecture diagrams are written, if anywhere.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Output {
+    /// Write no diagrams (the default).
+    None,
+    /// Write to the path in the policy's `[diagrams] output`.
+    Policy,
+    /// Write to the given path. A relative path is resolved from `root`.
+    Path(PathBuf),
 }
 
 impl Config {
@@ -28,17 +29,9 @@ impl Config {
         let root = root.as_ref().to_path_buf();
         Self {
             policy: root.join("dev/xtask/policy/workspace.toml"),
-            output: None,
-            no_write: false,
-            prune: false,
+            output: Output::None,
             root,
-            max_role_chars: None,
             analysis: None,
         }
-    }
-
-    pub(crate) fn output_dir(&self) -> PathBuf {
-        self.root
-            .join(self.output.as_deref().unwrap_or(Path::new("architecture")))
     }
 }

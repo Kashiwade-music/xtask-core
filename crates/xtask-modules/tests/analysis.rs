@@ -1,72 +1,11 @@
 //! Role: モジュール読込み、名前解決、cfg別の参照と循環を検証する。
-use std::{collections::BTreeSet, fs};
-use xtask_modules::{AnalysisOptions, ModuleGraph, analyze};
+#[path = "common/analysis.rs"]
+mod analysis_support;
+mod common;
 
-fn graph(files: &[(&str, &str)], options: AnalysisOptions) -> ModuleGraph {
-    let directory = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    for (path, source) in files {
-        let path = directory.path().join(path);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, with_fixture_roles(source)).unwrap();
-    }
-    analyze(&directory.path().join("lib.rs"), &options).unwrap()
-}
-
-// Existing reference-resolution fixtures need valid module annotations so their
-// diagnostic assertions remain focused on reference analysis. This helper is
-// deliberately local to these fixtures; role-policy tests write source verbatim.
-fn with_fixture_roles(source: &str) -> String {
-    use syn::visit::{self, Visit};
-
-    struct InlineModules(Vec<proc_macro2::LineColumn>);
-    impl<'ast> Visit<'ast> for InlineModules {
-        fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
-            if let Some((brace, _)) = &module.content {
-                self.0.push(brace.span.open().end());
-            }
-            visit::visit_item_mod(self, module);
-        }
-    }
-    let Ok(file) = syn::parse_file(source) else {
-        // Malformed-source regression fixtures must retain their original text.
-        return source.to_owned();
-    };
-    let mut modules = InlineModules(Vec::new());
-    modules.visit_file(&file);
-    let mut positions: Vec<_> = modules
-        .0
-        .iter()
-        .map(|location| {
-            let start: usize = source
-                .split_inclusive('\n')
-                .take(location.line - 1)
-                .map(str::len)
-                .sum();
-            start
-                + source[start..]
-                    .char_indices()
-                    .nth(location.column)
-                    .map_or(source.len() - start, |(offset, _)| offset)
-        })
-        .collect();
-    positions.sort_unstable();
-    let mut annotated = source.to_owned();
-    for position in positions.into_iter().rev() {
-        annotated.insert_str(
-            position,
-            "\n//! Role: Exercise module reference analysis.\n",
-        );
-    }
-    format!("//! Role: Exercise module reference analysis.\n{annotated}")
-}
-
-fn edges(graph: &ModuleGraph) -> BTreeSet<(&str, &str)> {
-    graph
-        .edges
-        .iter()
-        .map(|r| (r.from.as_str(), r.to.as_str()))
-        .collect()
-}
+use analysis_support::{edges, graph};
+use common::{Options, write_fixture};
+use std::collections::BTreeSet;
 
 #[test]
 fn fixture_role_insertion_preserves_unicode_before_inline_braces() {
@@ -75,7 +14,7 @@ fn fixture_role_insertion_preserves_unicode_before_inline_braces() {
             "lib.rs",
             "const TEXT: &str = \"寿\"; mod inner { pub fn f() {} }",
         )],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert_eq!(result.modules.len(), 2);
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
@@ -89,7 +28,7 @@ fn hierarchy_is_not_a_reference_and_expression_paths_count() {
             ("a.rs", "pub fn f() { crate::b::g(); }"),
             ("b.rs", "pub fn g() { super::a::f(); }"),
         ],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert_eq!(result.modules.len(), 3);
     assert_eq!(
@@ -111,7 +50,7 @@ fn aliases_globs_and_chained_reexports_resolve_to_owners() {
         mod consumer { use crate::facade::{self as public, Alias}; fn f(_: Alias) { public::f(); } }
     "#,
         )],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     assert!(edges(&result).contains(&("crate::consumer", "crate::origin")));
@@ -133,7 +72,7 @@ fn cfg_and_cfg_attr_select_one_module_graph() {
         ("left.rs", "pub fn f() { crate::target::call(); }"),
         ("right.rs", "pub fn f() {}"),
     ];
-    let mut options = AnalysisOptions::default();
+    let mut options = Options::default();
     options.cfg.insert("unix".into());
     assert!(graph(&files, options.clone()).edges.is_empty());
     options.features.insert("left".into());
@@ -155,7 +94,7 @@ fn inline_and_out_of_line_module_directories() {
             ("a/child.rs", ""),
             ("custom/child.rs", ""),
         ],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert_eq!(result.modules.len(), 5);
     assert!(result.edges.is_empty());
@@ -180,7 +119,7 @@ fn scopes_aliases_and_generic_parameters_do_not_create_false_edges() {
         }
     "#,
         )],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert_eq!(
         edges(&result),
@@ -190,32 +129,13 @@ fn scopes_aliases_and_generic_parameters_do_not_create_false_edges() {
 }
 
 #[test]
-fn macros_are_parsed_only_when_their_grammar_is_known() {
-    let result = graph(
-        &[(
-            "lib.rs",
-            r#"
-        mod source { pub fn f() -> usize { 1 } }
-        mod consumer { fn f() { assert_eq!(crate::source::f(), 1); let _ = vec![crate::source::f(); 2]; unknown!(crate::source::f()); } }
-    "#,
-        )],
-        AnalysisOptions::default(),
-    );
-    assert_eq!(
-        edges(&result),
-        BTreeSet::from([("crate::consumer", "crate::source")])
-    );
-    assert_eq!(result.diagnostics.len(), 1);
-}
-
-#[test]
 fn include_and_block_modules_cannot_silently_pass() {
     let result = graph(
         &[(
             "lib.rs",
             "include!(\"generated.rs\"); fn f() { mod hidden {} }",
         )],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert_eq!(result.diagnostics.len(), 2);
 }
@@ -230,7 +150,7 @@ fn explicit_imports_override_ambiguous_globs() {
         mod c { use crate::a::*; use crate::b::*; use crate::a::Thing; fn f(_: Thing) {} }
     "#,
         )],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
 }
@@ -245,7 +165,7 @@ fn namespaces_distinguish_function_and_struct_imports() {
         mod c {use crate::a::Foo; use crate::b::Foo; fn f(){let _: Foo; Foo();}}
     "#,
         )],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     assert_eq!(
@@ -264,7 +184,7 @@ fn absolute_external_use_does_not_bind_same_named_local_module() {
         mod a {use ::std::mem::drop; pub fn f(){drop(1)}}
     "#,
         )],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert!(result.cycles.is_empty());
     assert_eq!(
@@ -282,7 +202,7 @@ fn explicit_path_files_search_children_in_the_physical_parent() {
             ("alternate.rs", "mod child;"),
             ("child.rs", ""),
         ],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert_eq!(result.modules.len(), 4);
     assert!(result.edges.is_empty());
@@ -303,471 +223,9 @@ fn cfg_filters_every_ast_reference_container() {
         }
     "#,
         )],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert!(result.edges.is_empty(), "{:?}", result.edges);
-}
-
-#[test]
-fn custom_expansions_require_explicit_trust() {
-    let files = [("lib.rs", "#[custom::emit] #[derive(Custom)] struct S;")];
-    let result = graph(&files, AnalysisOptions::default());
-    assert_eq!(result.diagnostics.len(), 2);
-    let mut options = AnalysisOptions::default();
-    options.trusted_attributes.insert("custom::emit".into());
-    options.trusted_derives.insert("Custom".into());
-    assert!(graph(&files, options).diagnostics.is_empty());
-}
-
-#[test]
-fn trusted_macros_skip_expansion_diagnostics_only_on_exact_path() {
-    let files = [(
-        "lib.rs",
-        "proptest! { fn a() {} } fn f() { prop_assert!(1 == 1); ::proptest::prop_oneof![1, 2]; }",
-    )];
-    let result = graph(&files, AnalysisOptions::default());
-    assert!(!result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    let mut options = AnalysisOptions::default();
-    for name in ["proptest", "prop_assert", "proptest::prop_oneof"] {
-        options.trusted_macros.insert(name.into());
-    }
-    let result = graph(&files, options);
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-
-    let mut options = AnalysisOptions::default();
-    options.trusted_macros.insert("proptest".into());
-    let result = graph(
-        &[(
-            "lib.rs",
-            "proptest! { fn a() {} } other! { fn b() {} } fn f() { other_expr!(1); prop_assert!(true); }",
-        )],
-        options,
-    );
-    assert!(
-        result.diagnostics.iter().any(|d| d.contains("other")),
-        "{:?}",
-        result.diagnostics
-    );
-    assert!(
-        result.diagnostics.iter().all(|d| !d.contains("proptest")),
-        "{:?}",
-        result.diagnostics
-    );
-    assert!(
-        result.diagnostics.iter().any(|d| d.contains("prop_assert")),
-        "{:?}",
-        result.diagnostics
-    );
-}
-
-fn trusting(names: &[&str]) -> AnalysisOptions {
-    let mut options = AnalysisOptions::default();
-    for name in names {
-        options.trusted_macros.insert((*name).into());
-    }
-    options
-}
-
-#[test]
-fn untrusted_local_macro_calls_keep_their_diagnostic() {
-    let files = [(
-        "lib.rs",
-        "macro_rules! ensure { ($e:expr) => { assert!($e) }; } mod user { fn f() { ensure!(true); } } fn g() { ensure!(true); }",
-    )];
-    let result = graph(&files, AnalysisOptions::default());
-    assert!(
-        result
-            .diagnostics
-            .iter()
-            .any(|d| d.contains("local macro expansion is unsupported: ensure")),
-        "{:?}",
-        result.diagnostics
-    );
-}
-
-#[test]
-fn trusted_local_expression_macro_records_edge_to_definition_module() {
-    let files = [(
-        "lib.rs",
-        "mod defs { macro_rules! ensure { ($e:expr) => { assert!($e) }; } pub(crate) use ensure; } mod user { use crate::defs::ensure; fn f() { ensure!(true); } }",
-    )];
-    let result = graph(&files, trusting(&["ensure"]));
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert!(edges(&result).contains(&("crate::user", "crate::defs")));
-    let untrusted = graph(&files, AnalysisOptions::default());
-    assert!(!untrusted.diagnostics.is_empty());
-    // Only the exact written path is trusted.
-    let other = graph(&files, trusting(&["crate::defs::ensure"]));
-    assert!(!other.diagnostics.is_empty(), "{:?}", other.diagnostics);
-}
-
-#[test]
-fn trusted_local_macro_matches_in_statement_type_and_pattern_positions() {
-    let files = [(
-        "lib.rs",
-        "mod defs { macro_rules! m { () => { u8 }; } pub(crate) use m; } mod user { use crate::defs::m; fn f(_: m!()) { m!(); let m!() = 1u8; } }",
-    )];
-    let result = graph(&files, trusting(&["m"]));
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert!(edges(&result).contains(&("crate::user", "crate::defs")));
-    assert!(
-        !graph(&files, AnalysisOptions::default())
-            .diagnostics
-            .is_empty()
-    );
-}
-
-#[test]
-fn trusted_local_item_macro_names_are_references_to_its_module() {
-    let files = [(
-        "lib.rs",
-        r#"
-        mod defs { macro_rules! make { () => { pub fn generated() {} }; } pub(crate) use make; }
-        mod m { use crate::defs::make; make!(); }
-        mod user { fn f() { crate::m::generated(); } }
-        mod uses { use crate::m::generated; fn f() { generated(); } }
-        mod inner { use crate::m; fn f() { m::generated(); } }
-        mod selfcall {
-            use crate::defs::make;
-            make!();
-            fn f() { self::generated(); crate::selfcall::generated(); }
-        }
-    "#,
-    )];
-    let result = graph(&files, trusting(&["make"]));
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert_eq!(
-        edges(&result),
-        BTreeSet::from([
-            ("crate::inner", "crate::m"),
-            ("crate::m", "crate::defs"),
-            ("crate::selfcall", "crate::defs"),
-            ("crate::user", "crate::m"),
-            ("crate::uses", "crate::m"),
-        ])
-    );
-}
-
-#[test]
-fn unresolved_names_stay_diagnostic_outside_opaque_modules_and_when_untrusted() {
-    let files = [(
-        "lib.rs",
-        r#"
-        mod defs { macro_rules! make { () => { pub fn generated() {} }; } pub(crate) use make; }
-        mod m { use crate::defs::make; make!(); }
-        mod other { pub fn real() {} }
-        mod user { fn f() { crate::other::generated(); } }
-    "#,
-    )];
-    let result = graph(&files, trusting(&["make"]));
-    assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
-    assert!(result.diagnostics[0].contains("crate::other::generated"));
-
-    // (d) Untrusted item-position macros keep both their diagnostic and unresolved paths.
-    let result = graph(&files, AnalysisOptions::default());
-    assert!(
-        result
-            .diagnostics
-            .iter()
-            .any(|d| d.contains("item macro expansion is unsupported: make")),
-        "{:?}",
-        result.diagnostics
-    );
-    let files = [(
-        "lib.rs",
-        r#"
-        mod defs { macro_rules! make { () => { pub fn generated() {} }; } pub(crate) use make; }
-        mod m { use crate::defs::make; make!(); }
-        mod user { fn f() { crate::m::generated(); } }
-    "#,
-    )];
-    let result = graph(&files, AnalysisOptions::default());
-    assert!(
-        result
-            .diagnostics
-            .iter()
-            .any(|d| d.contains("unresolved explicit local path: crate::m::generated")),
-        "{:?}",
-        result.diagnostics
-    );
-}
-
-#[test]
-fn trusted_local_item_macro_records_edge_to_definition_module() {
-    let files = [(
-        "lib.rs",
-        "mod defs { macro_rules! make { () => { fn g() {} }; } pub(crate) use make; } mod m { use crate::defs::make; make!(); }",
-    )];
-    let result = graph(&files, trusting(&["make"]));
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert!(edges(&result).contains(&("crate::m", "crate::defs")));
-}
-
-#[test]
-fn trusted_local_macros_match_macro_export_and_crate_paths_exactly() {
-    let files = [(
-        "lib.rs",
-        r#"
-        #[macro_export]
-        macro_rules! ensure { ($e:expr) => { assert!($e) }; }
-        #[macro_export]
-        macro_rules! make { () => { pub fn generated() {} }; }
-        mod m { crate::make!(); }
-        mod user { fn f() { crate::ensure!(true); crate::m::generated(); } }
-    "#,
-    )];
-    let result = graph(&files, trusting(&["crate::ensure", "crate::make"]));
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert_eq!(
-        edges(&result),
-        BTreeSet::from([
-            ("crate::m", "crate"),
-            ("crate::user", "crate"),
-            ("crate::user", "crate::m"),
-        ])
-    );
-    // Bare names do not match the written `crate::` path.
-    let result = graph(&files, trusting(&["ensure", "make"]));
-    assert!(!result.diagnostics.is_empty());
-}
-
-#[test]
-fn textual_scope_macros_resolve_from_child_modules() {
-    let files = [(
-        "lib.rs",
-        r#"
-        macro_rules! ensure { ($e:expr) => { assert!($e) }; }
-        mod user { mod deep { fn f() { ensure!(true); } } }
-    "#,
-    )];
-    let result = graph(&files, trusting(&["ensure"]));
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert_eq!(
-        edges(&result),
-        BTreeSet::from([("crate::user::deep", "crate")])
-    );
-    let result = graph(&files, AnalysisOptions::default());
-    assert!(
-        result
-            .diagnostics
-            .iter()
-            .any(|d| d.contains("local macro expansion is unsupported: ensure")),
-        "{:?}",
-        result.diagnostics
-    );
-}
-
-#[test]
-fn macro_use_modules_extend_the_parent_textual_scope() {
-    let files = [
-        (
-            "lib.rs",
-            "#[macro_use] mod defs; mod plain { macro_rules! hidden { () => {}; } } mod user { fn f() { ensure!(true); hidden!(); } }",
-        ),
-        (
-            "defs.rs",
-            "macro_rules! ensure { ($e:expr) => { assert!($e) }; }",
-        ),
-    ];
-    let result = graph(&files, trusting(&["ensure", "hidden"]));
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    // Without #[macro_use], `hidden` is not in textual scope and creates no edge.
-    assert_eq!(
-        edges(&result),
-        BTreeSet::from([("crate::user", "crate::defs")])
-    );
-    let result = graph(&files, trusting(&["hidden"]));
-    assert!(
-        result
-            .diagnostics
-            .iter()
-            .any(|d| d.contains("local macro expansion is unsupported: ensure")),
-        "{:?}",
-        result.diagnostics
-    );
-}
-
-#[test]
-fn exported_macros_live_at_the_crate_root_wherever_defined() {
-    let files = [(
-        "lib.rs",
-        r#"
-        mod defs {
-            #[macro_export]
-            macro_rules! ensure { ($e:expr) => { assert!($e) }; }
-            #[macro_export]
-            macro_rules! make { () => { pub fn generated() {} }; }
-        }
-        mod m { crate::make!(); }
-        mod user { fn f() { crate::ensure!(true); crate::m::generated(); } }
-    "#,
-    )];
-    let result = graph(&files, trusting(&["crate::ensure", "crate::make"]));
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert_eq!(
-        edges(&result),
-        BTreeSet::from([
-            ("crate::m", "crate::defs"),
-            ("crate::user", "crate::defs"),
-            ("crate::user", "crate::m"),
-        ])
-    );
-    let result = graph(&files, AnalysisOptions::default());
-    assert!(
-        result
-            .diagnostics
-            .iter()
-            .any(|d| d.contains("local macro expansion is unsupported: crate::ensure")),
-        "{:?}",
-        result.diagnostics
-    );
-}
-
-#[test]
-fn crate_root_item_macro_makes_unresolved_crate_paths_references_to_the_root() {
-    let files = [(
-        "lib.rs",
-        r#"
-        macro_rules! make { () => { pub fn generated() {} }; }
-        make!();
-        mod user { fn f() { crate::generated(); } }
-    "#,
-    )];
-    let result = graph(&files, trusting(&["make"]));
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert_eq!(edges(&result), BTreeSet::from([("crate::user", "crate")]));
-}
-
-#[test]
-fn macro_use_chains_cross_several_modules() {
-    let files = [
-        (
-            "lib.rs",
-            "#[macro_use] mod a; mod user { fn f() { ensure!(true); } }",
-        ),
-        ("a.rs", "#[macro_use] mod b;"),
-        ("a/b.rs", "#[macro_use] mod c;"),
-        (
-            "a/b/c.rs",
-            "macro_rules! ensure { ($e:expr) => { assert!($e) }; }",
-        ),
-    ];
-    let result = graph(&files, trusting(&["ensure"]));
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert_eq!(
-        edges(&result),
-        BTreeSet::from([("crate::user", "crate::a::b::c")])
-    );
-}
-
-#[test]
-fn cfg_disabled_macro_definitions_are_not_in_textual_scope() {
-    let files = [(
-        "lib.rs",
-        r#"
-        #[cfg(off)] #[macro_use] mod off { macro_rules! from_mod { () => {}; } }
-        #[cfg(off)] macro_rules! from_item { () => {}; }
-        mod user { fn f() { from_mod!(); from_item!(); } }
-    "#,
-    )];
-    let result = graph(&files, trusting(&["from_mod", "from_item"]));
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert!(result.edges.is_empty(), "{:?}", result.edges);
-    let result = graph(&files, AnalysisOptions::default());
-    assert!(
-        result
-            .diagnostics
-            .iter()
-            .all(|d| !d.contains("local macro expansion")),
-        "{:?}",
-        result.diagnostics
-    );
-}
-
-#[test]
-fn nearest_textual_scope_definition_wins() {
-    let files = [(
-        "lib.rs",
-        r#"
-        macro_rules! pick { () => {}; }
-        mod near { macro_rules! pick { () => {}; } mod user { fn f() { pick!(); } } }
-        mod far { fn f() { pick!(); } }
-    "#,
-    )];
-    let result = graph(&files, trusting(&["pick"]));
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert_eq!(
-        edges(&result),
-        BTreeSet::from([
-            ("crate::far", "crate"),
-            ("crate::near::user", "crate::near")
-        ])
-    );
-}
-
-#[test]
-fn cfg_attr_can_supply_macro_use_and_macro_export() {
-    let files = [
-        (
-            "lib.rs",
-            r#"
-        #[cfg_attr(on, macro_use)] mod used;
-        mod exporter {
-            #[cfg_attr(on, macro_export)]
-            macro_rules! exported { () => {}; }
-        }
-        mod user { fn f() { scoped!(); crate::exported!(); } }
-    "#,
-        ),
-        ("used.rs", "macro_rules! scoped { () => {}; }"),
-    ];
-    let mut options = trusting(&["scoped", "crate::exported"]);
-    options.cfg.insert("on".into());
-    let result = graph(&files, options);
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert_eq!(
-        edges(&result),
-        BTreeSet::from([
-            ("crate::user", "crate::exporter"),
-            ("crate::user", "crate::used")
-        ])
-    );
-    // Without the cfg, neither attribute applies and no local macro is found.
-    let result = graph(&files, trusting(&["scoped", "crate::exported"]));
-    assert!(result.edges.is_empty(), "{:?}", result.edges);
-}
-
-#[test]
-fn builtin_inert_attributes_and_derive_helpers_need_no_expansion() {
-    let result = graph(
-        &[(
-            "lib.rs",
-            "#[derive(Default)] enum E { #[default] A, B } #[windows_subsystem = \"windows\"] fn f() {}",
-        )],
-        AnalysisOptions::default(),
-    );
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-}
-
-#[test]
-fn tool_attributes_need_no_expansion() {
-    let result = graph(
-        &[(
-            "lib.rs",
-            "#[clippy::msrv = \"1.90\"] #[rustfmt::skip] #[rust_analyzer::skip]              #[diagnostic::on_unimplemented(message = \"m\")] trait T {}",
-        )],
-        AnalysisOptions::default(),
-    );
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-}
-
-#[test]
-fn unknown_attributes_remain_diagnostics() {
-    let result = graph(
-        &[("lib.rs", "#[my_attr] #[other::tool] struct S;")],
-        AnalysisOptions::default(),
-    );
-    assert_eq!(result.diagnostics.len(), 2, "{:?}", result.diagnostics);
 }
 
 #[test]
@@ -777,7 +235,7 @@ fn cfg_disabled_file_has_no_ghost_node_or_edges() {
             ("lib.rs", "mod a; fn f(){a::foo();}"),
             ("a.rs", "#![cfg(off)] pub fn foo(){}"),
         ],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert_eq!(result.modules.len(), 1);
     assert!(result.edges.is_empty());
@@ -794,7 +252,7 @@ fn root_alias_and_nested_super_paths_find_owning_module() {
         mod b { mod c { fn f(){this::a::f(); super::super::a::f();} } }
     "#,
         )],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert_eq!(
         edges(&result),
@@ -813,7 +271,7 @@ fn visibility_and_attribute_names_are_not_module_references() {
         mod a { #[cfg(all())] pub(crate) struct T; }
     "#,
         )],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert_eq!(edges(&result), BTreeSet::from([("crate", "crate::a")]));
     assert!(result.cycles.is_empty());
@@ -823,29 +281,9 @@ fn visibility_and_attribute_names_are_not_module_references() {
 fn unresolved_explicit_local_paths_are_diagnostic() {
     let result = graph(
         &[("lib.rs", "fn f(_: crate::missing::T) {}")],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert_eq!(result.diagnostics.len(), 1);
-}
-
-#[test]
-fn formatted_macro_patterns_guards_and_json_values_are_references() {
-    let result = graph(
-        &[(
-            "lib.rs",
-            r#"
-        mod a {pub fn f()->usize {1} pub enum E {V}}
-        mod b {fn f(){
-            let _ = matches!(0, _ if crate::a::f() > 0);
-            let _ = serde_json::json!({"outer":[{"value": crate::a::f()}]});
-            todo!("{}", crate::a::f());
-        }}
-    "#,
-        )],
-        AnalysisOptions::default(),
-    );
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert_eq!(edges(&result), BTreeSet::from([("crate::b", "crate::a")]));
 }
 
 #[test]
@@ -855,21 +293,9 @@ fn generic_type_name_hides_module_without_import_edges() {
             "lib.rs",
             "mod a {pub fn f(){}} fn generic<a>() {a::method();}",
         )],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert!(result.edges.is_empty());
-}
-
-#[test]
-fn local_macros_do_not_inherit_builtin_argument_grammar() {
-    let result = graph(
-        &[(
-            "lib.rs",
-            "macro_rules! assert { ($($t:tt)*) => {} } fn f(){assert!(anything);} ",
-        )],
-        AnalysisOptions::default(),
-    );
-    assert_eq!(result.diagnostics.len(), 1);
 }
 
 #[test]
@@ -882,123 +308,13 @@ fn mutually_exclusive_cfg_expressions_do_not_form_a_cycle() {
         mod b {pub fn f(){#[cfg(not(left))] crate::a::f();}}
     "#,
         )],
-        AnalysisOptions {
+        Options {
             cfg: BTreeSet::from(["left".into()]),
             ..Default::default()
         },
     );
     assert!(result.cycles.is_empty());
     assert_eq!(edges(&result), BTreeSet::from([("crate::a", "crate::b")]));
-}
-
-#[test]
-fn external_imports_cannot_masquerade_as_builtin_macros_or_derives() {
-    let result = graph(
-        &[(
-            "lib.rs",
-            r#"
-        use evil::{assert, Clone};
-        #[derive(Clone)] struct S;
-        fn f(){assert!(anything);}
-    "#,
-        )],
-        AnalysisOptions::default(),
-    );
-    assert_eq!(result.diagnostics.len(), 2, "{:?}", result.diagnostics);
-}
-
-#[test]
-fn unattributed_expressions_keep_references_with_a_shadowed_derive_provider() {
-    let result = graph(
-        &[(
-            "lib.rs",
-            r#"
-        use evil::Clone;
-        #[cfg_attr(active, derive(Clone))] struct Unsupported;
-        #[cfg(inactive)] #[derive(Clone)] struct Excluded;
-        mod provider {pub fn value()->u32 {1}}
-        fn plain()->u32 {
-            let value = crate::provider::value();
-            match value {0 => 0, _ => value + crate::provider::value()}
-        }
-    "#,
-        )],
-        AnalysisOptions {
-            cfg: BTreeSet::from(["active".into()]),
-            ..Default::default()
-        },
-    );
-    assert_eq!(
-        edges(&result),
-        BTreeSet::from([("crate", "crate::provider")])
-    );
-    assert_eq!(
-        result.diagnostics,
-        ["crate: derive macro expansion is unsupported: Clone"]
-    );
-}
-
-#[test]
-fn external_providers_survive_alias_reexports_and_globs() {
-    let result = graph(
-        &[(
-            "lib.rs",
-            r#"
-        mod api {pub use evil::{check as assert, Custom as Clone};}
-        use crate::api::*;
-        #[derive(Clone)] struct S;
-        fn f(){assert!(anything);}
-    "#,
-        )],
-        AnalysisOptions::default(),
-    );
-    assert_eq!(result.diagnostics.len(), 2, "{:?}", result.diagnostics);
-}
-
-#[test]
-fn known_macro_and_derive_provider_aliases_remain_supported() {
-    let result = graph(
-        &[(
-            "lib.rs",
-            r#"
-        use std::assert_eq as check;
-        use std::clone::Clone as Copyable;
-        use serde_json::json as data;
-        #[derive(Copyable)] struct S;
-        mod a {pub fn f()->usize {1}}
-        fn f(){check!(crate::a::f(), 1); let _ = data!({"x": crate::a::f()});}
-    "#,
-        )],
-        AnalysisOptions::default(),
-    );
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-    assert_eq!(edges(&result), BTreeSet::from([("crate", "crate::a")]));
-}
-
-#[test]
-fn unknown_external_globs_require_known_macro_providers() {
-    let result = graph(
-        &[(
-            "lib.rs",
-            "use evil::*; #[derive(Clone)] struct S; fn f(){assert!(true);}",
-        )],
-        AnalysisOptions::default(),
-    );
-    assert_eq!(result.diagnostics.len(), 2, "{:?}", result.diagnostics);
-}
-
-#[test]
-fn trusted_external_globs_keep_std_macro_providers() {
-    let mut options = AnalysisOptions::default();
-    options.trusted_globs.insert("framework::prelude".into());
-    let result = graph(
-        &[(
-            "lib.rs",
-            "use framework::prelude::*; #[derive(Clone)] struct S; fn f(){assert!(true);}",
-        )],
-        options,
-    );
-    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
 }
 
 #[test]
@@ -1016,8 +332,264 @@ fn named_struct_patterns_use_the_type_namespace() {
         } fn generic<const N:u8>(){} fn g(){generic::<{crate::a::S {n:1}.n}>();}}
     "#,
         )],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     assert_eq!(edges(&result), BTreeSet::from([("crate::b", "crate::a")]));
+}
+
+#[test]
+fn cfg_true_is_enabled() {
+    let result = graph(
+        &[
+            ("lib.rs", "#[cfg(true)] mod x; #[cfg(false)] mod y;"),
+            ("x.rs", ""),
+        ],
+        Options::default(),
+    );
+    assert!(result.modules.iter().any(|module| module.id == "crate::x"));
+    assert!(!result.modules.iter().any(|module| module.id == "crate::y"));
+}
+
+#[test]
+fn one_parse_two_configurations() {
+    use xtask_modules::{Configuration, analyze};
+    let directory = write_fixture(&[
+        ("lib.rs", "//! Role: Root.\n#[cfg(test)] mod tests;"),
+        ("tests.rs", "//! Role: Tests.\n"),
+    ]);
+    let options = Options::default();
+    let test = Configuration {
+        cfg: BTreeSet::from(["test".to_string()]),
+    };
+    let results = analyze(
+        &directory.path().join("lib.rs"),
+        &options.settings(),
+        &[Configuration::default(), test],
+    );
+    assert_eq!(results.len(), 2);
+    let normal = results[0].as_ref().unwrap();
+    let with_test = results[1].as_ref().unwrap();
+    assert!(
+        !normal
+            .modules
+            .iter()
+            .any(|module| module.id == "crate::tests")
+    );
+    assert!(
+        with_test
+            .modules
+            .iter()
+            .any(|module| module.id == "crate::tests")
+    );
+}
+
+#[test]
+fn errors_have_location() {
+    let directory = write_fixture(&[("lib.rs", "//! Role: Root.\n#[path] mod x;\n")]);
+    let error = Options::default()
+        .analyze(&directory.path().join("lib.rs"))
+        .unwrap_err();
+    assert!(
+        error.contains("lib.rs:2: invalid path attribute"),
+        "{error}"
+    );
+}
+
+#[test]
+fn invalid_cfg_reported_once() {
+    let result = graph(&[("lib.rs", "#[cfg(a::b)] mod x {}")], Options::default());
+    let reported = result
+        .diagnostics
+        .iter()
+        .filter(|message| message.contains("unsupported cfg predicate"))
+        .count();
+    assert_eq!(reported, 1, "{:?}", result.diagnostics);
+}
+
+#[test]
+fn modules_are_sorted_with_parents_first() {
+    let result = graph(
+        &[
+            ("lib.rs", "mod a; mod a_b;"),
+            ("a.rs", "mod x;"),
+            ("a/x.rs", ""),
+            ("a_b.rs", ""),
+        ],
+        Options::default(),
+    );
+    let ids = result
+        .modules
+        .iter()
+        .map(|module| module.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["crate", "crate::a", "crate::a::x", "crate::a_b"]);
+    assert_eq!(result.modules[0].parent, None);
+    for (index, module) in result.modules.iter().enumerate().skip(1) {
+        assert!(module.parent.is_some_and(|parent| parent < index));
+    }
+    let child = result
+        .modules
+        .iter()
+        .find(|module| module.id == "crate::a::x")
+        .unwrap();
+    assert_eq!(
+        child
+            .parent
+            .map(|parent| result.modules[parent].id.as_str()),
+        Some("crate::a")
+    );
+}
+
+#[test]
+fn declared_type_does_not_hide_glob_value() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "\nmod a { \n pub fn X() {} }\nmod b { \n use crate::a::*; type X = (); fn f() { X(); } }\n",
+        )],
+        Options::default(),
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(edges(&result).contains(&("crate::b", "crate::a")));
+}
+
+#[test]
+fn shadowed_name_is_not_forwarded() {
+    let forward = graph(
+        &[(
+            "lib.rs",
+            "\nmod a { \n pub fn f() {} }\nmod b { \n pub use crate::a::*; pub fn f() {} }\nmod c { \n use crate::b::*; fn g() { f(); } }\n",
+        )],
+        Options::default(),
+    );
+    assert!(!edges(&forward).contains(&("crate::c", "crate::a")));
+    assert!(edges(&forward).contains(&("crate::c", "crate::b")));
+    let reversed = graph(
+        &[(
+            "lib.rs",
+            "\nmod c { \n use crate::b::*; fn g() { f(); } }\nmod b { \n pub use crate::a::*; pub fn f() {} }\nmod a { \n pub fn f() {} }\n",
+        )],
+        Options::default(),
+    );
+    assert!(!edges(&reversed).contains(&("crate::c", "crate::a")));
+}
+
+#[test]
+fn three_level_reexport_chain() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "\nmod a { \n pub fn X() {} }\nmod b { \n pub use crate::a::*; }\nmod c { \n pub use crate::b::*; }\nmod d { \n use crate::c::*; fn f() { X(); } }\n",
+        )],
+        Options::default(),
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(edges(&result).contains(&("crate::d", "crate::a")));
+}
+
+#[test]
+fn external_glob_reexport_keeps_uncertainty() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "\nmod p { \n pub use ext::*; }\nmod c { \n use crate::p::*; #[derive(Clone)] struct S; }\n",
+        )],
+        Options::default(),
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.starts_with("crate::c:") && d.contains("Clone")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn block_glob_does_not_hide_module_glob() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "\nuse foo::*;\nfn f() { use std::fmt::*; #[derive(Clone)] struct S; }\n",
+        )],
+        Options::default(),
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.starts_with("crate:") && d.contains("Clone")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn glob_uses_every_resolved_module() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "\nmod a { \n pub fn f() {} }\nmod b { \n pub fn g() {} }\nmod p { \n pub use crate::a as pick;\n pub use crate::b as pick; }\nmod c { \n use crate::p::pick::*; fn h() { f(); g(); } }\n",
+        )],
+        Options::default(),
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(edges(&result).contains(&("crate::c", "crate::a")));
+    assert!(edges(&result).contains(&("crate::c", "crate::b")));
+}
+
+#[test]
+fn block_use_is_processed_once() {
+    let result = graph(
+        &[("lib.rs", "\nmod a { \n }\nfn f() { use crate::a::f; }\n")],
+        Options::default(),
+    );
+    let count = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.contains("unresolved explicit local import"))
+        .count();
+    assert_eq!(count, 1, "{:?}", result.diagnostics);
+}
+
+#[test]
+fn invalid_cfg_on_impl_fn_is_one_diagnostic() {
+    let result = graph(
+        &[("lib.rs", "struct S;\nimpl S { #[cfg(a::b)] fn f() {} }\n")],
+        Options::default(),
+    );
+    let reported = result
+        .diagnostics
+        .iter()
+        .filter(|message| message.contains("unsupported cfg predicate"))
+        .count();
+    assert_eq!(reported, 1, "{:?}", result.diagnostics);
+}
+
+#[test]
+fn extern_crate_does_not_hide_glob_value() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "extern crate alloc; mod a { pub fn alloc() {} } mod g { pub use crate::a::*; } mod m { use crate::g::*; fn h() { alloc(); } }",
+        )],
+        Options::default(),
+    );
+    assert!(
+        edges(&result).contains(&("crate::m", "crate::a")),
+        "{:?}",
+        edges(&result)
+    );
+}
+
+#[test]
+fn raw_identifier_module_file() {
+    let result = graph(
+        &[("lib.rs", "mod r#type;"), ("type.rs", "pub fn f() {}")],
+        Options::default(),
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(result.modules.iter().any(|m| m.id == "crate::type"));
 }

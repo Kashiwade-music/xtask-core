@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "adler2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
 name = "bitflags"
 version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -88,6 +94,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "miniz_oxide"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+dependencies = [
+ "adler2",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -116,15 +131,6 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
-
-[[package]]
-name = "roxmltree"
-version = "0.21.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "rustix"
@@ -298,39 +304,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "xtask-archive"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide",
+]
+
+[[package]]
 name = "xtask-core"
 version = "0.1.0"
 dependencies = [
- "proc-macro2",
- "roxmltree",
- "serde_json",
- "syn 2.0.119",
  "tempfile",
- "toml",
- "xtask-graph",
+ "xtask-archive",
+ "xtask-diagram",
  "xtask-modules",
+ "xtask-policy",
  "xtask-source",
+ "xtask-style",
  "xtask-workspace",
 ]
 
 [[package]]
-name = "xtask-graph"
+name = "xtask-diagram"
 version = "0.1.0"
 dependencies = [
- "roxmltree",
- "serde_json",
- "tempfile",
+ "xtask-archive",
  "xtask-layout",
- "xtask-svg",
+ "xtask-modules",
+ "xtask-workspace",
 ]
 
 [[package]]
 name = "xtask-layout"
 version = "0.1.0"
 dependencies = [
- "serde",
  "serde_json",
- "tempfile",
 ]
 
 [[package]]
@@ -340,6 +348,15 @@ dependencies = [
  "proc-macro2",
  "syn 2.0.119",
  "tempfile",
+ "xtask-source",
+]
+
+[[package]]
+name = "xtask-policy"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
 ]
 
 [[package]]
@@ -351,11 +368,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "xtask-svg"
+name = "xtask-style"
 version = "0.1.0"
 dependencies = [
- "roxmltree",
- "xtask-layout",
+ "proc-macro2",
+ "serde_json",
+ "syn 2.0.119",
+ "tempfile",
+ "toml",
+ "xtask-policy",
+ "xtask-source",
+ "xtask-workspace",
 ]
 
 [[package]]
@@ -365,7 +388,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "toml",
+ "xtask-policy",
+ "xtask-source",
 ]
 
 [[package]]

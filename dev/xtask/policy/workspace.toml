@@ -1,16 +1,17 @@
-output = "architecture"
-
 [limits]
 max_code_lines = 1000
 
 [analysis]
 trusted_attributes = ["serde"]
 trusted_derives = ["Deserialize", "Serialize"]
+trusted_macros = ["json", "serde_json::json", "Token", "syn::Token"]
 
 [visible_to]
-xtask-source = ["xtask-core"]
-xtask-workspace = ["xtask-core"]
-xtask-modules = ["xtask-core"]
-xtask-graph = ["xtask-core"]
-xtask-layout = ["xtask-graph", "xtask-svg"]
-xtask-svg = ["xtask-graph"]
+xtask-source = ["xtask-core", "xtask-modules", "xtask-workspace", "xtask-style"]
+xtask-policy = ["xtask-core", "xtask-style", "xtask-workspace"]
+xtask-workspace = ["xtask-core", "xtask-style", "xtask-diagram"]
+xtask-modules = ["xtask-core", "xtask-diagram"]
+xtask-style = ["xtask-core"]
+xtask-layout = ["xtask-diagram"]
+xtask-archive = ["xtask-core", "xtask-diagram"]
+xtask-diagram = ["xtask-core"]

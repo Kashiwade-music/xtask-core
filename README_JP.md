@@ -5,22 +5,22 @@
 Rust workspace向けのリポジトリ規則検査とアーキテクチャ図の生成ツール。
 `cargo xtask` から実行する。
 
-`cargo xtask check` の1コマンドで次を行う。
+`cargo xtask check` は、リポジトリの規則をすべて検査し、何も書き出さない。
 
 - ファイルごとのコード行数の上限を検査する。
 - package間の依存を許可リスト（`visible_to`）で制限する。
 - 全crate root・moduleに1行の `Role:` 宣言を要求する。
 - module間の参照循環を禁止する。
 - [Google Rust Style Guide](https://google.github.io/styleguide/rustguide.html)のうち、機械的に検査できる項目を任意で適用する。
-- crate・moduleの依存図をSVGと、単一ファイルの対話型HTMLとして出力する。
+
+`cargo xtask check --write` は、さらに crate・module の依存図を配置して、圧縮した一つのファイルに書き出す。`xtask-viewer` の GUI がそのファイルを開く。詳しくは[出力](#出力)を参照。
 
 ## 動作要件
 
-- Rust 1.85以降。
+- Rust 1.85以降。Node.js は不要。
 - `Cargo.lock` と依存crateのキャッシュ。Cargoは `--locked --offline` で実行する。
-- 図の書き出しにNode.js。`PATH` 上の `node` 以外を使う場合は `XTASK_NODE` で指定する。
-  `elkjs` 0.12.0を同梱しているため、npmのインストールやネットワーク接続は不要。`--no-write` ではNode.jsを使わない。
 - style検査を有効にする場合は `rustfmt` と `clippy` コンポーネント。
+- viewer を build する場合：Rust 1.98.1（`viewer/rust-toolchain.toml` で選ばれる）と、Kivact を取得するためのネットワーク接続。
 
 ## 導入
 
@@ -66,27 +66,25 @@ workspaceの `members` に `dev/xtask` を追加し、後述のpolicyファイ�
 ## 使い方
 
 ```sh
-cargo xtask check              # 検査し、SVGとHTMLを書き出す
-cargo xtask check --no-write   # 検査のみ。CI向け
+cargo xtask check              # 全検査を行う。何も書かない
+cargo xtask check --write      # 全検査を行ったあと、図のファイルを書く
 cargo xtask check --root PATH  # 別のリポジトリを検査する
 cargo xtask check --help
 ```
 
-違反はすべて集約して報告する。検査に失敗しても、生成できる図は書き出す。
-終了コードは、成功で0、違反または実行エラーで1、引数の誤りで2。
+違反はすべて集約して報告する。終了コードは、成功で0、違反または実行エラーで1、引数の誤りで2。削除された `--no-write` と `--prune` を含め、ほかのoptionは引数の誤りになる。
 
-`--no-write` は全検査と図の構造検証を行い、SVG・HTMLは書き出さない。
-style検査が有効な場合はrustfmtとClippyを実行するため、`target/` 以下へのビルド出力と、build script・procedural macroの実行が発生する。
+`--write` は、検査に失敗しても、作れる図はすべて書く。解析に失敗したtargetの図は、図の代わりに失敗の理由をファイルに記録する。ファイルを書けなかったときは、その誤りを他の違反と一緒に報告する。
 
-各targetは通常構成と `cfg(test)` 構成の両方を解析する。
+style検査が有効な場合は、どのモードでもrustfmtとClippyを実行する。そのため `target/` 以下へのビルド出力が生じ、build scriptとprocedural macroが実行される。
+
+test・benchのtargetは `cfg(test)` 構成だけを解析する。`test` が有効な library・binary・example・procedural macro のtargetは、通常構成と `cfg(test)` 構成の両方を解析する。それ以外のtarget（`test = false` のtargetを含む。exampleの既定値がこれにあたる）は通常構成だけを解析する。`required-features` が無効なtargetは解析せず、図にその旨を記録する。
 
 ## 設定
 
-policyは `dev/xtask/policy/workspace.toml` から読み込む。未知のキーはエラーになる。
+policyは `dev/xtask/policy/workspace.toml` から読み込む。ファイルが無いときは、すべての節を既定値で扱う。未知のキーはエラーになり、各節は `[limits]` のようなTOMLの表でなければならない。
 
 ```toml
-output = "architecture"   # SVG・HTMLの出力先。ルートからの相対パス
-
 [limits]
 max_code_lines = 1000     # ファイルごと。1000以下
 max_role_chars = 80       # Role説明の文字数（Unicode文字単位）
@@ -96,7 +94,8 @@ internal = ["facade", "app-*"]
 app = []
 
 [diagrams]
-targets = "all"           # "all"、"lib-bin"、"lib"
+targets = "all"          # "all"、"lib-bin"、"lib"
+output = "target/xtask/architecture.xtaskmap"   # 既定値。ルートからの相対パス、または絶対パス
 
 [analysis]
 target = "x86_64-unknown-linux-gnu"
@@ -119,13 +118,11 @@ enabled = true
 
 ### 依存の可視性
 
-`visible_to` のキーは依存される側のpackage、値はそれに依存してよいpackageの一覧。
-末尾の `*` は前方一致。`[]` はすべての依存を禁止し、キーのないpackageは制限しない。キーとパターンはworkspace memberに一致する必要がある。
-normal・dev・build・optional・target条件付きの依存をすべて検査する。
+`visible_to` のキーは依存される側のpackage、値はそれに依存してよいpackageの一覧。末尾の `*` は前方一致。`[]` はすべての依存を禁止し、キーのないpackageは制限しない。キーとパターンはworkspace memberに一致する必要がある。normal・dev・build・optional・target条件付きの依存をすべて検査する。
 
 ### 役割宣言
 
-全crate root（library・binary・test・bench・example・build script）と全moduleの先頭に、1行の内側ドキュメントを書く。
+全crate root（library・binary・test・bench・example・build script）と全moduleは、最初の行が `Role:` で始まる1行の内側ドキュメントを持つ。
 
 ```rust
 //! Role: アプリケーション全体を制御する。
@@ -135,12 +132,11 @@ mod config {
 }
 ```
 
-別ファイルのmoduleでは、そのファイルの先頭に書く。`mod name;` 側の外側コメントでは代用できない。
-`/*! Role: ... */` や `#![doc = "Role: ..."]` も使える。説明は空でなく、`max_role_chars` 以下とする。
+`Role:` の行は、そのmoduleの最初の内側ドキュメントコメントの最初の行でなければならない。それ以外の場所の `Role:` 行（たとえば最初の内側ドキュメントコメントの2行目）は誤りになる。別ファイルのmoduleでは、そのファイルの先頭に書く。`mod name;` 側の外側コメントでは代用できない。`/*! Role: ... */` と `#![doc = "Role: ..."]` も同じ意味で使える。説明は空でなく、`max_role_chars` 以下とする。
 
 ### 図
 
-`[diagrams] targets` で、module図を生成するtargetを選ぶ。
+`[diagrams] targets` で、module図を書くtargetを選ぶ。
 
 | 値 | 対象 |
 | --- | --- |
@@ -150,43 +146,82 @@ mod config {
 
 選択外のtargetも検査は行い、図だけを省く。
 
+`[diagrams] output` は図のファイルのpathで、リポジトリルートからの相対パスまたは絶対パス。既定値は `target/xtask/architecture.xtaskmap`。
+
 ### 解析
 
-既定では、host target・Cargoの既定feature・追加cfgなしで解析する。
-`[analysis]` はソース解析とClippyの両方に適用される。
+既定では、host target・Cargoの既定feature・追加cfgなしで解析する。`[analysis]` はソース解析とClippyの両方の設定を変える。
 
-`trusted_attributes`、`trusted_derives`、`trusted_macros` には、module構造に影響しないとみなす項目を指定する。
-trusted指定したfunction-like macroの呼出し（呼出し箇所に書かれたpathで完全一致）は展開しないため、その中の参照は解析されない。
+- `features` は有効にするfeatureの一覧。各項目は空でなく、重複が無く、前後に空白を含まない。`default_features`（既定 `true`）はCargoの既定featureを使うかを決める。
+- `all_features = true` は、すべてのfeatureを有効にして解析する。`features` とは一緒に使えず、`default_features` を書いてはならない。違えば policy は `all_features cannot be combined with features or default_features` の誤りで拒まれる。
+- `cfg(true)` は有効なものとして評価する。
 
-他crateからのglob importはどのmacro・derive・attributeでも提供しうるため、それを含むmoduleでは `vec!` や `#[derive(Clone)]` の提供元を特定できない。
-`trusted_globs` には、macro・derive・attributeを提供しないと分かっているglob import（frameworkの型とtraitのpreludeなど）を `crate::module` のpathで指定する。
+`trusted_attributes`、`trusted_derives`、`trusted_macros` には、module構造に影響しないとみなす項目を指定する。trusted指定したfunction-like macroの呼出しは、呼出し箇所に書かれたpath（`serde_json::json` など）で完全一致させる。そのような呼出しは展開しないため、中の参照は解析されず、依存の辺にもならない。
+
+`json!` と `Token!` は特別扱いしない。これらを使うリポジトリは、呼び出すときに書くpathを `trusted_macros` に書く（例：`serde_json::json`、`Token![...]` なら `syn::Token`）。
+
+他crateからのglob importはどのmacro・derive・attributeでも提供しうるため、それを含むmoduleでは `vec!` や `#[derive(Clone)]` の提供元を特定できない。`trusted_globs` には、そのようなimportをpath（`framework::prelude` など）で指定し、未知の提供元として扱わないようにする。glob が提供するattributeやmacroをコードが使うなら、その名前を `trusted_attributes` または `trusted_macros` にも書く。
+
+`trusted_globs` と `[style]` の `allowed_globs` は別の設定。`allowed_globs` は `glob-imports` 規則でそのglobを許すだけで、解析の結果は変えない。両方が必要なglobは、両方に書く。
 
 ## 出力
 
-```text
-architecture/
-├── index.html
-├── crates.svg
-└── modules/<package>/
-    ├── <target>-<kind>-normal.svg
-    └── <target>-<kind>-test.svg
+### 図のファイル
+
+`--write` は、`[diagrams] output`（既定 `target/xtask/architecture.xtaskmap`）に一つのファイルを書く。`--write` のたびに、そのファイルを丸ごと書き直す。ほかのファイルは書かず、削除もしない。ファイルは zlib で圧縮したバイナリ（形式の版 1）で、その回に作ったすべての図と通知を含む。`target/` の下にあり、`target/` はビルド出力の directory なので、通常はバージョン管理の対象外（`.gitignore`）にする。
+
+`--write` を付けない `check` は、このファイルに触れない。
+
+### viewer
+
+`xtask-viewer` は、図のファイルを開くGUIである。[`viewer/`](viewer) のworkspaceで、Kivactを使って作る。
+
+- ファイルは、引数にpathを渡すか、Open のダイアログか、ウィンドウへのdrag & dropで開く。開くと crate 図から始まる。
+- ファイルは500 msごとに確かめ、変わっていれば読み直す。F5で今すぐ読み直す。
+- 要素にホバーすると、その依存先と依存元を強調する。クリックかSpaceで強調を固定し、Escか背景のクリックで解く。
+- crateやmoduleをダブルクリックするか、Enterを押すと、module図を開く。Back（Backspace）で前の図に戻り、Fit（0）で全体を表示する。
+- ドラッグで移動し、ホイールでポインタの位置を中心に拡大・縮小する。
+- 左の木は crate・target・module を表示し、検索欄で絞り込める。Enter かダブルクリックで開く。単クリックは選択だけ。
+- 表示中の図をSVGに書き出せる。
+
+build（Windows）：
+
+```sh
+cd viewer
+cargo build --release
 ```
 
-`index.html` はSVG・CSS・JavaScriptをすべて埋め込んだ単一ファイルで、crate依存図から開く。
+実行ファイルは `viewer/target/release/xtask-viewer.exe`。buildには Rust 1.98.1（`viewer/rust-toolchain.toml` で選ばれる）と、固定の revision の Kivact を取得するためのネットワーク接続が要る。macOSは、Kivactが未対応のため、まだ対象外。
 
-- crate・moduleにホバーすると、依存先と依存元を強調する。クリックで強調を固定し、Escまたは空白部分のクリックで解除する。
-- crateをダブルクリックするとmodule図を開く。他のtargetやテスト構成は選択欄で切り替える。
-- 左ペインに全crate・target・moduleのツリーを表示する。
-- ドラッグで移動、ホイールで拡大・縮小する。
-- キーボードではTabで移動、Spaceで固定、Enterで開く。
+`main` への push で `.github/workflows/viewer-windows.yml` が動く。これは Windows で viewer を release build し、`xtask-viewer.exe` を `xtask-viewer-windows` という名前の成果物（artifact）として残す。
 
-書き出しのたびに、今回生成しなかった `<output>/modules` 以下のmodule SVG（削除・選択外になったtargetの図）を削除する。
-解析に失敗した場合、実在するtargetの図は残す。`--no-write` は削除対象を報告するだけで、ファイルは変更しない。
+## 移行
+
+以前の版を使っているリポジトリを直すには：
+
+- Node.js と `XTASK_NODE` は使わなくなった。CI から Node.js と elkjs の設定を消す。
+- `--no-write` は既定の動作になり、そのflagは削除された。scriptから消す。図のファイルを書くには `--write` を使う。
+- `--prune` は削除された。`--write` のたびに図のファイルを丸ごと書き直すので、古い図は残らない。古い `architecture/` の directory は、中のSVGとHTMLを含めて手で消す。ツールはそれを消さない。
+- policy の最上位の `output` は `[diagrams] output` に移った。`output` が残っている policy は拒まれ、その誤りは新しいキーを示す。
+- Role 宣言は、そのmoduleの最初の内側ドキュメントコメントの最初の行に置く。
+- 例外の `path` が `*` だけのものは誤りになる。`src/*` のような directory の接頭辞にする。
+- `json!` や `Token!` を使うリポジトリは、それらを `trusted_macros` に書く。
+- library を使う側：
+  - `Config::no_write` は削除された。図のファイルを書くには `config.output = Output::Policy` とする。
+  - `Config::max_role_chars` は削除された。Role の上限は `[limits] max_role_chars` だけで決まる。
+  - `TargetGraph` は `TargetAnalysis` に替わり、その graph は `TargetOutcome::Analyzed(graph)` になる。
+  - `Report::artifacts` は `Report::archive` に、`Report::style_diagnostics` は `Report::style` に替わった。
+  - `Report::errors` は style の違反を含まなくなった。`Report::style` も見る。
+- 利用側のリポジトリの root の `Cargo.toml` に、debug build でも配置を速くするため次を足す：
+
+  ```toml
+  [profile.dev.package.xtask-layout]
+  opt-level = 3
+  ```
 
 ## style検査
 
-`[style]` は、Google Rust Style Guideのうち機械的に検査できる規則を適用する。
-ガイド全体への準拠を保証するものではない。文書と安全性コメントは、存在だけを検査する。
+`[style]` は、Google Rust Style Guideのうち機械的に検査できる規則を適用する。ガイド全体への準拠を保証するものではない。文書と安全性コメントは、存在だけを検査する。
 
 `enabled = true` で規則1〜13を選択する。規則14〜20は対象の指定やレビュー済みの例外が必要なため、`extra_rules` で追加する。
 
@@ -243,10 +278,7 @@ item = "startup"
 reason = "設定はこの呼出しの前に検証済み。"
 ```
 
-規則を免除する方法は例外の指定だけで、選択したlintはソース中の `#[allow(...)]` より優先する。
-`path` はリポジトリルートからの相対パスで、末尾の `*` で前方一致にできる。
-`item` を指定すると、module階層内の1つのitemに限定できる。`reason` は必須。
-ツールの未導入やコンパイル失敗などの実行エラーは、例外では免除されない。
+規則を免除する方法は例外の指定だけで、選択したlintはソース中の `#[allow(...)]` より優先する。`path` はリポジトリルートからの相対パスで、末尾の `*` で前方一致にできる（`src/*` など）。`*` だけの `path` は誤り。`item` を指定すると、module階層内の1つのitemに限定できる。`reason` は必須。ツールの未導入やコンパイル失敗などの実行エラーは、例外では免除されない。
 
 補足：
 
@@ -264,17 +296,17 @@ reason = "設定はこの呼出しの前に検証済み。"
 ```rust
 use xtask_core::{Config, run};
 
-let mut config = Config::new("path/to/repository");
-config.no_write = true;
+let config = Config::new("path/to/repository"); // 既定では何も書かない
 let report = run(&config)?;
-for diagnostic in &report.style_diagnostics {
+for diagnostic in &report.style {
     println!("{diagnostic}");
 }
 ```
 
-`Config` で出力先、Role文字数の上限、`[analysis]` の設定を上書きできる。
-`analyze(&Config)` はstyle検査と書き出しを行わず、targetごとのmodule graphを返す。
-style違反は構造化された `Report::style_diagnostics` で取得でき、`Report::errors` にも含まれる。
+- `Config` は `root`、`policy`、`output`、`analysis` を持つ。`output` は `Output::None`（既定。何も書かない）、`Output::Policy`（`[diagrams] output` の path）、`Output::Path(PathBuf)`（指定の path。ルートからの相対または絶対）のいずれか。`analysis` が `Some` のときは、policy の `[analysis]` の設定に代わる。
+- `run` が `Err` を返すのは、policy と Cargo metadata を読めないときだけ。ほかの失敗は `Report::errors` に入る。
+- `Report` は `errors`、`notes`、`style`、`archive` を持つ。`style` は構造化された style の違反で、`errors` には繰り返さない。
+- `analyze(&config)` は target ごとの `TargetAnalysis` を返す。構成（`Mode::Normal` と `Mode::Test`）ごとに、`Analyzed(ModuleGraph)`、`FeatureGated`、`UnsupportedEdition`、`Failed` のいずれかの結果を持つ。何も書かず、style検査も行わない。
 
 ## 制限事項
 
@@ -287,29 +319,45 @@ style違反は構造化された `Report::style_diagnostics` で取得でき、`
 cargo test --locked --offline --workspace
 cargo fmt --all -- --check
 cargo clippy --locked --offline --workspace --all-targets -- -D warnings
-node --test crates/xtask-core/src/arch_map/viewer.test.cjs
 cargo xtask check
+cargo xtask check --write
 ```
 
-別のリポジトリでの実行時間は `benchmark` exampleで計測できる。OUTPUTに絶対パスを指定すると、対象リポジトリの図を変更しない。
+viewer は別のworkspace（root の `Cargo.toml` で `exclude = ["viewer"]`）なので、検査は `viewer/` で行う。
 
 ```sh
-cargo run --release -p xtask-core --example benchmark -- ROOT OUTPUT MODE
+cd viewer
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
-`MODE` は `analyze`、`no-write`、`write` のいずれか。
+別のリポジトリでの実行時間は `benchmark` exampleで計測できる。ROOT に対して `check` と `check --write` の時間を出す。`--write` の出力は ROOT の `target/` に書かれる。
+
+```sh
+cargo run --release -p xtask-core --example benchmark -- ROOT
+```
 
 workspaceのcrate構成：
 
 | Crate | 役割 |
 | --- | --- |
-| `xtask-core` | CLI、検査、style規則、出力 |
-| `xtask-workspace` | Cargo metadataとpolicy |
-| `xtask-source` | ソース探索と行数計測 |
+| `xtask-core` | CLI、行数と可視性の検査、図のファイル |
+| `xtask-source` | ソース探索、path の正規化、行数計測 |
+| `xtask-policy` | policyの読込みと検証 |
+| `xtask-workspace` | Cargo metadata（構造とfeature） |
 | `xtask-modules` | moduleと参照の解析 |
-| `xtask-graph` | グラフ構築とSVG書き出し |
-| `xtask-layout` | Node.js経由のELKレイアウト |
-| `xtask-svg` | SVG描画 |
+| `xtask-style` | Google Rust Style Guide の検査 |
+| `xtask-layout` | 配置エンジン（Rustのみ） |
+| `xtask-archive` | 図のファイル：型・検証・符号化・圧縮 |
+| `xtask-diagram` | 解析結果から図を組み立てて配置する |
+
+viewer の crate（`viewer/`）：
+
+| Crate | 役割 |
+| --- | --- |
+| `xtask-render` | 描画の幾何（角の丸め、交差の跳び、矢印、文字の位置）。Kivactに依存しない |
+| `xtask-viewer` | Kivact のGUI。`xtask-render` が計算した結果を描く |
 
 ## ライセンス
 
@@ -321,5 +369,3 @@ Copyright (c) 2026 Kashiwade.
 - MIT license（[LICENSE-MIT](LICENSE-MIT) または <https://opensource.org/licenses/MIT>）
 
 明示的に別段の意思表示をしない限り、Apache-2.0ライセンスの定義に従って本プロジェクトへの取り込みを意図して提出された貢献は、追加の条件なしに上記のデュアルライセンスで提供されるものとする。
-
-`crates/xtask-layout/vendor/elkjs` は個別のライセンスで配布される。同ディレクトリ内のファイルを参照。

@@ -1,12 +1,14 @@
 //! Role: Verify standard thread-local static names without expanding other macros.
+mod common;
+
+use common::{Options, write_fixture};
 use std::fs;
-use xtask_modules::{AnalysisOptions, ModuleGraph, analyze};
+use xtask_modules::ModuleGraph;
 
 fn graph(source: &str) -> ModuleGraph {
-    let directory = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let directory = write_fixture(&[("lib.rs", source)]);
     let root = directory.path().join("lib.rs");
-    fs::write(&root, source).unwrap();
-    let mut options = AnalysisOptions::default();
+    let mut options = Options::default();
     for name in [
         "thread_local",
         "std::thread_local",
@@ -16,7 +18,7 @@ fn graph(source: &str) -> ModuleGraph {
     ] {
         options.trusted_macros.insert(name.into());
     }
-    analyze(&root, &options).unwrap()
+    options.analyze(&root).unwrap()
 }
 
 #[test]
@@ -516,7 +518,7 @@ mod consumer {
 "#,
     )
     .unwrap();
-    let control = analyze(&root, &AnalysisOptions::default()).unwrap();
+    let control = Options::default().analyze(&root).unwrap();
     assert!(
         control
             .diagnostics
@@ -584,7 +586,7 @@ mod consumer {
         let directory = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
         let root = directory.path().join("lib.rs");
         fs::write(&root, source).unwrap();
-        let result = analyze(&root, &AnalysisOptions::default()).unwrap();
+        let result = Options::default().analyze(&root).unwrap();
         assert!(
             result
                 .diagnostics
@@ -638,13 +640,185 @@ mod declarations {
 "#,
     )
     .unwrap();
-    let mut options = AnalysisOptions::default();
+    let mut options = Options::default();
     options.trusted_macros.insert("thread_local".into());
-    let error = analyze(&root, &options).unwrap_err();
+    let error = options.analyze(&root).unwrap_err();
     assert!(
         error
             .to_string()
             .contains("invalid thread_local declaration"),
         "{error}"
     );
+}
+
+#[test]
+fn local_thread_local_shadows_glob() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod a { //! Role: A.
+    pub static FOO: u8 = 0; }
+mod g { //! Role: G.
+    pub use crate::a::*; }
+mod b { //! Role: B.
+    use crate::g::*;
+    thread_local!{ static FOO: u8 = 1; }
+    fn f() { FOO.with(|_| ()); } }
+"#,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .edges
+            .iter()
+            .any(|edge| edge.from == "crate::b" && edge.to == "crate::g")
+    );
+    assert!(
+        !result
+            .edges
+            .iter()
+            .any(|edge| edge.from == "crate::b" && edge.to == "crate::a")
+    );
+}
+
+#[test]
+fn trusted_glob_allows_thread_local() {
+    let directory = write_fixture(&[(
+        "lib.rs",
+        "//! Role: Root.\nmod b { //! Role: B.\n use framework::prelude::*;\n thread_local!{ pub static C: u8 = 0; } }\nmod c { //! Role: C.\n use crate::b::C; }\n",
+    )]);
+    let mut options = Options::default();
+    options.trusted_macros.insert("thread_local".into());
+    options.trusted_globs.insert("framework::prelude".into());
+    let result = options.analyze(&directory.path().join("lib.rs")).unwrap();
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn untrusted_glob_makes_thread_local_uncertain() {
+    let directory = write_fixture(&[(
+        "lib.rs",
+        "//! Role: Root.\nmod b { //! Role: B.\n use framework::prelude::*;\n thread_local!{ pub static C: u8 = 0; } }\nmod c { //! Role: C.\n use crate::b::C; }\n",
+    )]);
+    let mut options = Options::default();
+    options.trusted_macros.insert("thread_local".into());
+    let result = options.analyze(&directory.path().join("lib.rs")).unwrap();
+    assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+    assert!(result.diagnostics[0].ends_with("::C"));
+    assert!(
+        !result
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("macro provider cannot be established")),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn thread_local_type_reference() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod cache { //! Role: Cache.
+    pub struct C; }
+std::thread_local! {
+    static CACHE: std::cell::RefCell<crate::cache::C> = std::cell::RefCell::new(crate::cache::C);
+}
+"#,
+    );
+    assert!(
+        result
+            .edges
+            .iter()
+            .any(|edge| edge.from == "crate" && edge.to == "crate::cache"),
+        "{:?}",
+        result.edges
+    );
+}
+
+#[test]
+fn invalid_cfg_on_thread_local_static_is_one_diagnostic() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod a {
+    //! Role: Declarations.
+    thread_local! {
+        #[cfg(a::b)]
+        pub static A: u8 = 0;
+        pub static B: u8 = 1;
+    }
+}
+mod c {
+    //! Role: Consumer.
+    use crate::a::B;
+}
+"#,
+    );
+    assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics[0].contains("lib.rs:"),
+        "{:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics[0].contains("unsupported cfg predicate"),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+fn default_graph(source: &str) -> ModuleGraph {
+    let directory = write_fixture(&[("lib.rs", source)]);
+    Options::default()
+        .analyze(&directory.path().join("lib.rs"))
+        .unwrap()
+}
+
+fn has_edge(result: &ModuleGraph, from: &str, to: &str) -> bool {
+    result
+        .edges
+        .iter()
+        .any(|reference| reference.from == from && reference.to == to)
+}
+
+#[test]
+fn untrusted_standard_thread_local_is_visited() {
+    let result = default_graph(
+        r#"
+//! Role: Test root.
+mod cache {
+    //! Role: The cache.
+    pub struct C;
+}
+mod user {
+    //! Role: The standard macro, untrusted.
+    use std::cell::RefCell;
+    thread_local! { static CACHE: RefCell<crate::cache::C> = RefCell::new(crate::cache::C); }
+}
+"#,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(has_edge(&result, "crate::user", "crate::cache"));
+}
+
+#[test]
+fn block_thread_local_is_visited() {
+    let result = default_graph(
+        r#"
+//! Role: Test root.
+mod cache {
+    //! Role: The cache.
+    pub struct C;
+}
+mod user {
+    //! Role: A block-level standard macro, untrusted.
+    use std::cell::RefCell;
+    fn f() { thread_local! { static X: RefCell<crate::cache::C> = RefCell::new(crate::cache::C); } }
+}
+"#,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(has_edge(&result, "crate::user", "crate::cache"));
 }
