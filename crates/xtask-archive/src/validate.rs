@@ -124,25 +124,30 @@ fn check_points(points: &[Point]) -> Result<(), String> {
 
 /// 当たり判定の規則。region があれば各 item は region から、無ければ node から、ちょうど一回参照される。
 fn check_coverage(scene: &Scene) -> Result<(), String> {
-    let (referenced, what): (Vec<u32>, &str) = if scene.regions.is_empty() {
-        (scene.nodes.iter().map(|node| node.item).collect(), "node")
-    } else {
-        (
-            scene.regions.iter().map(|region| region.item).collect(),
-            "region",
-        )
-    };
-    let mut counts = vec![0usize; scene.items.len()];
-    for item in referenced {
-        if let Some(count) = counts.get_mut(item as usize) {
-            *count += 1;
+    // 参照の数は item ごとの一バイト（飽和）。decode は items の列を読むときに、この分の費用を数える。
+    let mut counts = vec![0u8; scene.items.len()];
+    let what = if scene.regions.is_empty() {
+        for node in &scene.nodes {
+            count_reference(&mut counts, node.item);
         }
-    }
+        "node"
+    } else {
+        for region in &scene.regions {
+            count_reference(&mut counts, region.item);
+        }
+        "region"
+    };
     match counts.iter().position(|&count| count != 1) {
         Some(index) => Err(format!(
             "item {index} is not referenced by exactly one {what}"
         )),
         None => Ok(()),
+    }
+}
+
+fn count_reference(counts: &mut [u8], item: u32) {
+    if let Some(count) = counts.get_mut(item as usize) {
+        *count = count.saturating_add(1);
     }
 }
 

@@ -45,14 +45,38 @@ pub(crate) fn inflate_exact(input: &[u8], len: usize) -> Result<Vec<u8>, DecodeE
 }
 
 /// 本体を書く。検証は呼出し側（`encode`）が行う。
+/// 確保の費用が予算を超える本体は、decode が読めないので書かない。
 pub(crate) fn write_body(archive: &Archive) -> Result<Vec<u8>, String> {
-    let mut writer = Writer { out: Vec::new() };
-    write_archive(&mut writer, archive)?;
-    if writer.out.len() > MAX_BODY_LEN {
+    let (body, spent) = write_unchecked(archive)?;
+    if body.len() > MAX_BODY_LEN || spent > budget(body.len()) {
         return Err(TOO_LARGE.into());
     }
-    Ok(writer.out)
+    Ok(body)
 }
+
+/// 本体と確保の費用を、予算を確かめずに書く。試験が decode の拒否を確かめるために使う。
+pub(crate) fn write_unchecked(archive: &Archive) -> Result<(Vec<u8>, usize), String> {
+    let mut writer = Writer {
+        out: Vec::new(),
+        spent: 0,
+    };
+    write_archive(&mut writer, archive)?;
+    Ok((writer.out, writer.spent))
+}
+
+/// 本体の長さから決まる確保の予算。Writer は書いた後に、Reader は読む前に、この値と比べる。
+fn budget(body_len: usize) -> usize {
+    8 * body_len + 4096
+}
+
+/// 要素一つの確保の費用（byte）。Writer と Reader は、列と文字列の費用をすべてこの関数で数える。
+/// `extra` は要素ごとに足す分（item の列だけ `COVERAGE_COST`、他は 0）。
+fn element_cost<T>(extra: usize) -> usize {
+    std::mem::size_of::<T>() + extra
+}
+
+/// item の列の要素一つに足す費用。`validate` の `check_coverage` が item ごとに使う `Vec<u8>` の 1 バイト。
+const COVERAGE_COST: usize = std::mem::size_of::<u8>();
 
 /// 本体を読み、最後まで消費したことを確かめる。検証は呼出し側（`decode`）が行う。
 pub(crate) fn read_body(body: &[u8]) -> Result<Archive, DecodeError> {
@@ -76,6 +100,8 @@ fn unknown_tag(tag: u8) -> DecodeError {
 
 pub(crate) struct Writer {
     out: Vec<u8>,
+    /// 確保の費用の合計（`element_cost` で数える）。
+    spent: usize,
 }
 
 impl Writer {
@@ -91,15 +117,19 @@ impl Writer {
         self.out.extend_from_slice(&value.to_le_bytes());
     }
 
-    /// 要素数（または文字のバイト数）を書く。
-    fn vec(&mut self, len: usize) -> Result<(), String> {
-        let len = u32::try_from(len).map_err(|_| TOO_LARGE.to_string())?;
-        self.u32(len);
+    /// 要素数（または文字のバイト数）を書き、列の確保の費用を数える。
+    fn vec(&mut self, len: usize, per_element: usize) -> Result<(), String> {
+        let count = u32::try_from(len).map_err(|_| TOO_LARGE.to_string())?;
+        self.spent = len
+            .checked_mul(per_element)
+            .and_then(|cost| self.spent.checked_add(cost))
+            .ok_or_else(|| TOO_LARGE.to_string())?;
+        self.u32(count);
         Ok(())
     }
 
     fn str(&mut self, text: &str) -> Result<(), String> {
-        self.vec(text.len())?;
+        self.vec(text.len(), element_cost::<u8>(0))?;
         self.out.extend_from_slice(text.as_bytes());
         Ok(())
     }
@@ -112,9 +142,10 @@ impl Writer {
 fn write_list<T>(
     writer: &mut Writer,
     items: &[T],
+    extra: usize,
     write: impl Fn(&mut Writer, &T) -> Result<(), String>,
 ) -> Result<(), String> {
-    writer.vec(items.len())?;
+    writer.vec(items.len(), element_cost::<T>(extra))?;
     items.iter().try_for_each(|item| write(writer, item))
 }
 
@@ -132,8 +163,8 @@ fn write_option<T>(
 
 fn write_archive(writer: &mut Writer, archive: &Archive) -> Result<(), String> {
     writer.str(&archive.root_name)?;
-    write_list(writer, &archive.diagrams, write_diagram)?;
-    write_list(writer, &archive.notices, |writer, notice| {
+    write_list(writer, &archive.diagrams, 0, write_diagram)?;
+    write_list(writer, &archive.notices, 0, |writer, notice| {
         writer.str(notice)
     })
 }
@@ -193,10 +224,10 @@ fn write_content(writer: &mut Writer, content: &Content) -> Result<(), String> {
 fn write_scene(writer: &mut Writer, scene: &Scene) -> Result<(), String> {
     writer.i32(scene.width);
     writer.i32(scene.height);
-    write_list(writer, &scene.items, write_item)?;
-    write_list(writer, &scene.nodes, write_node)?;
-    write_list(writer, &scene.regions, write_region)?;
-    write_list(writer, &scene.edges, write_edge)
+    write_list(writer, &scene.items, COVERAGE_COST, write_item)?;
+    write_list(writer, &scene.nodes, 0, write_node)?;
+    write_list(writer, &scene.regions, 0, write_region)?;
+    write_list(writer, &scene.edges, 0, write_edge)
 }
 
 fn write_item(writer: &mut Writer, item: &Item) -> Result<(), String> {
@@ -211,7 +242,7 @@ fn write_item(writer: &mut Writer, item: &Item) -> Result<(), String> {
 fn write_node(writer: &mut Writer, node: &Node) -> Result<(), String> {
     writer.u32(node.item);
     write_rect(writer, &node.rect);
-    write_list(writer, &node.lines, |writer, line| writer.str(line))
+    write_list(writer, &node.lines, 0, |writer, line| writer.str(line))
 }
 
 fn write_region(writer: &mut Writer, region: &Region) -> Result<(), String> {
@@ -221,7 +252,7 @@ fn write_region(writer: &mut Writer, region: &Region) -> Result<(), String> {
         Ok(())
     })?;
     write_rect(writer, &region.rect);
-    write_list(writer, &region.lines, |writer, line| writer.str(line))
+    write_list(writer, &region.lines, 0, |writer, line| writer.str(line))
 }
 
 fn write_edge(writer: &mut Writer, edge: &Edge) -> Result<(), String> {
@@ -232,7 +263,7 @@ fn write_edge(writer: &mut Writer, edge: &Edge) -> Result<(), String> {
         EdgeStyle::Dev => 1,
         EdgeStyle::Build => 2,
     });
-    write_list(writer, &edge.points, |writer, point| {
+    write_list(writer, &edge.points, 0, |writer, point| {
         write_point(writer, point);
         Ok(())
     })?;
@@ -241,7 +272,7 @@ fn write_edge(writer: &mut Writer, edge: &Edge) -> Result<(), String> {
 
 fn write_label(writer: &mut Writer, label: &Label) -> Result<(), String> {
     write_rect(writer, &label.rect);
-    write_list(writer, &label.lines, |writer, line| writer.str(line))
+    write_list(writer, &label.lines, 0, |writer, line| writer.str(line))
 }
 
 fn write_rect(writer: &mut Writer, rect: &Rect) {
@@ -270,7 +301,7 @@ impl<'a> Reader<'a> {
         Self {
             bytes,
             position: 0,
-            budget: 8 * bytes.len() + 4096,
+            budget: budget(bytes.len()),
         }
     }
 
@@ -331,12 +362,8 @@ impl<'a> Reader<'a> {
         Ok(count)
     }
 
-    fn vec_len<T>(&mut self) -> ReadResult<usize> {
-        self.length(std::mem::size_of::<T>())
-    }
-
     fn str(&mut self) -> ReadResult<String> {
-        let count = self.length(1)?;
+        let count = self.length(element_cost::<u8>(0))?;
         let bytes = self.take(count)?;
         String::from_utf8(bytes.to_vec()).map_err(|_| corrupt("invalid UTF-8"))
     }
@@ -344,9 +371,10 @@ impl<'a> Reader<'a> {
 
 fn read_list<'a, T>(
     reader: &mut Reader<'a>,
+    extra: usize,
     mut read: impl FnMut(&mut Reader<'a>) -> ReadResult<T>,
 ) -> ReadResult<Vec<T>> {
-    let count = reader.vec_len::<T>()?;
+    let count = reader.length(element_cost::<T>(extra))?;
     let mut items = Vec::with_capacity(count);
     for _ in 0..count {
         items.push(read(reader)?);
@@ -367,8 +395,8 @@ fn read_option<'a, T>(
 
 fn read_archive(reader: &mut Reader<'_>) -> ReadResult<Archive> {
     let root_name = reader.str()?;
-    let diagrams = read_list(reader, read_diagram)?;
-    let notices = read_list(reader, |reader| reader.str())?;
+    let diagrams = read_list(reader, 0, read_diagram)?;
+    let notices = read_list(reader, 0, |reader| reader.str())?;
     Ok(Archive {
         root_name,
         diagrams,
@@ -426,10 +454,10 @@ fn read_content(reader: &mut Reader<'_>) -> ReadResult<Content> {
 fn read_scene(reader: &mut Reader<'_>) -> ReadResult<Scene> {
     let width = reader.i32()?;
     let height = reader.i32()?;
-    let items = read_list(reader, read_item)?;
-    let nodes = read_list(reader, read_node)?;
-    let regions = read_list(reader, read_region)?;
-    let edges = read_list(reader, read_edge)?;
+    let items = read_list(reader, COVERAGE_COST, read_item)?;
+    let nodes = read_list(reader, 0, read_node)?;
+    let regions = read_list(reader, 0, read_region)?;
+    let edges = read_list(reader, 0, read_edge)?;
     Ok(Scene {
         width,
         height,
@@ -450,7 +478,7 @@ fn read_item(reader: &mut Reader<'_>) -> ReadResult<Item> {
 fn read_node(reader: &mut Reader<'_>) -> ReadResult<Node> {
     let item = reader.u32()?;
     let rect = read_rect(reader)?;
-    let lines = read_list(reader, |reader| reader.str())?;
+    let lines = read_list(reader, 0, |reader| reader.str())?;
     Ok(Node { item, rect, lines })
 }
 
@@ -458,7 +486,7 @@ fn read_region(reader: &mut Reader<'_>) -> ReadResult<Region> {
     let item = reader.u32()?;
     let parent = read_option(reader, |reader| reader.u32())?;
     let rect = read_rect(reader)?;
-    let lines = read_list(reader, |reader| reader.str())?;
+    let lines = read_list(reader, 0, |reader| reader.str())?;
     Ok(Region {
         item,
         parent,
@@ -471,7 +499,7 @@ fn read_edge(reader: &mut Reader<'_>) -> ReadResult<Edge> {
     let from = reader.u32()?;
     let to = reader.u32()?;
     let style = read_style(reader)?;
-    let points = read_list(reader, read_point)?;
+    let points = read_list(reader, 0, read_point)?;
     let label = read_option(reader, read_label)?;
     Ok(Edge {
         from,
@@ -493,7 +521,7 @@ fn read_style(reader: &mut Reader<'_>) -> ReadResult<EdgeStyle> {
 
 fn read_label(reader: &mut Reader<'_>) -> ReadResult<Label> {
     let rect = read_rect(reader)?;
-    let lines = read_list(reader, |reader| reader.str())?;
+    let lines = read_list(reader, 0, |reader| reader.str())?;
     Ok(Label { rect, lines })
 }
 
