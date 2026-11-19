@@ -1,6 +1,6 @@
 //! Role: cfgとpath属性に従ってモジュールのソースと有効な構文を読み込む。
 use crate::{
-    cfg,
+    ast, cfg,
     model::{Env, Module, ModuleKind},
     role,
 };
@@ -50,27 +50,6 @@ impl Source {
 pub(crate) struct Loaded {
     pub(crate) sources: Vec<Source>,
     pub(crate) diagnostics: Vec<String>,
-}
-
-pub(crate) fn attrs(item: &Item) -> &[Attribute] {
-    match item {
-        Item::Const(i) => &i.attrs,
-        Item::Enum(i) => &i.attrs,
-        Item::ExternCrate(i) => &i.attrs,
-        Item::Fn(i) => &i.attrs,
-        Item::ForeignMod(i) => &i.attrs,
-        Item::Impl(i) => &i.attrs,
-        Item::Macro(i) => &i.attrs,
-        Item::Mod(i) => &i.attrs,
-        Item::Static(i) => &i.attrs,
-        Item::Struct(i) => &i.attrs,
-        Item::Trait(i) => &i.attrs,
-        Item::TraitAlias(i) => &i.attrs,
-        Item::Type(i) => &i.attrs,
-        Item::Union(i) => &i.attrs,
-        Item::Use(i) => &i.attrs,
-        _ => &[],
-    }
 }
 
 /// The module path of a child, e.g. `crate::a::b`.
@@ -267,7 +246,7 @@ impl Loader<'_> {
         let mut active = Vec::new();
         for (index, item) in items.iter().enumerate() {
             let line = item.span().start().line;
-            let Some(attributes) = self.expanded(&site.file_path, line, attrs(item)) else {
+            let Some(attributes) = self.expanded(&site.file_path, line, ast::attrs(item)) else {
                 continue;
             };
             let loaded = match item {
