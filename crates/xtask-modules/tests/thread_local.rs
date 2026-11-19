@@ -700,9 +700,9 @@ fn untrusted_glob_makes_thread_local_uncertain() {
         "lib.rs",
         "//! Role: Root.\nmod b { //! Role: B.\n use framework::prelude::*;\n thread_local!{ pub static C: u8 = 0; } }\nmod c { //! Role: C.\n use crate::b::C; }\n",
     )]);
-    let result = Options::default()
-        .analyze(&directory.path().join("lib.rs"))
-        .unwrap();
+    let mut options = Options::default();
+    options.trusted_macros.insert("thread_local".into());
+    let result = options.analyze(&directory.path().join("lib.rs")).unwrap();
     assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
     assert!(result.diagnostics[0].ends_with("::C"));
     assert!(
