@@ -3,7 +3,8 @@ use crate::{
     cfg,
     loader::Source,
     model::Env,
-    symbols::{Import, Layout, Modules, Namespace, Scope, Target},
+    symbols::{Import, Layout, Modules, Namespace, Scope, Target, Textual},
+    visitor::local_macro_targets,
 };
 use std::collections::BTreeSet;
 use syn::{
@@ -12,18 +13,12 @@ use syn::{
 
 struct Statics(Vec<syn::ItemStatic>);
 
-/// How a `thread_local!` call is recognized. Both are syntactic. The qualified path is
-/// certainly the standard macro; the other names need the provider check after resolution.
+/// How a `thread_local!` call is recognized, syntactically. The visitor visits the statics of
+/// both kinds; only the calls that resolve to the standard macro declare names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Provider {
     Qualified,
     Alias,
-}
-
-/// A call of `thread_local!` in a module, whose provider is confirmed after resolution.
-pub(crate) struct Registration {
-    module: usize,
-    provider: Provider,
 }
 
 /// The statics of a `thread_local!` body.
@@ -63,6 +58,7 @@ pub(crate) fn provider(path: &syn::Path, imports: &[Import]) -> Option<Provider>
     (name == "thread_local" || aliased).then_some(Provider::Alias)
 }
 
+/// Whether a module's `#[macro_use] extern crate` may import the `thread_local` macro.
 fn imports_unknown_thread_local(source: &Source) -> bool {
     for (item, attributes) in source.items() {
         if !matches!(item, Item::ExternCrate(_)) {
@@ -125,96 +121,144 @@ impl Parse for Statics {
     }
 }
 
-/// Declares the statics of every `thread_local!` call in the modules, and returns the calls.
-/// The declaration does not depend on the resolution; the provider is checked afterwards.
-pub(crate) fn register(
+/// The statics of the standard `thread_local!` calls, as (module, name). `first` is the first
+/// pass of the names, which has no such statics yet; each call is judged on it.
+pub(crate) fn standard_statics(
     sources: &[Source],
     layout: &Layout,
-    scopes: &mut [Scope],
+    first: &[Scope],
+    textual: &Textual,
     env: Env,
-) -> Result<Vec<Registration>, String> {
-    let mut registrations = Vec::new();
-    let mut declared = Vec::new();
-    for (module, source) in sources.iter().enumerate() {
-        for (item, _) in source.items() {
-            let Item::Macro(mac) = item else { continue };
-            let Some(provider) = provider(&mac.mac.path, &layout.uses[module]) else {
-                continue;
-            };
-            let statics = syn::parse2::<Statics>(mac.mac.tokens.clone()).map_err(|error| {
-                format!(
-                    "{}: invalid thread_local declaration: {error}",
-                    source.module.id
-                )
-            })?;
-            registrations.push(Registration { module, provider });
-            for item in statics.0 {
-                if cfg::enabled(&item.attrs, env)? {
-                    declared.push((module, item.ident.to_string()));
-                }
-            }
-        }
-    }
-    for (owner, name) in declared {
-        scopes[owner]
-            .declared
-            .entry((Namespace::Value, name))
-            .or_default()
-            .insert(Target::Item(owner, Namespace::Value));
-    }
-    Ok(registrations)
-}
-
-/// The diagnostics of the calls whose provider cannot be established: a `thread_local` that
-/// a local macro, a non-standard import, an unknown glob, or an unknown `macro_use` could provide.
-pub(crate) fn confirm(
-    modules: &Modules,
-    sources: &[Source],
-    registrations: &[Registration],
-) -> Vec<String> {
-    let unknown_macro_use = sources
+) -> Result<Vec<(usize, String)>, String> {
+    let modules = Modules {
+        layout,
+        scopes: first,
+    };
+    let macro_use = sources
         .iter()
         .enumerate()
         .filter(|(_, source)| imports_unknown_thread_local(source))
         .map(|(module, _)| module)
         .collect::<BTreeSet<_>>();
-    registrations
-        .iter()
-        .filter(|registration| registration.provider == Provider::Alias)
-        .filter(|registration| uncertain(modules, &unknown_macro_use, registration.module))
-        .map(|registration| {
-            format!(
-                "{}: macro provider cannot be established: thread_local",
-                modules.layout.ids[registration.module]
-            )
-        })
-        .collect()
+    let mut statics = Vec::new();
+    for (module, source) in sources.iter().enumerate() {
+        let macro_use_visible = macro_use_visible(layout, &macro_use, module);
+        for (item, _) in source.items() {
+            let Item::Macro(item) = item else { continue };
+            if !is_standard_call(&modules, textual, module, &item.mac.path, macro_use_visible) {
+                continue;
+            }
+            let parsed = syn::parse2::<Statics>(item.mac.tokens.clone()).map_err(|error| {
+                format!(
+                    "{}: invalid thread_local declaration: {error}",
+                    source.module.id
+                )
+            })?;
+            for declaration in parsed.0 {
+                if cfg::enabled(&declaration.attrs, env)? {
+                    statics.push((module, declaration.ident.to_string()));
+                }
+            }
+        }
+    }
+    Ok(statics)
 }
 
-/// Whether a module's `thread_local` could come from something other than the standard macro.
-fn uncertain(modules: &Modules, unknown_macro_use: &BTreeSet<usize>, module: usize) -> bool {
-    let mut chain = Vec::new();
+/// Whether a module, or one of its ancestors, has a `#[macro_use]` that may import `thread_local`.
+fn macro_use_visible(layout: &Layout, macro_use: &BTreeSet<usize>, module: usize) -> bool {
     let mut current = Some(module);
     while let Some(index) = current {
-        chain.push(index);
-        current = modules.layout.parents.get(index).copied().flatten();
+        if macro_use.contains(&index) {
+            return true;
+        }
+        current = layout.parents.get(index).copied().flatten();
     }
-    let local_macro = chain.iter().any(|index| {
-        modules.scopes[*index]
-            .declared
-            .contains_key(&(Namespace::Macro, "thread_local".to_owned()))
-    });
-    let macro_use = chain.iter().any(|index| unknown_macro_use.contains(index));
-    let standard = BTreeSet::from([Target::External(vec![
-        "std".to_owned(),
-        "thread_local".to_owned(),
-    ])]);
-    let Some(scope) = modules.scope(module) else {
-        return true;
-    };
-    let explicit = scope
-        .explicit
-        .get("thread_local")
-        .is_some_and(|targets| *targets != standard);
-    local_macro || macro_use || explicit || !scope.external_globs.is_empty()
+    false
+}
+
+/// Whether a module-level macro call is the standard `thread_local!`. When the macro namespace
+/// resolves the path, the call is standard only if every target is `std::thread_local`.
+/// Otherwise it is standard when its path is bare `thread_local` or `std::thread_local`, and
+/// nothing in the module could bind that name to another provider.
+fn is_standard_call(
+    modules: &Modules,
+    textual: &Textual,
+    module: usize,
+    path: &syn::Path,
+    macro_use: bool,
+) -> bool {
+    let targets = local_macro_targets(modules, textual, module, path, &[]);
+    if !targets.is_empty() {
+        return targets.iter().all(|target| {
+            matches!(target, Target::External(external)
+                if external.iter().map(String::as_str).eq(["std", "thread_local"]))
+        });
+    }
+    let unknown_glob = modules
+        .scope(module)
+        .is_some_and(|scope| !scope.external_globs.is_empty());
+    let segments = path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>();
+    let bare = path.is_ident("thread_local")
+        && !unknown_glob
+        && !macro_use
+        && !uncertain(modules, module, "thread_local", &mut BTreeSet::new());
+    let qualified = segments
+        .iter()
+        .map(String::as_str)
+        .eq(["std", "thread_local"])
+        && (path.leading_colon.is_some()
+            || !unknown_glob
+                && !uncertain(modules, module, "std", &mut BTreeSet::new())
+                && modules
+                    .resolve(module, &[], &["std".to_owned()], Some(Namespace::Type))
+                    .is_empty());
+    bare || qualified
+}
+
+/// Whether a name may be bound by something other than the standard library, through an
+/// import of the module, or of a module that it glob-imports, that does not resolve. This
+/// reads the imports collected before resolution and the first pass of the names.
+fn uncertain(modules: &Modules, module: usize, name: &str, visited: &mut BTreeSet<usize>) -> bool {
+    if !visited.insert(module) {
+        return false;
+    }
+    for import in &modules.layout.uses[module] {
+        if !import.glob && import.alias.as_deref() != Some(name) {
+            continue;
+        }
+        let targets = modules.resolve(module, &[], &import.path, None);
+        if targets.is_empty() {
+            if import.glob && is_standard_glob(modules, module, &import.path) {
+                continue;
+            }
+            return true;
+        }
+        if import.glob
+            && targets.iter().any(|target| {
+                matches!(target, Target::Module(owner) if uncertain(modules, *owner, name, visited))
+            })
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether a glob import names the standard library, whose first segment is not a local name.
+fn is_standard_glob(modules: &Modules, module: usize, path: &[String]) -> bool {
+    path.first().is_some_and(|first| {
+        matches!(first.as_str(), "std" | "core" | "alloc")
+            && modules
+                .resolve(
+                    module,
+                    &[],
+                    std::slice::from_ref(first),
+                    Some(Namespace::Type),
+                )
+                .is_empty()
+    })
 }

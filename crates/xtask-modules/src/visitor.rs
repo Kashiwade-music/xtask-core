@@ -11,6 +11,7 @@ use crate::{
 use std::{collections::BTreeSet, path::Path};
 use syn::{
     Item,
+    parse::Parser,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -488,6 +489,165 @@ impl References<'_> {
             }
         }
     }
+
+    /// Records the edges of a call whose macro is local, and reports it unless the macro is trusted.
+    fn local_macro_call(&mut self, mac: &syn::Macro, local_macro: BTreeSet<Target>) {
+        self.edge(local_macro);
+        let path = macro_path_text(&mac.path);
+        if !self.env.settings.trusted_macros.contains(&path) {
+            let message = format!(
+                "{}: local macro expansion is unsupported: {path}",
+                self.id()
+            );
+            self.diagnostics.insert(message);
+        }
+    }
+
+    /// The name of the built-in macro that a call expands with. Reports a diagnostic and returns
+    /// `None` when the provider is unsupported or cannot be established.
+    fn provider_name(
+        &mut self,
+        mac: &syn::Macro,
+        parts: &[String],
+        local_macro: &BTreeSet<Target>,
+    ) -> Option<String> {
+        let external = local_macro
+            .iter()
+            .filter_map(|target| match target {
+                Target::External(path) => Some(path),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if !external.is_empty() {
+            let names = external
+                .iter()
+                .filter_map(|path| crate::intrinsic::macro_name(path))
+                .collect::<BTreeSet<_>>();
+            if names.len() != 1
+                || external
+                    .iter()
+                    .any(|path| crate::intrinsic::macro_name(path).is_none())
+            {
+                let message = format!(
+                    "{}: unsupported macro provider: {}",
+                    self.id(),
+                    parts.join("::")
+                );
+                self.diagnostics.insert(message);
+                return None;
+            }
+            return Some(names.into_iter().next().unwrap().to_owned());
+        }
+        if parts.len() > 1 {
+            let known_local = mac.path.leading_colon.is_none()
+                && self
+                    .modules
+                    .scope(self.module)
+                    .is_some_and(|scope| scope.binds_any(&parts[0]));
+            let name = crate::intrinsic::macro_name(parts);
+            if known_local || name.is_none() {
+                let message = format!(
+                    "{}: qualified macro expansion is unsupported: {}",
+                    self.id(),
+                    parts.join("::")
+                );
+                self.diagnostics.insert(message);
+                return None;
+            }
+            return name.map(str::to_owned);
+        }
+        if self.macro_provider_unknown(parts) {
+            let message = format!(
+                "{}: macro provider cannot be established: {}",
+                self.id(),
+                parts.join("::")
+            );
+            self.diagnostics.insert(message);
+            return None;
+        }
+        Some(parts.last().cloned().unwrap_or_default())
+    }
+
+    /// Visits the arguments of a built-in macro by its name. A name whose grammar is not modeled
+    /// reports a diagnostic.
+    fn visit_named_macro(&mut self, mac: &syn::Macro, name: &str) {
+        let modeled = match name {
+            "json" => {
+                self.visit_json(mac);
+                true
+            }
+            "Token" => true,
+            "matches" => self.visit_matches(mac),
+            "assert" | "assert_eq" | "assert_ne" | "debug_assert" | "debug_assert_eq"
+            | "debug_assert_ne" | "format" | "format_args" | "print" | "println" | "eprint"
+            | "eprintln" | "panic" | "write" | "writeln" | "dbg" | "vec" | "todo"
+            | "unimplemented" => self.visit_arguments(mac, name),
+            "stringify" | "concat" | "env" | "option_env" | "file" | "line" | "column"
+            | "module_path" | "cfg" | "include_str" | "include_bytes" => true,
+            _ => false,
+        };
+        if !modeled {
+            let message = format!("{}: macro token analysis is unsupported: {name}", self.id());
+            self.diagnostics.insert(message);
+        }
+    }
+
+    /// Visits the expressions of a `serde_json::json!` call.
+    fn visit_json(&mut self, mac: &syn::Macro) {
+        match crate::json::expressions(mac.tokens.clone()) {
+            Ok(expressions) => {
+                for expr in &expressions {
+                    self.visit_expr(expr);
+                }
+            }
+            Err(_) => {
+                let message = format!(
+                    "{}: unsupported serde_json::json! argument grammar",
+                    self.id()
+                );
+                self.diagnostics.insert(message);
+            }
+        }
+    }
+
+    /// Visits a `matches!` call: its expression, then its pattern and guard in a block of their
+    /// own. Returns false when the arguments do not parse.
+    fn visit_matches(&mut self, mac: &syn::Macro) -> bool {
+        let Ok(MatchesArgs(expr, pat, guard)) = syn::parse2::<MatchesArgs>(mac.tokens.clone())
+        else {
+            return false;
+        };
+        self.visit_expr(&expr);
+        self.blocks.push(Block::default());
+        self.visit_pat(&pat);
+        self.bind_pattern(&pat);
+        if let Some(guard) = guard {
+            self.visit_expr(&guard);
+        }
+        self.blocks.pop();
+        true
+    }
+
+    /// Visits the comma-separated arguments of a formatting or assertion macro, or the operands of
+    /// `vec![value; count]`. Returns false when the arguments do not parse.
+    fn visit_arguments(&mut self, mac: &syn::Macro, name: &str) -> bool {
+        let parser = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated;
+        if let Ok(args) = parser.parse2(mac.tokens.clone()) {
+            for arg in &args {
+                self.visit_expr(arg);
+            }
+            return true;
+        }
+        if name != "vec" {
+            return false;
+        }
+        let Ok(RepeatArgs(value, count)) = syn::parse2::<RepeatArgs>(mac.tokens.clone()) else {
+            return false;
+        };
+        self.visit_expr(&value);
+        self.visit_expr(&count);
+        true
+    }
 }
 
 impl<'ast> Visit<'ast> for References<'_> {
@@ -777,20 +937,7 @@ impl<'ast> Visit<'ast> for References<'_> {
             &self.blocks,
         );
         if is_local_macro(&local_macro) {
-            self.edge(local_macro);
-            if !self
-                .env
-                .settings
-                .trusted_macros
-                .contains(&macro_path_text(&mac.path))
-            {
-                let message = format!(
-                    "{}: local macro expansion is unsupported: {}",
-                    self.id(),
-                    parts.join("::")
-                );
-                self.diagnostics.insert(message);
-            }
+            self.local_macro_call(mac, local_macro);
             return;
         }
         self.path_in(None, &mac.path, Namespace::Macro);
@@ -802,172 +949,9 @@ impl<'ast> Visit<'ast> for References<'_> {
         {
             return;
         }
-        let external = local_macro
-            .iter()
-            .filter_map(|target| match target {
-                Target::External(path) => Some(path),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let name = if !external.is_empty() {
-            let names = external
-                .iter()
-                .filter_map(|path| crate::intrinsic::macro_name(path))
-                .collect::<BTreeSet<_>>();
-            if names.len() != 1
-                || external
-                    .iter()
-                    .any(|path| crate::intrinsic::macro_name(path).is_none())
-            {
-                let message = format!(
-                    "{}: unsupported macro provider: {}",
-                    self.id(),
-                    parts.join("::")
-                );
-                self.diagnostics.insert(message);
-                return;
-            }
-            names.into_iter().next().unwrap().to_owned()
-        } else if parts.len() > 1 {
-            let known_local = mac.path.leading_colon.is_none()
-                && self
-                    .modules
-                    .scope(self.module)
-                    .is_some_and(|scope| scope.binds_any(&parts[0]));
-            if known_local || crate::intrinsic::macro_name(&parts).is_none() {
-                let message = format!(
-                    "{}: qualified macro expansion is unsupported: {}",
-                    self.id(),
-                    parts.join("::")
-                );
-                self.diagnostics.insert(message);
-                return;
-            }
-            crate::intrinsic::macro_name(&parts).unwrap().to_owned()
-        } else {
-            if self.macro_provider_unknown(&parts) {
-                let message = format!(
-                    "{}: macro provider cannot be established: {}",
-                    self.id(),
-                    parts.join("::")
-                );
-                self.diagnostics.insert(message);
-                return;
-            }
-            parts.last().cloned().unwrap_or_default()
-        };
-        if name == "json" {
-            if let Ok(expressions) = crate::json::expressions(mac.tokens.clone()) {
-                for expr in &expressions {
-                    self.visit_expr(expr);
-                }
-                return;
-            }
-            let message = format!(
-                "{}: unsupported serde_json::json! argument grammar",
-                self.id()
-            );
-            self.diagnostics.insert(message);
-            return;
+        if let Some(name) = self.provider_name(mac, &parts, &local_macro) {
+            self.visit_named_macro(mac, &name);
         }
-        if name == "Token" {
-            return;
-        }
-        if name == "matches" {
-            struct Matches(syn::Expr, syn::Pat, Option<syn::Expr>);
-            impl syn::parse::Parse for Matches {
-                fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-                    let expr = input.parse()?;
-                    input.parse::<syn::Token![,]>()?;
-                    let pat = syn::Pat::parse_multi_with_leading_vert(input)?;
-                    let guard = if input.peek(syn::Token![if]) {
-                        input.parse::<syn::Token![if]>()?;
-                        Some(input.parse()?)
-                    } else {
-                        None
-                    };
-                    if input.peek(syn::Token![,]) {
-                        input.parse::<syn::Token![,]>()?;
-                    }
-                    Ok(Self(expr, pat, guard))
-                }
-            }
-            if let Ok(Matches(expr, pat, guard)) = syn::parse2(mac.tokens.clone()) {
-                self.visit_expr(&expr);
-                self.blocks.push(Block::default());
-                self.visit_pat(&pat);
-                self.bind_pattern(&pat);
-                if let Some(guard) = guard {
-                    self.visit_expr(&guard);
-                }
-                self.blocks.pop();
-                return;
-            }
-        }
-        if matches!(
-            name.as_str(),
-            "assert"
-                | "assert_eq"
-                | "assert_ne"
-                | "debug_assert"
-                | "debug_assert_eq"
-                | "debug_assert_ne"
-                | "format"
-                | "format_args"
-                | "print"
-                | "println"
-                | "eprint"
-                | "eprintln"
-                | "panic"
-                | "write"
-                | "writeln"
-                | "dbg"
-                | "vec"
-                | "todo"
-                | "unimplemented"
-        ) {
-            use syn::parse::Parser;
-            let parser = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated;
-            if let Ok(args) = parser.parse2(mac.tokens.clone()) {
-                for arg in &args {
-                    self.visit_expr(arg);
-                }
-                return;
-            }
-            if name == "vec" {
-                struct Repeat(syn::Expr, syn::Expr);
-                impl syn::parse::Parse for Repeat {
-                    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-                        let value = input.parse()?;
-                        input.parse::<syn::Token![;]>()?;
-                        let count = input.parse()?;
-                        Ok(Self(value, count))
-                    }
-                }
-                if let Ok(Repeat(value, count)) = syn::parse2(mac.tokens.clone()) {
-                    self.visit_expr(&value);
-                    self.visit_expr(&count);
-                    return;
-                }
-            }
-        } else if matches!(
-            name.as_str(),
-            "stringify"
-                | "concat"
-                | "env"
-                | "option_env"
-                | "file"
-                | "line"
-                | "column"
-                | "module_path"
-                | "cfg"
-                | "include_str"
-                | "include_bytes"
-        ) {
-            return;
-        }
-        let message = format!("{}: macro token analysis is unsupported: {name}", self.id());
-        self.diagnostics.insert(message);
     }
 }
 
@@ -1049,4 +1033,37 @@ pub(crate) fn opaque_modules(
         }
     }
     opaque
+}
+
+/// The arguments of `matches!(expression, pattern if guard)`, with an optional trailing comma.
+struct MatchesArgs(syn::Expr, syn::Pat, Option<syn::Expr>);
+
+impl syn::parse::Parse for MatchesArgs {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let expr = input.parse()?;
+        input.parse::<syn::Token![,]>()?;
+        let pat = syn::Pat::parse_multi_with_leading_vert(input)?;
+        let guard = if input.peek(syn::Token![if]) {
+            input.parse::<syn::Token![if]>()?;
+            Some(input.parse()?)
+        } else {
+            None
+        };
+        if input.peek(syn::Token![,]) {
+            input.parse::<syn::Token![,]>()?;
+        }
+        Ok(Self(expr, pat, guard))
+    }
+}
+
+/// The arguments of `vec![value; count]`.
+struct RepeatArgs(syn::Expr, syn::Expr);
+
+impl syn::parse::Parse for RepeatArgs {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        let value = input.parse()?;
+        input.parse::<syn::Token![;]>()?;
+        let count = input.parse()?;
+        Ok(Self(value, count))
+    }
 }
