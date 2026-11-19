@@ -35,7 +35,7 @@
 | L5 | W2 | 4 | 統合済み（eb5182d。W2 の途中の tier b 成功） |
 | M3a | W2 | 5 | 統合済み（20353c5、差戻し 7・8 は fix 3f3c058 で解消。ただし OPEN.md の「未解決の注意」の 1〜5 は設計者の判断待ち） |
 | M3b | W2 | 5（M3a の後） | 統合済み（695c72a、差戻し 9〜13 は fix 0b36b98・c2cf509・ab5d1e5 で解消。最終の merge は 6e3adb4） |
-| M3c | W2 | 5（M3b の後） | 差戻し（OPEN.md の 14。2e50e6b は 9bf361f で merge 済み。analysis の試験 1 件が失敗） |
+| M3c | W2 | 5（M3b の後） | 統合済み（2e50e6b、差戻し 14 は b2a98c2 の改訂と fix 8c186b3 で解消。最終の merge は 11ad3d8） |
 | V1 | W2 | 6 | 統合済み（1adf297。viewer の tier b 成功） |
 | L7 | W3 | 1 | 未着手 |
 | L8 | W3 | 2 | 未着手 |
@@ -68,3 +68,5 @@
 - `W2 M3b final merged 6e3adb4: tier b 成功（W2 の途中）`（xtask-modules：unit 1、analysis 60、roles 16、thread_local 23 が成功。xtask-layout 42、xtask-archive 12、xtask-policy 24、xtask-source 14、xtask-workspace 12、clippy の三 crate、viewer の check と xtask-render 8 が成功。M3c は未実施のため、W2 のウェーブは未完了）
 
 - `W2 M3c merged 9bf361f: tier b 失敗`（xtask-modules の試験：lib 3、analysis 61 成功・1 失敗（OPEN.md の 14）、roles 17、thread_local 23 が成功。clippy と cargo check は成功。W2 のウェーブは未完了）
+
+- `W2 merged 11ad3d8: tier b 成功（W2 のウェーブ完了）`（root：check、xtask-archive 12、xtask-policy 24、xtask-source 14、xtask-workspace 12、xtask-modules（lib 3、analysis 62、roles 17、thread_local 23）、xtask-layout 42、clippy の三 crate が成功。viewer：check と xtask-render 8 が成功）

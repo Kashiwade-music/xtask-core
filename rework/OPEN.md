@@ -41,15 +41,21 @@ M3b の fix lane（0b36b98、merge 済み 17db880）の報告による。9・10 
 | 12 | M3b | `crates/xtask-modules/tests/thread_local.rs`：`untrusted_glob_makes_thread_local_uncertain`（706 行目） | 既定の Settings（`trusted_macros` が空）で、診断が 2 件出る：`crate::b: item macro expansion is unsupported: thread_local`（item 位置の `thread_local!` が、信頼されていない macro として未対応の診断を出す）と `crate::c: unresolved explicit local import: crate::b::C`。付属書の試験の欄は「診断がちょうど 1 件で `::C` で終わる」を求める。`trusted_macros` に `thread_local` を入れて試すと 1 件（`::C`）で通ることを確かめたが、試験の設定は付属書どおりに戻した。**W2 の tier b（`cargo test -p xtask-modules`）の失敗の原因（残り 1 件）** | M-model.md の M3b の「試験」の欄（`untrusted_glob_makes_thread_local_uncertain`） |
 | 13 | M3b | `crates/xtask-modules/src/thread_local_items.rs`：`uncertain` | 付属書 M3b の手順 6 の `uncertain` の文どおりに実装すると、trusted_globs に入れた glob（解決できないもの）を不確かとみなし、`trusted_glob_allows_thread_local`（診断が空を求める）が通らない。実装は、trusted_globs に入っている glob を飛ばすようにした（`Settings` の doc「known to provide no macros」に合わせた）。付属書の文と実装が違う逸脱のため、設計者が規則を確かめる | M-model.md の M3b の手順 6（`uncertain`） |
 
-## 差戻し（W2 の M3c で新規、未解決）
+## 差戻し（W2 の M3c で新規、解消済み）
 
-M3c（2e50e6b、merge 済み 9bf361f）の報告による。STOP は次の一件。
+M3c（2e50e6b、merge 済み 9bf361f）の報告による。14 は設計者が付属書 M3c の移行表を改訂（b2a98c2）し、fix lane（8c186b3）を merge して解消（11ad3d8）。以下は解消の記録。
 
 | # | unit | 場所 | STOP の文（要旨） | 付属書の節 |
 |---|---|---|---|---|
 | 14 | M3c | `crates/xtask-modules/tests/analysis.rs`：`known_macro_and_derive_provider_aliases_remain_supported`（1003 行目） | 既存の試験が移行の表に無いのに失敗する。`use serde_json::json as data;` の `data!` が `unsupported macro provider: data` の診断になる（json の特別扱いの削除（D1、DEC-10）の結果）。手順 1 の削除は行い、試験の期待値は変えていない。設計者の判断が要る：(a) 移行の表にこの試験の期待値の変更を足す、(b) json の分岐を戻す（`src/json.rs` と visitor の分岐） | M-model.md の M3c の手順 1（json・Token の特別扱いの削除）、既存の試験の移行（M3 全体） |
 
 注（STOP ではない）：`implicit_format_capture` は、実装の前から成功していた（`use crate::a::N;` の import の辺で、期待する辺が既に出るため）。付属書の期待値は変えていない。取込みの振舞いは `macros.rs` の `format_capture_rules` が確かめている。
+
+## 事前承認による移行
+
+作業指示書 0.5 の事前承認の行に当たり、差戻しにせず、ここに一行ずつ書く（試験、除いたもの、対象の機能）。
+
+- `known_macro_and_derive_provider_aliases_remain_supported`（`crates/xtask-modules/tests/analysis.rs`、M3c）：`use serde_json::json as data;` の行と、`let _ = data!({"x": crate::a::f()});` の文を除いた（対象の機能：`json!` の特別扱い、DEC-10）。他の入力と assert は変えていない。この行は、設計者の移行表の改訂（b2a98c2）の後に fix lane（8c186b3）で入った。
 
 ## 未解決の注意（設計者の判断が要る）
 
