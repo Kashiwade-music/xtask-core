@@ -48,8 +48,8 @@
 | V3 | W4 | 2 | 統合済み（1bb506f。GUI 試験 8 件は成功） |
 | C3 | W4 | 3 | 統合済み（0867ef9） |
 | C2a | W5 | 1 | 差戻し（OPEN.md の 18。c5cd12c は 34a4460 で merge 済み） |
-| C2b | W5 | 1（C2a の後） | 未着手 |
-| C2c | W5 | 1（C2b の後） | 未着手 |
+| C2b | W5 | 1（C2a の後） | 統合済み（26826a8） |
+| C2c | W5 | 1（C2b の後） | 差戻し（OPEN.md の 19。bb2425b は c8679c0 で merge 済み。integration の試験 1 件は fix lane W5-1-fix で直す） |
 
 ## wave の記録
 
@@ -99,3 +99,14 @@
 | K4 配置の時間の和（121 件） | 3.0 秒以下 | 1.816 秒 | 達成 |
 
 K5（図のファイルの大きさ）と K6（検査の時間）は CP で測る。
+
+- `W5 C2b and C2c merged c8679c0: tier b の途中`（xtask-core：check（workspace 全体）、lib 15、style 7 が成功。integration は 22 件成功・1 件失敗（stderr の target 名の欠落。fix lane W5-1-fix）。xtask-layout：clippy、lib 48、基準の試験 2 件が成功。xtask-modules：clippy、試験が成功。viewer：check、xtask-render 8、xtask-viewer lib 20 が成功。clippy の xtask-core は差戻し 19）
+
+### K1〜K4（W5、commit c8679c0、`baseline_report`）
+
+| 指標 | 目標 | 実測 | 判定 |
+|---|---|---|---|
+| K1 交差数の比 | 1.55 以下（DEC-22） | 1.50 | 達成 |
+| K2 折れの数の比 | 1.3 以下 | 1.13 | 達成 |
+| K3 面積の比 | 1.5 以下 | 0.54 | 達成 |
+| K4 配置の時間の和（121 件） | 3.0 秒以下 | 1.783 秒 | 達成 |

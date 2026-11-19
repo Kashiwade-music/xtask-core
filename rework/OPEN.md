@@ -90,6 +90,16 @@ C2a（c5cd12c、merge 済み 34a4460）の報告による。STOP は無いが、
 
 注：C2a の報告では、`xtask-core` の lib は C2b まで compile できない（残りの error 21 件は `src/run.rs`）。想定どおり。
 
+## 差戻し（W5 の C2c で新規、未解決）
+
+C2c（bb2425b、merge 済み c8679c0）の報告による。STOP は次の一件。CP の tier c（`cargo clippy --workspace --all-targets -- -D warnings`）を止めるので、CP の前に解消が要る。
+
+| # | unit | 場所 | STOP の文（要旨） | 付属書の節 |
+|---|---|---|---|---|
+| 19 | C2c | `crates/xtask-core/src/cli.rs`：`Command::Check(Config)` | clippy の `large_enum_variant`（272 バイト、閾値 200）。clippy の提案どおり `Box` にすると、設計書 5.1 の `pub enum Command { Help, Check(Config) }` が変わる。`Config` を小さくするには、`Config.analysis`（`Option<AnalysisSettings>`）の型を変える必要があり、5.1 の `Config` の定義と食い違う。0.2 の 5 により `#[allow]` は使えない。この lint は C2c で入ったものではなく、C2a 以降の `cli.rs` と `Config` の形から出ている。設計者が決める | C-core.md の C2a（`Command`、`Config`）、設計書 5.1 |
+
+注（報告による。STOP ではない）：`failed_analysis_is_recorded_in_the_archive` は、構文の誤りの reason に `lib.rs` が含まれることを仮定している。図の名前は `target-kind-mode`（例 `fixture-lib-normal`）。`role_limits_reach_analysis_and_all_check_diagrams_with_api_precedence` は、表の名前のまま残した（名前の `api_precedence` は実態と合わない）。
+
 ## 未解決の注意（設計者の判断が要る）
 
 M3a の fix lane（3f3c058）の報告による。STOP ではないが、付属書の手順と食い違う可能性がある。
