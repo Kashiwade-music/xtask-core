@@ -24,10 +24,10 @@
 
 | unit | wave | lane | 状態 |
 |---|---|---|---|
-| L1 | W1 | 1 | 実装済み・W1 の tier b 待ち（a3b6dd8 → merge 済み） |
-| A1 | W1 | 2 | 実装済み・W1 の tier b 待ち（5cadc2b → merge 済み） |
-| M1 | W1 | 3 | 差戻し（OPEN.md の 1〜4） |
-| M2 | W1 | 4 | 差戻し（OPEN.md の 5） |
+| L1 | W1 | 1 | 統合済み（a3b6dd8） |
+| A1 | W1 | 2 | 統合済み（5cadc2b） |
+| M1 | W1 | 3 | 統合済み（658a9f1、差戻し 1〜4 は fix lane f6685ca で解消） |
+| M2 | W1 | 4 | 統合済み（f53b057、差戻し 5 は fix lane 286038e で解消） |
 | L2 | W2 | 1 | 未着手 |
 | L6 | W2 | 1（L2 の後） | 未着手 |
 | L3 | W2 | 2 | 未着手 |
@@ -53,4 +53,5 @@
 
 ## wave の記録
 
-- `W1 merged e13ecfe: tier b 失敗`（check は成功、xtask-archive・xtask-source・xtask-workspace・xtask-layout --lib の試験は成功。xtask-policy の試験 1 件が失敗：OPEN.md の 1。差戻しのため W2 は起動しない。作業指示書 1.4 節）
+- `W1 merged e13ecfe: tier b 失敗`（xtask-policy の試験 1 件が失敗。設計者の付属書の改訂の後に解消）
+- `W1 fix merged d3641fc: tier b 成功`（fix lane f6685ca（M1）と 286038e（M2）を merge。check、xtask-archive 12、xtask-policy 24、xtask-source 14、xtask-workspace 12、xtask-layout --lib 10 が成功）
