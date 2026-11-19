@@ -1,8 +1,32 @@
-//! Role: スタイル検査の診断と報告の型を表現する。
+//! Role: スタイル検査の入力・診断・報告の型と、規則の有効判定を表現する。
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use xtask_policy::StyleRule;
+use xtask_policy::{AnalysisSettings, StyleRule, StyleSettings};
+use xtask_workspace::Workspace;
+
+/// The prepared inputs of one style check. The caller normalizes `root` and the
+/// paths in `files` and `modules`, and removes duplicate files.
+pub struct StyleInput<'a> {
+    /// The repository root, normalized with `xtask_source::normalize`.
+    pub root: &'a Path,
+    pub workspace: &'a Workspace,
+    pub analysis: &'a AnalysisSettings,
+    /// The features that Cargo selects for each member (`Workspace::features`). An
+    /// `Err` is reported once by the Default probe; the Clippy run does not depend on it.
+    pub features: &'a Result<BTreeMap<String, BTreeSet<String>>, String>,
+    pub style: &'a StyleSettings,
+    /// The Rust files to check, normalized and without duplicates.
+    pub files: &'a [PathBuf],
+    /// File to the module path of its root module (`crate::a::b`), used to name items.
+    pub modules: &'a BTreeMap<PathBuf, String>,
+}
+
+/// Whether the style settings enable the rule.
+pub(crate) fn enabled(style: &StyleSettings, rule: StyleRule) -> bool {
+    style.rules().contains(&rule)
+}
 
 /// A style violation with a stable policy rule ID and a one-based source location.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]

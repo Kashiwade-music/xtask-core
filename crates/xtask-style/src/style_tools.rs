@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 
 use xtask_policy::StyleRule;
 
-use crate::model::{StyleDiagnostic, StyleReport};
-use crate::style::{StyleInput, enabled};
+use crate::model::{StyleDiagnostic, StyleInput, StyleReport, enabled};
 
 mod clippy;
 mod common;

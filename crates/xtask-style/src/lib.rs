@@ -7,5 +7,5 @@ mod style;
 mod style_source;
 mod style_tools;
 
-pub use model::{StyleDiagnostic, StyleReport};
-pub use style::{StyleInput, check};
+pub use model::{StyleDiagnostic, StyleInput, StyleReport};
+pub use style::check;

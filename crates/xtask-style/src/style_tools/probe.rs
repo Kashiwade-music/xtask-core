@@ -8,8 +8,7 @@ use xtask_policy::StyleRule;
 use xtask_workspace::TargetKind;
 
 use super::common::{cargo, cfg_environment};
-use crate::model::{StyleDiagnostic, StyleReport};
-use crate::style::StyleInput;
+use crate::model::{StyleDiagnostic, StyleInput, StyleReport};
 
 /// Inputs that every selector's probe shares. The root manifest is parsed once.
 struct Probe<'a> {

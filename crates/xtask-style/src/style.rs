@@ -2,34 +2,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use xtask_policy::{AnalysisSettings, StyleRule, StyleSettings};
-use xtask_workspace::Workspace;
+use xtask_policy::StyleRule;
 
-use crate::model::{StyleDiagnostic, StyleReport};
+use crate::model::{StyleDiagnostic, StyleInput, StyleReport, enabled};
 use crate::style_source::{self, ItemSpan, SourceReport, innermost};
 use crate::style_tools;
-
-/// The prepared inputs of one style check. The caller normalizes `root` and the
-/// paths in `files` and `modules`, and removes duplicate files.
-pub struct StyleInput<'a> {
-    /// The repository root, normalized with `xtask_source::normalize`.
-    pub root: &'a Path,
-    pub workspace: &'a Workspace,
-    pub analysis: &'a AnalysisSettings,
-    /// The features that Cargo selects for each member (`Workspace::features`). An
-    /// `Err` is reported once by the Default probe; the Clippy run does not depend on it.
-    pub features: &'a Result<BTreeMap<String, BTreeSet<String>>, String>,
-    pub style: &'a StyleSettings,
-    /// The Rust files to check, normalized and without duplicates.
-    pub files: &'a [PathBuf],
-    /// File to the module path of its root module (`crate::a::b`), used to name items.
-    pub modules: &'a BTreeMap<PathBuf, String>,
-}
-
-/// Whether the style settings enable the rule.
-pub(crate) fn enabled(style: &StyleSettings, rule: StyleRule) -> bool {
-    style.rules().contains(&rule)
-}
 
 /// Run every style check and report what is not excepted. A check that cannot run
 /// is an error; a violation is a diagnostic. Exceptions move matched violations
