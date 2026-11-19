@@ -5,7 +5,8 @@ use xtask_archive::style::{
 };
 use xtask_archive::{EdgeStyle, Label, Region, Scene};
 
-use crate::{EdgeShape, NodeShape, P, Picture, R, RegionShape, Rgb, Text, bridge, palette, route};
+use crate::model::{EdgeShape, NodeShape, P, Picture, R, RegionShape, Rgb, Text};
+use crate::{bridge, palette, route};
 
 /// 図の中身をずらす量（題の下、左の余白）。
 const OFFSET: P = P { x: 16.0, y: 42.0 };

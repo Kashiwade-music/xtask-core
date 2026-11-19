@@ -1,5 +1,5 @@
 //! Role: 描画の色・線の太さ・角の半径の定数（viewer と書出しで同じ値を使う）。
-use crate::Rgb;
+use crate::model::Rgb;
 
 pub const STROKE: Rgb = Rgb(0x47, 0x55, 0x69);
 pub const NODE_STROKE: Rgb = Rgb(0x33, 0x41, 0x55);

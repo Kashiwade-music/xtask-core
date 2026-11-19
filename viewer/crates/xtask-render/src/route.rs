@@ -1,5 +1,5 @@
 //! Role: edge の折れ線を角を丸めた path にし、矢印の三角形を作る。
-use crate::{Cmd, P};
+use crate::model::{Cmd, P};
 
 /// 角の丸めの半径の上限。
 const CORNER_RADIUS: f64 = 4.0;

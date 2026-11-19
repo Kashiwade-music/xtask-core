@@ -1,5 +1,5 @@
 //! Role: 水平の線分が別の edge の垂直の線分を跨ぐ点（跳び）を求める。
-use crate::{Bridge, P};
+use crate::model::{Bridge, P};
 
 /// 跳びの半径。隣の交点との最小の間隔は 2 * この値。
 const BRIDGE_RADIUS: f64 = 4.0;
