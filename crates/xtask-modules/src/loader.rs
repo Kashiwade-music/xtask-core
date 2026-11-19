@@ -24,18 +24,25 @@ pub(crate) struct Source {
     file: Rc<syn::File>,
     /// Indices of the inline modules from the file root; empty for a file module.
     scope: Vec<usize>,
-    /// Indices of the items that are active under the configuration.
-    active: Vec<usize>,
+    /// The module's own attributes after cfg_attr expansion.
+    attributes: Vec<Meta>,
+    /// The active items: the index of each in the scope, and its attributes after cfg_attr expansion.
+    active: Vec<(usize, Vec<Meta>)>,
 }
 
 impl Source {
-    pub(crate) fn items(&self) -> Vec<&Item> {
+    /// The active items of the module, each with its attributes after cfg_attr expansion.
+    pub(crate) fn items(&self) -> Vec<(&Item, &[Meta])> {
         let (_, items) = scope_of(&self.file, &self.scope);
-        self.active.iter().map(|&index| &items[index]).collect()
+        self.active
+            .iter()
+            .map(|(index, attributes)| (&items[*index], attributes.as_slice()))
+            .collect()
     }
 
-    pub(crate) fn attrs(&self) -> &[Attribute] {
-        scope_of(&self.file, &self.scope).0
+    /// The module's own attributes after cfg_attr expansion.
+    pub(crate) fn attributes(&self) -> &[Meta] {
+        &self.attributes
     }
 }
 
@@ -85,7 +92,7 @@ pub(crate) fn load(root: &Path, env: Env<'_>, cache: &mut ParseCache) -> Result<
         diagnostics: Vec::new(),
     };
     loader.file(
-        &root,
+        root,
         "crate".into(),
         None,
         DirOwnership::ModRs(base),
@@ -115,11 +122,20 @@ impl DirOwnership {
     }
 }
 
-/// Where a module's items are: its file and the inline-module path inside that file.
+/// Where a module's items are: its file, the inline-module path inside that file, and the
+/// module's own attributes after cfg_attr expansion.
 struct Site {
     file_path: PathBuf,
     file: Rc<syn::File>,
     scope: Vec<usize>,
+    attributes: Vec<Meta>,
+}
+
+/// A `mod` item that is active under the configuration.
+struct Declaration<'a> {
+    index: usize,
+    module: &'a ItemMod,
+    attributes: &'a [Meta],
 }
 
 struct Pending {
@@ -135,22 +151,18 @@ struct Loader<'a> {
 }
 
 impl Loader<'_> {
-    /// Loads a file module. Returns whether the module is active: a file disabled by its own
-    /// `#![cfg]` yields no module.
+    /// Loads the file module at `path`, which is already normalized. Returns whether the
+    /// module is active: a file disabled by its own `#![cfg]` yields no module.
     fn file(
         &mut self,
-        path: &Path,
+        path: PathBuf,
         id: String,
         parent: Option<String>,
         owner: DirOwnership,
         stack: &mut Vec<PathBuf>,
     ) -> Result<bool, String> {
-        let canonical = xtask_source::normalize(path)?;
-        if stack.contains(&canonical) {
-            return Err(format!("recursive module file: {}", path.display()));
-        }
-        stack.push(canonical.clone());
-        let result = self.file_body(canonical, id, parent, owner, stack);
+        stack.push(path.clone());
+        let result = self.file_body(path, id, parent, owner, stack);
         stack.pop();
         result
     }
@@ -168,26 +180,37 @@ impl Loader<'_> {
             .attrs
             .first()
             .map_or(1, |attr| attr.span().start().line);
-        if !self.enabled(&file_path, line, &file.attrs) {
+        let Some(attributes) = self.expanded(&file_path, line, &file.attrs) else {
             return Ok(false);
-        }
+        };
         let site = Site {
             file_path,
             file,
             scope: Vec::new(),
+            attributes,
         };
         self.module(&site, id, parent, &owner, ModuleKind::File, stack)?;
         Ok(true)
     }
 
-    /// Evaluates one item's or file's cfg. An invalid predicate is one diagnostic, and the
-    /// item is treated as disabled.
-    fn enabled(&mut self, file_path: &Path, line: usize, attrs: &[Attribute]) -> bool {
-        match cfg::enabled(attrs, self.env) {
-            Ok(enabled) => enabled,
+    /// Expands the cfg_attr of one item's or file's attributes, and evaluates its cfg. Returns
+    /// the expanded attributes when the item is enabled. An invalid predicate is one diagnostic,
+    /// and the item is treated as disabled.
+    fn expanded(
+        &mut self,
+        file_path: &Path,
+        line: usize,
+        attrs: &[Attribute],
+    ) -> Option<Vec<Meta>> {
+        let evaluated = cfg::effective(attrs, self.env).and_then(|metas| {
+            let enabled = cfg::enabled_metas(&metas, self.env)?;
+            Ok(enabled.then_some(metas))
+        });
+        match evaluated {
+            Ok(metas) => metas,
             Err(error) => {
                 self.diagnostics.push(located(file_path, line, &error));
-                false
+                None
             }
         }
     }
@@ -224,51 +247,64 @@ impl Loader<'_> {
                 },
                 file: Rc::clone(&site.file),
                 scope: site.scope.clone(),
+                attributes: site.attributes.clone(),
                 active,
             },
         });
         Ok(())
     }
 
-    /// Lists the active items of a module. A `mod` item is active only when its module loads.
+    /// Lists the active items of a module, with their expanded attributes. A `mod` item is
+    /// active only when its module loads.
     fn scan(
         &mut self,
         site: &Site,
         id: &str,
         owner: &DirOwnership,
         stack: &mut Vec<PathBuf>,
-    ) -> Result<Vec<usize>, String> {
+    ) -> Result<Vec<(usize, Vec<Meta>)>, String> {
         let (_, items) = scope_of(&site.file, &site.scope);
         let mut active = Vec::new();
         for (index, item) in items.iter().enumerate() {
             let line = item.span().start().line;
-            if !self.enabled(&site.file_path, line, attrs(item)) {
+            let Some(attributes) = self.expanded(&site.file_path, line, attrs(item)) else {
                 continue;
-            }
+            };
             let loaded = match item {
-                Item::Mod(module) => self.child(site, index, module, id, owner, stack)?,
+                Item::Mod(module) => {
+                    let declaration = Declaration {
+                        index,
+                        module,
+                        attributes: &attributes,
+                    };
+                    self.child(site, declaration, id, owner, stack)?
+                }
                 _ => true,
             };
             if loaded {
-                active.push(index);
+                active.push((index, attributes));
             }
         }
         Ok(active)
     }
 
-    /// Loads the module that a `mod` item declares. Returns whether it is active.
+    /// Loads the module that an active `mod` item declares. Returns whether it is active.
     fn child(
         &mut self,
         site: &Site,
-        index: usize,
-        module: &ItemMod,
+        declaration: Declaration<'_>,
         id: &str,
         owner: &DirOwnership,
         stack: &mut Vec<PathBuf>,
     ) -> Result<bool, String> {
+        let Declaration {
+            index,
+            module,
+            attributes,
+        } = declaration;
         let child_id = child_id(id, &module.ident);
         let line = module.ident.span().start().line;
-        let path = self.path_attribute(&site.file_path, line, module)?;
+        let path = path_attribute(&site.file_path, line, attributes)?;
         let attribute_base = attribute_base(owner, &site.file_path);
         if module.content.is_some() {
             let directory = match &path {
@@ -281,6 +317,7 @@ impl Loader<'_> {
                 file_path: site.file_path.clone(),
                 file: Rc::clone(&site.file),
                 scope,
+                attributes: attributes.to_vec(),
             };
             let owner = DirOwnership::Inline(directory);
             self.module(
@@ -304,6 +341,16 @@ impl Loader<'_> {
                 line,
             )?,
         };
+        // Files are keyed by their normalized paths, so one file has one stack entry and one parse.
+        let child_file = xtask_source::normalize(&child_file)
+            .map_err(|error| located(&site.file_path, line, &error))?;
+        if stack.contains(&child_file) {
+            return Err(located(
+                &site.file_path,
+                line,
+                &format!("recursive module file: {}", child_file.display()),
+            ));
+        }
         let child_owner = if explicit || child_file.file_name().is_some_and(|name| name == "mod.rs")
         {
             DirOwnership::ModRs(child_file.parent().unwrap().to_path_buf())
@@ -311,41 +358,38 @@ impl Loader<'_> {
             DirOwnership::NonModRs(child_file.with_extension(""))
         };
         self.file(
-            &child_file,
+            child_file,
             child_id,
             Some(id.to_string()),
             child_owner,
             stack,
         )
     }
+}
 
-    /// The `path` attribute of a `mod` item, after cfg_attr expansion.
-    fn path_attribute(
-        &self,
-        file_path: &Path,
-        line: usize,
-        module: &ItemMod,
-    ) -> Result<Option<String>, String> {
-        let metas = cfg::effective(&module.attrs, self.env)
-            .map_err(|error| located(file_path, line, &error))?;
-        let mut path = None;
-        for meta in metas {
-            if !meta.path().is_ident("path") {
-                continue;
-            }
-            let Meta::NameValue(value) = meta else {
-                return Err(located(file_path, line, "invalid path attribute"));
-            };
-            let syn::Expr::Lit(lit) = value.value else {
-                return Err(located(file_path, line, "nonliteral path attribute"));
-            };
-            let syn::Lit::Str(value) = lit.lit else {
-                return Err(located(file_path, line, "nonstring path attribute"));
-            };
-            path = Some(value.value());
+/// The `path` attribute of a `mod` item, read from its expanded attributes.
+fn path_attribute(
+    file_path: &Path,
+    line: usize,
+    attributes: &[Meta],
+) -> Result<Option<String>, String> {
+    let mut path = None;
+    for meta in attributes {
+        if !meta.path().is_ident("path") {
+            continue;
         }
-        Ok(path)
+        let Meta::NameValue(value) = meta else {
+            return Err(located(file_path, line, "invalid path attribute"));
+        };
+        let syn::Expr::Lit(lit) = &value.value else {
+            return Err(located(file_path, line, "nonliteral path attribute"));
+        };
+        let syn::Lit::Str(value) = &lit.lit else {
+            return Err(located(file_path, line, "nonstring path attribute"));
+        };
+        path = Some(value.value());
     }
+    Ok(path)
 }
 
 /// The file of a `mod` item without a `path` attribute: `name.rs` or `name/mod.rs`.
@@ -388,7 +432,7 @@ fn attribute_base(owner: &DirOwnership, file_path: &Path) -> PathBuf {
 }
 
 /// A loader error at a place in a file, in the form `{file}:{line}: {message}`.
-fn located(file_path: &Path, line: usize, message: &str) -> String {
+pub(crate) fn located(file_path: &Path, line: usize, message: &str) -> String {
     format!("{}:{line}: {message}", file_path.display())
 }
 
@@ -403,7 +447,7 @@ fn read_and_parse(path: &Path) -> Result<Rc<syn::File>, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     syn::parse_file(&text)
         .map(Rc::new)
-        .map_err(|e| format!("{}: {e}", path.display()))
+        .map_err(|e| located(path, e.span().start().line, &e.to_string()))
 }
 
 /// The attributes and the items of the module at `scope` (the file root when it is empty).

@@ -1,9 +1,10 @@
 //! Role: 宣言と再公開の名前解決を収束させ、参照と循環を解析する。
 use crate::{
     ModuleGraph,
+    cfg::contains,
     components::components,
     loader::{Loaded, Source},
-    model::Env,
+    model::{Env, ModuleKind},
     symbols::*,
     visitor::References,
 };
@@ -23,10 +24,10 @@ pub(crate) fn analyze(loaded: Loaded, env: Env) -> Result<ModuleGraph, String> {
         .collect::<BTreeSet<_>>();
     for source in &sources {
         let owner = &source.module.id;
-        for item in source.items() {
+        for (item, attributes) in source.items() {
             if let Item::Macro(mac) = item
                 && mac.mac.path.is_ident("macro_rules")
-                && has_attribute(&mac.attrs, env, "macro_export")
+                && contains(attributes, "macro_export")
                 && let Some((name, target)) = declaration(item, owner)
             {
                 // #[macro_export] places the macro at the crate root, wherever it is defined.
@@ -62,7 +63,7 @@ pub(crate) fn analyze(loaded: Loaded, env: Env) -> Result<ModuleGraph, String> {
             }
         }
     }
-    let textual = textual_macros(&sources, &active_modules, env);
+    let textual = textual_macros(&sources, &active_modules);
     let externs = sources
         .iter()
         .find(|s| s.module.id == "crate")
@@ -70,7 +71,7 @@ pub(crate) fn analyze(loaded: Loaded, env: Env) -> Result<ModuleGraph, String> {
             source
                 .items()
                 .into_iter()
-                .filter_map(|i| {
+                .filter_map(|(i, _)| {
                     if matches!(i, Item::ExternCrate(_)) {
                         declaration(i, "crate")
                     } else {
@@ -128,6 +129,7 @@ pub(crate) fn analyze(loaded: Loaded, env: Env) -> Result<ModuleGraph, String> {
     for source in &sources {
         let mut visitor = References {
             module: &source.module.id,
+            file: &source.module.file,
             tables: &tables,
             textual: &textual,
             env,
@@ -137,8 +139,13 @@ pub(crate) fn analyze(loaded: Loaded, env: Env) -> Result<ModuleGraph, String> {
             edges: &mut edges,
             diagnostics: &mut diagnostics,
         };
-        visitor.expansions(source.attrs());
-        for item in source.items() {
+        // An inline module's attributes are the expanded attributes of its `mod` item, which
+        // its parent reports among the items. Only a file module reports its own.
+        if source.module.kind == ModuleKind::File {
+            visitor.expansions(source.attributes());
+        }
+        for (item, attributes) in source.items() {
+            visitor.expansions(attributes);
             visitor.visit_item(item);
         }
     }
@@ -155,20 +162,20 @@ pub(crate) fn analyze(loaded: Loaded, env: Env) -> Result<ModuleGraph, String> {
 
 /// `macro_rules!` names in textual scope per module: own definitions plus those
 /// that `#[macro_use] mod child;` adds to its parent. Declaration order is not modeled.
-fn textual_macros(sources: &[Source], active_modules: &BTreeSet<String>, env: Env) -> Tables {
+fn textual_macros(sources: &[Source], active_modules: &BTreeSet<String>) -> Tables {
     let mut textual = Tables::new();
     let mut inherited = Vec::<(String, String)>::new();
     for source in sources {
         let owner = &source.module.id;
         let table = textual.entry(owner.clone()).or_default();
-        for item in source.items() {
+        for (item, attributes) in source.items() {
             match item {
                 Item::Macro(mac) if mac.mac.path.is_ident("macro_rules") => {
                     if let Some((name, target)) = declaration(item, owner) {
                         table.entry(name).or_default().insert(target);
                     }
                 }
-                Item::Mod(module) if has_attribute(&module.attrs, env, "macro_use") => {
+                Item::Mod(module) if contains(attributes, "macro_use") => {
                     let child = crate::loader::child_id(owner, &module.ident);
                     if active_modules.contains(&child) {
                         inherited.push((owner.clone(), child));
@@ -196,11 +203,4 @@ fn textual_macros(sources: &[Source], active_modules: &BTreeSet<String>, env: En
         }
     }
     textual
-}
-
-/// Whether the attribute is present after `cfg_attr` expansion. The loader has already
-/// validated these attributes, so an expansion error cannot occur here.
-fn has_attribute(attrs: &[syn::Attribute], env: Env, name: &str) -> bool {
-    crate::cfg::effective(attrs, env)
-        .is_ok_and(|metas| metas.iter().any(|meta| meta.path().is_ident(name)))
 }

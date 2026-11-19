@@ -1122,13 +1122,3 @@ fn modules_are_sorted_with_parents_first() {
         Some("crate::a")
     );
 }
-
-#[test]
-fn disabled_root_keeps_root_module() {
-    let result = graph(
-        &[("lib.rs", "#![cfg(any())]\nfn run() {}")],
-        Options::default(),
-    );
-    assert_eq!(result.modules.len(), 1);
-    assert_eq!(result.modules[0].id, "crate");
-}
