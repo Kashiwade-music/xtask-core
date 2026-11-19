@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 
 use crate::level::{
     BoxItem, Frame, Item, ItemId, ItemKind, LevelInput, LevelOutput, RootLayering, Segment,
-    run_level,
 };
 use crate::model::{
     DIAGRAM_PAD, Edge, Graph, Layering, Layout, LayoutError, Point, Rect, Route, Size,
@@ -188,6 +187,15 @@ fn post_order(tree: &Tree) -> Vec<usize> {
         }
     }
     order
+}
+
+/// 段を配置する。layering → chains → order → position → route の順。
+fn run_level(input: &LevelInput) -> Result<LevelOutput, LayoutError> {
+    let layers = crate::layering::assign(input)?;
+    let chains = crate::chains::build(input, &layers)?;
+    let order = crate::order::arrange(&chains)?;
+    let y = crate::position::vertical(&chains, &order)?;
+    crate::route::finish(input, &chains, &order, &y)
 }
 
 /// 段を下から順に配置する。
