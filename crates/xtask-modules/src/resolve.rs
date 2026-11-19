@@ -5,7 +5,7 @@ use crate::{
     loader::{Loaded, Source},
     model::{Env, ModuleKind},
     symbols::{
-        Glob, Import, Layout, Modules, Namespace, Scope, Target, Textual, child_index,
+        Fallback, Glob, Import, Layout, Modules, Namespace, Scope, Target, Textual, child_index,
         declarations, use_imports,
     },
     thread_local_items,
@@ -115,8 +115,8 @@ fn tables(
             .or_default()
             .insert(Target::Item(*owner, Namespace::Value));
     }
-    settle(&mut scopes, layout, env, false);
-    settle(&mut scopes, layout, env, true);
+    settle(&mut scopes, layout, env, Fallback::LocalOnly);
+    settle(&mut scopes, layout, env, Fallback::External);
     scopes
 }
 
@@ -146,13 +146,11 @@ fn declare(sources: &[Source], layout: &Layout, scopes: &mut [Scope]) {
                     .or_default()
                     .insert(target);
             }
-            if let Item::Use(item) = item {
-                for import in use_imports(item) {
-                    if let Some(alias) = &import.alias {
-                        scopes[owner].explicit.entry(alias.clone()).or_default();
-                    }
-                }
-            }
+        }
+    }
+    for (owner, imports) in layout.uses.iter().enumerate() {
+        for alias in imports.iter().filter_map(|import| import.alias.as_ref()) {
+            scopes[owner].explicit.entry(alias.clone()).or_default();
         }
     }
 }
@@ -176,9 +174,9 @@ fn extern_prelude(sources: &[Source], ids: &[String]) -> BTreeMap<String, BTreeS
 }
 
 /// Applies the imports of every module until no set grows. A module whose names grew
-/// requeues every module that has imports; the sets only grow, so this ends. `external`
-/// makes an unresolved path of an unbound name an external path.
-fn settle(scopes: &mut [Scope], layout: &Layout, env: Env, external: bool) {
+/// requeues every module that has imports; the sets only grow, so this ends. `fallback`
+/// decides whether an unresolved path of an unbound name is an external path.
+fn settle(scopes: &mut [Scope], layout: &Layout, env: Env, fallback: Fallback) {
     let count = scopes.len();
     let mut queue = (0..count).collect::<VecDeque<_>>();
     let mut queued = vec![true; count];
@@ -186,7 +184,7 @@ fn settle(scopes: &mut [Scope], layout: &Layout, env: Env, external: bool) {
         queued[module] = false;
         let mut changed = false;
         for import in &layout.uses[module] {
-            changed |= apply(scopes, layout, module, import, env, external);
+            changed |= apply(scopes, layout, module, import, env, fallback);
         }
         if changed {
             for (dependant, imports) in layout.uses.iter().enumerate() {
@@ -206,14 +204,14 @@ fn apply(
     module: usize,
     import: &Import,
     env: Env,
-    external: bool,
+    fallback: Fallback,
 ) -> bool {
     let (targets, glob) = {
         let view = Modules {
             layout,
             scopes: &*scopes,
         };
-        let targets = view.import_targets(module, &[], import, external);
+        let targets = view.import_targets(module, &[], import, fallback);
         let glob = if import.glob {
             view.glob(&targets, env.settings)
         } else {

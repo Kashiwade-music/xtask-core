@@ -4,8 +4,8 @@ use crate::{
     macros::{self, Arguments, MacroGrammar},
     model::{Env, Reference},
     symbols::{
-        Block, Import, LocalBinding, Modules, NAMESPACES, Namespace, Scope, Target, Textual,
-        declarations, is_local_macro, local_macro_targets, use_imports,
+        Block, Fallback, Import, LocalBinding, Modules, NAMESPACES, Namespace, Scope, Target,
+        Textual, declarations, is_local_macro, local_macro_targets, use_imports,
     },
     thread_local_items,
 };
@@ -347,9 +347,9 @@ impl References<'_> {
     /// edges and unresolved paths are reported here.
     fn module_use(&mut self, item: &syn::ItemUse) {
         for import in use_imports(item) {
-            let targets = self
-                .modules
-                .import_targets(self.module, &self.blocks, &import, true);
+            let targets =
+                self.modules
+                    .import_targets(self.module, &self.blocks, &import, Fallback::External);
             self.import_edges(&import, targets);
         }
     }
@@ -370,9 +370,9 @@ impl References<'_> {
             }
         }
         for import in imports {
-            let targets = self
-                .modules
-                .import_targets(self.module, &self.blocks, &import, true);
+            let targets =
+                self.modules
+                    .import_targets(self.module, &self.blocks, &import, Fallback::External);
             if import.glob {
                 let glob = self.modules.glob(&targets, self.env.settings);
                 self.block_items().add_glob(glob);
@@ -559,7 +559,7 @@ impl References<'_> {
             .settings
             .trusted_macros
             .contains(&ast::path_text(path))
-            && thread_local_items::provider(path, &self.modules.layout.uses[self.module]).is_some();
+            && thread_local_items::names_thread_local(path, &self.modules.layout.uses[self.module]);
         if !standard && !trusted {
             return false;
         }
@@ -606,13 +606,7 @@ impl References<'_> {
         let message = format!(
             "{}: item macro expansion is unsupported: {}",
             self.id(),
-            item.mac
-                .path
-                .segments
-                .iter()
-                .map(|s| s.ident.to_string())
-                .collect::<Vec<_>>()
-                .join("::")
+            ast::path_text(&item.mac.path)
         );
         self.diagnostics.insert(message);
     }
@@ -698,23 +692,7 @@ impl References<'_> {
     /// Visits the arguments of a built-in macro by its grammar. A name that the grammar table does
     /// not model reports a diagnostic, unless it has no arguments to visit.
     fn visit_named_macro(&mut self, mac: &syn::Macro, name: &str) {
-        let modeled = match macros::grammar(name) {
-            Some(grammar) => self.visit_grammar(mac, grammar),
-            None => matches!(
-                name,
-                "stringify"
-                    | "concat"
-                    | "env"
-                    | "option_env"
-                    | "file"
-                    | "line"
-                    | "column"
-                    | "module_path"
-                    | "cfg"
-                    | "include_str"
-                    | "include_bytes"
-            ),
-        };
+        let modeled = macros::grammar(name).is_some_and(|grammar| self.visit_grammar(mac, grammar));
         if !modeled {
             let message = format!("{}: macro token analysis is unsupported: {name}", self.id());
             self.diagnostics.insert(message);

@@ -170,17 +170,17 @@ fn derive_diagnostics(
         .parse_args_with(Punctuated::<syn::Path, Token![,]>::parse_terminated)
         .map_err(|e| e.to_string())?;
     for derive in derives {
+        let name = crate::ast::path_text(&derive);
         let path = derive
             .segments
             .iter()
             .map(|s| s.ident.to_string())
             .collect::<Vec<_>>();
-        let derive = path.join("::");
-        if !intrinsic_derives.contains(&derive)
+        if !intrinsic_derives.contains(&name)
             && !crate::intrinsic::derive(&path)
-            && !env.settings.trusted_derives.contains(&derive)
+            && !env.settings.trusted_derives.contains(&name)
         {
-            diagnostics.push(format!("derive macro expansion is unsupported: {derive}"));
+            diagnostics.push(format!("derive macro expansion is unsupported: {name}"));
         }
     }
     Ok(())

@@ -5,7 +5,7 @@ use crate::{
     model::{Env, Settings},
     symbols::{
         Block, Import, Layout, Modules, Namespace, Scope, Target, Textual, is_local_macro,
-        local_macro_targets,
+        is_trusted_glob, local_macro_targets,
     },
 };
 use proc_macro2::TokenStream;
@@ -65,14 +65,6 @@ pub(crate) fn enabled_statics(
     Ok((enabled, diagnostics))
 }
 
-/// How a `thread_local!` call is recognized, syntactically. The visitor visits the statics of
-/// both kinds; only the calls that resolve to the standard macro declare names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Provider {
-    Qualified,
-    Alias,
-}
-
 /// Whether a `use` path names the standard `thread_local` macro.
 fn is_standard_import(path: &[String]) -> bool {
     matches!(
@@ -84,25 +76,21 @@ fn is_standard_import(path: &[String]) -> bool {
     )
 }
 
-/// The provider of a macro call that names `thread_local`, or `None` for any other macro.
-/// The names are those of the module's own `use` items, not those reached by a reexport.
-pub(crate) fn provider(path: &syn::Path, imports: &[Import]) -> Option<Provider> {
-    let parts = path
-        .segments
-        .iter()
-        .map(|segment| segment.ident.to_string())
-        .collect::<Vec<_>>();
-    if parts == ["std", "thread_local"] {
-        return Some(Provider::Qualified);
+/// Whether a macro call's path names `thread_local`: the standard `std::thread_local`, or a bare
+/// name that is `thread_local` or an alias of it. The names are those of the module's own `use`
+/// items, not those reached by a reexport.
+pub(crate) fn names_thread_local(path: &syn::Path, imports: &[Import]) -> bool {
+    let text = ast::path_text(path);
+    if text == "std::thread_local" {
+        return true;
     }
-    if path.leading_colon.is_some() || parts.len() != 1 {
-        return None;
+    if path.leading_colon.is_some() || path.segments.len() != 1 {
+        return false;
     }
-    let name = parts[0].as_str();
-    let aliased = imports
-        .iter()
-        .any(|import| import.alias.as_deref() == Some(name) && is_standard_import(&import.path));
-    (name == "thread_local" || aliased).then_some(Provider::Alias)
+    text == "thread_local"
+        || imports.iter().any(|import| {
+            import.alias.as_deref() == Some(text.as_str()) && is_standard_import(&import.path)
+        })
 }
 
 /// Whether a module's `#[macro_use] extern crate` may import the `thread_local` macro.
@@ -261,7 +249,7 @@ fn is_trusted_call(
             &item.mac.path,
             &[],
         ))
-        && provider(&item.mac.path, &modules.layout.uses[module]).is_some()
+        && names_thread_local(&item.mac.path, &modules.layout.uses[module])
 }
 
 /// Whether a macro call, at module level or in the given blocks, is the standard `thread_local!`.
@@ -289,11 +277,6 @@ pub(crate) fn is_standard_call(
         .map(|block| &block.items)
         .chain(modules.scope(module))
         .any(|scope| !scope.external_globs.is_empty());
-    let segments = path
-        .segments
-        .iter()
-        .map(|segment| segment.ident.to_string())
-        .collect::<Vec<_>>();
     let settings = env.settings;
     let bare = path.is_ident("thread_local")
         && !unknown_glob
@@ -305,10 +288,7 @@ pub(crate) fn is_standard_call(
             &mut BTreeSet::new(),
             settings,
         );
-    let qualified = segments
-        .iter()
-        .map(String::as_str)
-        .eq(["std", "thread_local"])
+    let qualified = ast::path_text(path) == "std::thread_local"
         && (path.leading_colon.is_some()
             || !unknown_glob
                 && !uncertain(modules, module, "std", &mut BTreeSet::new(), settings)
@@ -337,9 +317,11 @@ fn uncertain(
         }
         let targets = modules.resolve(module, &[], &import.path, None);
         if targets.is_empty() {
-            // A trusted glob is known to provide no macros (see `Settings::trusted_globs`).
-            let trusted = settings.trusted_globs.contains(&import.path.join("::"));
-            if import.glob && (trusted || is_standard_glob(modules, module, &import.path)) {
+            // A trusted glob is known to provide no macros (see `is_trusted_glob`).
+            let trusted = import.glob
+                && is_trusted_glob(&import.path, settings)
+                && starts_outside(modules, module, &import.path);
+            if trusted {
                 continue;
             }
             return true;
@@ -356,17 +338,17 @@ fn uncertain(
     false
 }
 
-/// Whether a glob import names the standard library, whose first segment is not a local name.
-fn is_standard_glob(modules: &Modules, module: usize, path: &[String]) -> bool {
+/// Whether the first segment of a path names no local type, so that the path is not reached
+/// through a local name.
+fn starts_outside(modules: &Modules, module: usize, path: &[String]) -> bool {
     path.first().is_some_and(|first| {
-        matches!(first.as_str(), "std" | "core" | "alloc")
-            && modules
-                .resolve(
-                    module,
-                    &[],
-                    std::slice::from_ref(first),
-                    Some(Namespace::Type),
-                )
-                .is_empty()
+        modules
+            .resolve(
+                module,
+                &[],
+                std::slice::from_ref(first),
+                Some(Namespace::Type),
+            )
+            .is_empty()
     })
 }

@@ -42,6 +42,15 @@ impl Target {
     }
 }
 
+/// Whether an unresolved import path of a name that no scope binds is an external path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Fallback {
+    /// Only crate-local paths resolve; an unresolved name is not external.
+    LocalOnly,
+    /// An unresolved name that no scope binds is an external path.
+    External,
+}
+
 /// The names that one module or one block brings into scope.
 #[derive(Default)]
 pub(crate) struct Scope {
@@ -289,17 +298,17 @@ impl Modules<'_> {
             .is_some_and(|scope| scope.binds_any(name))
     }
 
-    /// The targets of an import. An unresolved name that no scope binds is an external path,
-    /// when `external` is set.
+    /// The targets of an import. Under `Fallback::External`, an unresolved name that no scope binds
+    /// is an external path.
     pub(crate) fn import_targets(
         &self,
         module: usize,
         blocks: &[Block],
         import: &Import,
-        external: bool,
+        fallback: Fallback,
     ) -> BTreeSet<Target> {
         let mut targets = self.resolve(module, blocks, &import.path, None);
-        let fallback = external
+        let fallback = fallback == Fallback::External
             && import.path.first().is_some_and(|first| {
                 !matches!(first.as_str(), "crate" | "self" | "super")
                     && !self.bound_anywhere(module, blocks, first)
@@ -353,7 +362,7 @@ fn candidates(scope: &Scope) -> BTreeSet<(Namespace, String)> {
 
 /// Whether a glob import is known to provide no macros, derives or attributes: the standard
 /// libraries, and the globs that the policy trusts.
-fn is_trusted_glob(path: &[String], settings: &Settings) -> bool {
+pub(crate) fn is_trusted_glob(path: &[String], settings: &Settings) -> bool {
     path.first()
         .is_some_and(|first| matches!(first.as_str(), "std" | "core" | "alloc"))
         || settings.trusted_globs.contains(&path.join("::"))
