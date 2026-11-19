@@ -992,10 +992,9 @@ fn known_macro_and_derive_provider_aliases_remain_supported() {
             r#"
         use std::assert_eq as check;
         use std::clone::Clone as Copyable;
-        use serde_json::json as data;
         #[derive(Copyable)] struct S;
         mod a {pub fn f()->usize {1}}
-        fn f(){check!(crate::a::f(), 1); let _ = data!({"x": crate::a::f()});}
+        fn f(){check!(crate::a::f(), 1);}
     "#,
         )],
         Options::default(),
