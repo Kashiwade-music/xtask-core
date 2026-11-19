@@ -8,6 +8,7 @@ use crate::level::{
 use crate::model::{
     DIAGRAM_PAD, Edge, Graph, Layering, Layout, LayoutError, Point, Rect, Route, Size,
 };
+use crate::route::push_simplified;
 
 /// 段の中で区間の端になるもの（Graph の index で書く）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -417,25 +418,6 @@ fn edge_route(
         }
     }
     Ok(Route { points, label })
-}
-
-/// 同じ点を一つにし、同じ直線の上の三点では中の点を消す（8.3 節の 3）。
-fn push_simplified(points: &mut Vec<Point>, next: Point) {
-    if points.last() == Some(&next) {
-        return;
-    }
-    let count = points.len();
-    if count >= 2 && collinear(points[count - 2], points[count - 1], next) {
-        points.pop();
-        if points.last() == Some(&next) {
-            return;
-        }
-    }
-    points.push(next);
-}
-
-fn collinear(a: Point, b: Point, c: Point) -> bool {
-    (a.x == b.x && b.x == c.x) || (a.y == b.y && b.y == c.y)
 }
 
 #[cfg(test)]

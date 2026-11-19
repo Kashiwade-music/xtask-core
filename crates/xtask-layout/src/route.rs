@@ -273,7 +273,7 @@ fn place_ports(frame: &Frame, chains: &Chains, size: Size, rects: &mut [Rect]) {
 }
 
 /// 同じ点を一つにし、同じ直線の上の三点では中の点を消す（8.3 節の 3）。
-fn push_simplified(points: &mut Vec<Point>, next: Point) {
+pub(crate) fn push_simplified(points: &mut Vec<Point>, next: Point) {
     if points.last() == Some(&next) {
         return;
     }
@@ -287,7 +287,7 @@ fn push_simplified(points: &mut Vec<Point>, next: Point) {
     points.push(next);
 }
 
-fn collinear(a: Point, b: Point, c: Point) -> bool {
+pub(crate) fn collinear(a: Point, b: Point, c: Point) -> bool {
     (a.x == b.x && b.x == c.x) || (a.y == b.y && b.y == c.y)
 }
 
