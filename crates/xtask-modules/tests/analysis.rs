@@ -1,7 +1,10 @@
 //! Role: モジュール読込み、名前解決、cfg別の参照と循環を検証する。
+#[path = "common/analysis.rs"]
+mod analysis_support;
 mod common;
 
-use common::{Options, edges, graph, write_fixture};
+use analysis_support::{edges, graph};
+use common::{Options, write_fixture};
 use std::collections::BTreeSet;
 
 #[test]
