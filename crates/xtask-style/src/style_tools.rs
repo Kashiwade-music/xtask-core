@@ -115,18 +115,31 @@ fn width_limit(input: &StyleInput<'_>, report: &mut StyleReport) {
     }
 }
 
-/// Group the files by the directory of their nearest rustfmt configuration within
-/// the root. Files without one share the root. Each group keeps its first file,
-/// which rustfmt reads the configuration for.
+/// Group the files by the directory of their nearest rustfmt configuration.
+/// Within the root the search stops at the root, and files without one share
+/// the root. A file outside the root searches upward without a bound, and
+/// without a configuration it stands for its own directory. Each group keeps
+/// its first file, which lies below the group's directory, so rustfmt reads
+/// that directory's configuration for the group. An outside file's group is
+/// never the root's, so the root's configuration is always queried through a
+/// file below the root.
 fn config_groups(root: &Path, files: &[PathBuf]) -> BTreeMap<PathBuf, PathBuf> {
     let mut groups = BTreeMap::new();
     for file in files {
-        let directory = file
-            .ancestors()
-            .skip(1)
-            .take_while(|directory| directory.starts_with(root))
-            .find(|directory| config_file(directory).is_some())
-            .map_or_else(|| root.to_path_buf(), Path::to_path_buf);
+        let directory = if file.starts_with(root) {
+            file.ancestors()
+                .skip(1)
+                .take_while(|directory| directory.starts_with(root))
+                .find(|directory| config_file(directory).is_some())
+                .map_or_else(|| root.to_path_buf(), Path::to_path_buf)
+        } else {
+            file.ancestors()
+                .skip(1)
+                .find(|directory| config_file(directory).is_some())
+                .or_else(|| file.parent())
+                .unwrap_or(file.as_path())
+                .to_path_buf()
+        };
         groups.entry(directory).or_insert_with(|| file.clone());
     }
     groups
