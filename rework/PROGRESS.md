@@ -37,16 +37,16 @@
 | M3b | W2 | 5（M3a の後） | 統合済み（695c72a、差戻し 9〜13 は fix 0b36b98・c2cf509・ab5d1e5 で解消。最終の merge は 6e3adb4） |
 | M3c | W2 | 5（M3b の後） | 統合済み（2e50e6b、差戻し 14 は b2a98c2 の改訂と fix 8c186b3 で解消。最終の merge は 11ad3d8） |
 | V1 | W2 | 6 | 統合済み（1adf297。viewer の tier b 成功） |
-| L7 | W3 | 1 | 未着手 |
-| L8 | W3 | 2 | 未着手 |
-| C1 | W3 | 3 | 未着手 |
-| V2a | W3 | 4 | 未着手 |
-| V2b | W3 | 5 | 未着手 |
-| V2d | W3 | 5（V2b の後） | 未着手 |
-| V2c | W3 | 6 | 未着手 |
-| A2 | W4 | 1 | 未着手 |
-| V3 | W4 | 2 | 未着手 |
-| C3 | W4 | 3 | 未着手 |
+| L7 | W3 | 1 | 統合済み（67c1b89） |
+| L8 | W3 | 2 | 統合済み（ed83685） |
+| C1 | W3 | 3 | 差戻し（OPEN.md の 15・16。c3bf6a1 は merge 済み。W3 の tier b は通過） |
+| V2a | W3 | 4 | 統合済み（079ffcf） |
+| V2b | W3 | 5 | 統合済み（2d55e75） |
+| V2d | W3 | 5（V2b の後） | 統合済み（de751f2） |
+| V2c | W3 | 6 | 統合済み（cd721ff） |
+| A2 | W4 | 1 | 統合済み（b9abc85） |
+| V3 | W4 | 2 | 統合済み（1bb506f。GUI 試験 8 件は成功） |
+| C3 | W4 | 3 | 統合済み（0867ef9） |
 | C2a | W5 | 1 | 未着手 |
 | C2b | W5 | 1（C2a の後） | 未着手 |
 | C2c | W5 | 1（C2b の後） | 未着手 |
@@ -81,3 +81,6 @@
 | K2 折れの数の比 | 1.3 以下 | 1.13 | 達成 |
 | K3 面積の比 | 1.5 以下 | 0.57 | 達成 |
 | K4 配置の時間の和（121 件） | 3.0 秒以下 | 19.643 秒 | 未達（差戻し 17b） |
+
+- `W4 merged 72a78ec: tier b 成功（viewer の GUI 試験は V3 の報告を記録。再実行しない）`（root：check（xtask-diagram を含む）、xtask-archive 12、xtask-policy 24、xtask-source 14、xtask-workspace 12、xtask-modules（lib 3、analysis 62、roles 17、thread_local 23）、xtask-layout lib 48、xtask-style lib 20、xtask-diagram 7、clippy の四 crate が成功。viewer：check、xtask-render 8、xtask-viewer lib 20 が成功）
+- W5 は C2 が C1 に依存するため、差戻し 15・16 の解消を待つ。CP は差戻し 15〜17 の解消を待つ。

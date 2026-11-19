@@ -98,3 +98,10 @@ M3a の fix lane（3f3c058）の報告による。STOP ではないが、付属�
 - L6 の付記：`check::output` は最初に `check::input` を呼ぶ（付属書に無い。手で作った不正な Graph を `verify` に渡しても panic せず `Err` を返すため）。
 - V1 の付記：`impl IntoView` を返す `root`・`view`・`diagram_view`・`sidebar` は、`todo!()` の本体だと compile が通らないため、内側の fn `unbuilt()` に置いた。V2 の lane が本体を書くときに消す。
 - `loader.rs` の clippy 指摘の直し方は、clippy の提案（let chain）ではなく同じ振舞いの `match` にした。let chain は Rust 1.88 以降が要り、契約の Rust 1.85（AC-6）と衝突するため。
+
+## W3・W4 の報告による注意（差戻しではない）
+
+- L7（`hierarchy.rs`）：`push_simplified` と `collinear` が `route.rs` と同じ処理の複製になっている（`route.rs` の関数は private のため、L7 の lane は触らなかった）。後で一つにまとめる。
+- V2a：`watch` の「cannot read」の通知は、成功した apply で消える（付属書どおり）。印が元に戻って読み直しが起きない場合は、通知が残る。Open… のダイアログに file の filter は付けていない（付属書に指定が無い）。
+- V2b：highlight は、跳びのある edge でも path を直線で描き直すため、交差の位置に強調の直線が出る（付属書どおり）。overlay は透明なので白い halo で隠せない。見た目の扱いは設計者が決める。reveal の拡大率は、今の図の `camera::view` の値を使う（今の図が無いときは開く図の全体に合わせる）。付属書に書かれていない扱いなので、確認が要る。
+- V3：clippy の指摘を二件、V2 の file（`app.rs` の `collapsible_if` を let chain に、`state.rs` の `new_without_default` に `Default` を足す）で直した。機械的な指摘で、振る舞いは変えていない。
