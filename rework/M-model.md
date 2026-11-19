@@ -355,10 +355,10 @@ cargo test -p xtask-modules
      2. 1 の結果が空で、path が `thread_local` の一語で、次のどれにも当たらない：その module の道筋に未知の外部 glob がある（`external_globs`）、その module か祖先が `thread_local` を与えうる `#[macro_use] extern crate` を持つ（旧い `imports_unknown_thread_local` の規則）、`thread_local` の束縛が不確か（下の `uncertain`）。
      3. 1 の結果が空で、path が `std::thread_local` で、先頭に `::` があるか、または「未知の外部 glob が無く、`std` の束縛が不確かでなく、`std` が局所の Type に解決されない」。
    - **`uncertain(module, name)`**（旧い `uncertain_binding` の規則。`imports()` を呼び直さず、手順 3 の 1 で集めた import の列と一回目の表を使う。I7）：module の import のうち、glob のものと、束縛の名前が `name` のものについて、順に次を調べる。訪問済みの module の集合で再帰を止める。
-     - 一回目の表でその import の path の解決先が空なら：glob で、path の先頭が std・core・alloc で、その先頭が局所の Type に解決されないなら飛ばす。それ以外は不確か（true）。
+     - 一回目の表でその import の path の解決先が空なら：glob で、`is_trusted_glob(path, settings)`（std・core・alloc の path と `trusted_globs`。手順 2）が true で、path の先頭の segment が局所の Type に解決されないなら飛ばす。それ以外は不確か（true）。旧い規則は std・core・alloc だけを飛ばしていたが、外部 glob の判定を `is_trusted_glob` に一本化した（B2）ので、`trusted_globs` も同じに扱う。
      - glob で、解決先に局所の module があれば、その module について `uncertain` を再帰で調べ、true なら true。
    - std のものと決まった呼出しは、`thread_local_items.rs` の `Statics` で一回だけ parse し、cfg で有効な static の名前を `declared` の Value のキーに足す。parse の誤りは今と同じ誤り（`invalid thread_local declaration`）。型と初期化式の参照は visitor が visit する。
-   - std のものでない呼出しには static を作らない。診断は visitor の `visit_macro` が今の規則で出す（提供元が不明、未対応の macro など）。この手順で診断を足さない。
+   - std のものでない呼出しには static を作らない。診断は visitor が今の規則で出す。item の位置の呼出しなら、`trusted_macros` に無ければ `item macro expansion is unsupported` になり、あれば診断は無い。この手順で診断を足さない。
    - `trusted_macros` に無くても、std の thread_local には診断を出さない。
    - 旧い `visit_macro` は 80 行を超える。thread_local の判定を手順 6 の関数に移した後も超えるなら、作業指示書 0.4 節の「STOP にせず直すもの」として、意味のある helper（文法の表の引き、提供元の判定、引数の visit など）に分ける。
 7. **二重の処理の削除（I2、I5）。**
@@ -387,8 +387,8 @@ cargo test -p xtask-modules
 - **`external_glob_reexport_keeps_uncertainty`**：`mod p { pub use ext::*; } mod c { use crate::p::*; #[derive(Clone)] struct S; }` で、`crate::c` に「提供元が不明」の診断がある。
 - **`block_glob_does_not_hide_module_glob`**：module で `use foo::*;`（外部）、block で `use std::fmt::*;` のとき、`#[derive(Clone)]` が「提供元が不明」の診断になる。
 - **`glob_uses_every_resolved_module`**：glob の path が二つの module に解決される場合に、両方の名前が使える。
-- **`trusted_glob_allows_thread_local`**：`mod b { use framework::prelude::*; thread_local!{ pub static C: u8 = 0; } } mod c { use crate::b::C; }` で、trusted_globs に `framework::prelude` を入れると、診断が空になる（static が作られ、c の import が解決する）。
-- **`untrusted_glob_makes_thread_local_uncertain`**：上と同じ source で、trusted_globs と trusted_macros を空（既定の Settings）にすると、診断がちょうど 1 件で、`::C` で終わる（提供元が不確かなので static を作らず、c の import が解決しない）。`macro provider cannot be established: thread_local` の診断は出ない。提供元の不確かさは、作られなかった static を使う側の診断で表れる（既存の `external_crate_globs_do_not_create_bare_statics` と同じ契約。W2 の差戻し 11 で、付属書の当初の期待値を改めた）。
+- **`trusted_glob_allows_thread_local`**：`mod b { use framework::prelude::*; thread_local!{ pub static C: u8 = 0; } } mod c { use crate::b::C; }` で、trusted_macros に `thread_local`、trusted_globs に `framework::prelude` を入れると、診断が空になる（static が作られ、c の import が解決する）。
+- **`untrusted_glob_makes_thread_local_uncertain`**：上と同じ source で、trusted_macros に `thread_local` だけを入れ、trusted_globs を空にすると（既存の `tests/thread_local.rs` の `graph` の helper と同じく、thread_local を信頼した上で glob だけを信頼しない）、診断がちょうど 1 件で、`::C` で終わる（提供元が不確かなので static を作らず、c の import が解決しない）。`macro provider cannot be established: thread_local` の診断は出ない。提供元の不確かさは、作られなかった static を使う側の診断で表れる（既存の `external_crate_globs_do_not_create_bare_statics` と同じ契約。W2 の差戻し 11 で、付属書の当初の期待値を改めた）。
 - **`thread_local_type_reference`**：`thread_local!{ static C: RefCell<crate::cache::C> = ... }` で、`crate::cache` への辺がある。
 - **既存の `tests/thread_local.rs`**：全件を期待値を変えずに通す（手順 6 の規則は、この試験が固定する旧い振舞い）。
 - **`block_use_is_processed_once`**：block の中の `use crate::a::f;` の誤り（解決できない局所の import）の診断が 1 件だけ出る。
