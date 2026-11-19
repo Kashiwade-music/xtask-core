@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
 };
-use syn::{Attribute, Item, ItemMod, Meta, spanned::Spanned};
+use syn::{Attribute, Item, ItemMod, Meta, ext::IdentExt, spanned::Spanned};
 
 /// Parsed files of one analysis, shared by its configurations. A failure is kept too,
 /// so a broken file is read and reported once.
@@ -281,14 +281,16 @@ impl Loader<'_> {
             module,
             attributes,
         } = declaration;
-        let child_id = child_id(id, &module.ident);
+        // A raw identifier names its module without the `r#` prefix, in the id and in the file name.
+        let name = module.ident.unraw();
+        let child_id = child_id(id, &name);
         let line = module.ident.span().start().line;
         let path = path_attribute(&site.file_path, line, attributes)?;
         let attribute_base = attribute_base(owner, &site.file_path);
         if module.content.is_some() {
             let directory = match &path {
                 Some(path) => attribute_base.join(path),
-                None => owner.children().join(module.ident.to_string()),
+                None => owner.children().join(name.to_string()),
             };
             let mut scope = site.scope.clone();
             scope.push(index);
@@ -312,13 +314,7 @@ impl Loader<'_> {
         let explicit = path.is_some();
         let child_file = match path {
             Some(path) => attribute_base.join(path),
-            None => sibling_file(
-                &site.file_path,
-                owner.children(),
-                &module.ident,
-                &child_id,
-                line,
-            )?,
+            None => sibling_file(&site.file_path, owner.children(), &name, &child_id, line)?,
         };
         // Files are keyed by their normalized paths, so one file has one stack entry and one parse.
         let child_file = xtask_source::normalize(&child_file)

@@ -50,32 +50,41 @@ impl References<'_> {
         self.modules.layout.ids[self.module].clone()
     }
 
-    /// Evaluates the attributes of an expression, statement, or associated item once: the cfg
-    /// predicates decide whether the node is visited, and an enabled node's expansions are reported.
-    /// Module items are not passed here; the loader evaluated them.
-    pub(crate) fn enabled(&mut self, attrs: &[syn::Attribute]) -> bool {
+    /// Evaluates the cfg of a node's attributes. Returns the expanded attributes when the node is
+    /// enabled; an invalid cfg is reported and disables the node. Module items are not passed here;
+    /// the loader evaluated them.
+    pub(crate) fn live(&mut self, attrs: &[syn::Attribute]) -> Option<Vec<syn::Meta>> {
         // Most expression and statement nodes have no attributes. They cannot
         // disable code or require expansion.
         if attrs.is_empty() {
-            return true;
+            return Some(Vec::new());
         }
         let metas = match cfg::effective(attrs, self.env) {
             Ok(metas) => metas,
             Err(error) => {
                 self.cfg_error(attrs, &error);
-                return false;
+                return None;
             }
         };
         match cfg::enabled_metas(&metas, self.env) {
-            Ok(true) => {
+            Ok(true) => Some(metas),
+            Ok(false) => None,
+            Err(error) => {
+                self.cfg_error(attrs, &error);
+                None
+            }
+        }
+    }
+
+    /// Evaluates the attributes of an expression, statement, or associated item once: the cfg
+    /// predicates decide whether the node is visited, and an enabled node's expansions are reported.
+    pub(crate) fn enabled(&mut self, attrs: &[syn::Attribute]) -> bool {
+        match self.live(attrs) {
+            Some(metas) => {
                 self.expansions(&metas);
                 true
             }
-            Ok(false) => false,
-            Err(error) => {
-                self.cfg_error(attrs, &error);
-                false
-            }
+            None => false,
         }
     }
 
@@ -107,6 +116,16 @@ impl References<'_> {
             Err(error) => {
                 let message = format!("{id}: {error}");
                 self.diagnostics.insert(message);
+            }
+        }
+        // An unknown external glob may hide the prelude's attribute macros.
+        if self.unknown_glob_visible() {
+            for meta in metas {
+                let name = ast::path_text(meta.path());
+                if crate::intrinsic::PRELUDE_ATTRIBUTES.contains(&name.as_str()) {
+                    let message = format!("{id}: attribute provider cannot be established: {name}");
+                    self.diagnostics.insert(message);
+                }
             }
         }
     }
@@ -368,6 +387,27 @@ impl References<'_> {
         }
     }
 
+    /// Declares the items of a block, so that each name is visible throughout the block.
+    fn declare_block_items(&mut self, live: &[(&syn::Stmt, Vec<syn::Meta>)]) {
+        for (statement, _) in live {
+            let syn::Stmt::Item(item) = statement else {
+                continue;
+            };
+            if matches!(item, Item::Mod(_)) {
+                continue;
+            }
+            for (namespace, name, target) in
+                declarations(item, self.module, &self.modules.layout.ids)
+            {
+                if let Some(block) = self.blocks.last_mut() {
+                    block
+                        .locals
+                        .insert((namespace, name), LocalBinding::Item(target));
+                }
+            }
+        }
+    }
+
     fn condition(&mut self, expr: &syn::Expr) {
         match expr {
             syn::Expr::Let(binding) => {
@@ -503,17 +543,41 @@ impl References<'_> {
         }
     }
 
+    /// Visits the statics of a block-level `thread_local!` call that is the standard macro, or a
+    /// trusted one that names `thread_local`. Returns whether the call is one of them.
+    fn block_thread_local(&mut self, path: &syn::Path, tokens: &proc_macro2::TokenStream) -> bool {
+        let standard = thread_local_items::is_standard_call(
+            &self.modules,
+            self.textual,
+            self.module,
+            path,
+            &self.blocks,
+            self.env,
+        );
+        let trusted = self
+            .env
+            .settings
+            .trusted_macros
+            .contains(&ast::path_text(path))
+            && thread_local_items::provider(path, &self.modules.layout.uses[self.module]).is_some();
+        if !standard && !trusted {
+            return false;
+        }
+        self.thread_local_statics(tokens, None);
+        true
+    }
+
     /// An item macro: `index` is the module-level item's index, and `None` in a block.
     fn item_macro(&mut self, item: &syn::ItemMacro, index: Option<usize>) {
         if item.mac.path.is_ident("macro_rules") {
             return;
         }
-        if self
+        let trusted = self
             .env
             .settings
             .trusted_macros
-            .contains(&ast::path_text(&item.mac.path))
-        {
+            .contains(&ast::path_text(&item.mac.path));
+        if trusted {
             let local_macro = local_macro_targets(
                 &self.modules,
                 self.textual,
@@ -523,14 +587,20 @@ impl References<'_> {
             );
             if is_local_macro(&local_macro) {
                 self.edge(local_macro);
-            } else if thread_local_items::provider(
-                &item.mac.path,
-                &self.modules.layout.uses[self.module],
-            )
-            .is_some()
-            {
-                self.thread_local_statics(&item.mac.tokens, index);
+                return;
             }
+        }
+        match index {
+            // A module-level call was judged by `thread_local_items`, which keeps its statics.
+            Some(index) if self.calls.contains_key(&(self.module, index)) => {
+                self.thread_local_statics(&item.mac.tokens, Some(index));
+                return;
+            }
+            Some(_) => {}
+            None if self.block_thread_local(&item.mac.path, &item.mac.tokens) => return,
+            None => {}
+        }
+        if trusted {
             return;
         }
         let message = format!(
@@ -809,48 +879,33 @@ impl<'ast> Visit<'ast> for References<'_> {
     }
     fn visit_block(&mut self, block: &'ast syn::Block) {
         self.blocks.push(Block::default());
-        // Each block item's attributes are evaluated once here; a disabled item is skipped entirely.
-        let active = block
-            .stmts
-            .iter()
-            .map(|statement| match statement {
-                syn::Stmt::Item(item) => self.enabled(ast::attrs(item)),
-                _ => true,
-            })
-            .collect::<Vec<_>>();
+        // Each block item's cfg is evaluated once here; a disabled item is skipped entirely.
         let live = block
             .stmts
             .iter()
-            .zip(&active)
-            .filter(|(_, on)| **on)
-            .map(|(statement, _)| statement)
-            .collect::<Vec<_>>();
-        // Block items are visible throughout the block, including before their declaration.
-        for statement in &live {
-            let syn::Stmt::Item(item) = statement else {
-                continue;
-            };
-            if !matches!(item, Item::Mod(_)) {
-                for (namespace, name, target) in
-                    declarations(item, self.module, &self.modules.layout.ids)
-                {
-                    if let Some(block) = self.blocks.last_mut() {
-                        block
-                            .locals
-                            .insert((namespace, name), LocalBinding::Item(target));
-                    }
+            .filter_map(|statement| match statement {
+                syn::Stmt::Item(item) => {
+                    self.live(ast::attrs(item)).map(|metas| (statement, metas))
                 }
-            }
-        }
+                _ => Some((statement, Vec::new())),
+            })
+            .collect::<Vec<_>>();
+        self.declare_block_items(&live);
         let uses = live
             .iter()
-            .filter_map(|statement| match statement {
+            .filter_map(|(statement, _)| match statement {
                 syn::Stmt::Item(Item::Use(item)) => Some(item),
                 _ => None,
             })
             .collect::<Vec<_>>();
         self.block_uses(&uses);
-        for statement in live {
+        // The expansions of the items are reported once the block's `use` items are in scope.
+        for (statement, metas) in &live {
+            if matches!(statement, syn::Stmt::Item(_)) {
+                self.expansions(metas);
+            }
+        }
+        for (statement, _) in live {
             // The block's `use` items were applied above.
             if !matches!(statement, syn::Stmt::Item(Item::Use(_))) {
                 self.visit_stmt(statement);
@@ -950,6 +1005,9 @@ impl<'ast> Visit<'ast> for References<'_> {
             return;
         }
         self.path_in(None, &mac.path, Namespace::Macro);
+        if self.block_thread_local(&mac.path, &mac.tokens) {
+            return;
+        }
         if self
             .env
             .settings

@@ -5,7 +5,7 @@ use crate::{
     loader::{Loaded, Source},
     model::{Env, ModuleKind},
     symbols::{
-        Glob, Import, Layout, Modules, NAMESPACES, Namespace, Scope, Target, Textual, child_index,
+        Glob, Import, Layout, Modules, Namespace, Scope, Target, Textual, child_index,
         declarations, use_imports,
     },
     thread_local_items,
@@ -19,10 +19,17 @@ pub(crate) fn analyze(loaded: Loaded, env: Env) -> Result<ModuleGraph, String> {
         sources,
         diagnostics: loading,
     } = loaded;
+    let ids = sources
+        .iter()
+        .map(|s| s.module.id.clone())
+        .collect::<Vec<_>>();
+    let parents = sources.iter().map(|s| s.module.parent).collect::<Vec<_>>();
     let layout = Layout {
-        ids: sources.iter().map(|s| s.module.id.clone()).collect(),
-        parents: sources.iter().map(|s| s.module.parent).collect(),
         uses: sources.iter().map(module_uses).collect(),
+        prelude: extern_prelude(&sources, &ids),
+        macro_use: thread_local_items::macro_use_visible(&sources, &parents),
+        ids,
+        parents,
     };
     let textual = textual_macros(&sources, &layout);
     // The names are settled twice, each time from empty tables. The first pass has no statics of
@@ -100,7 +107,7 @@ fn tables(
     env: Env,
 ) -> Vec<Scope> {
     let mut scopes = sources.iter().map(|_| Scope::default()).collect::<Vec<_>>();
-    declare(sources, &layout.ids, &mut scopes);
+    declare(sources, layout, &mut scopes);
     for (owner, name) in statics {
         scopes[*owner]
             .declared
@@ -108,16 +115,20 @@ fn tables(
             .or_default()
             .insert(Target::Item(*owner, Namespace::Value));
     }
-    add_externs(sources, &layout.ids, &mut scopes);
     settle(&mut scopes, layout, env, false);
     settle(&mut scopes, layout, env, true);
     scopes
 }
 
-/// Declares the items of every module, and the alias of each named import.
-fn declare(sources: &[Source], ids: &[String], scopes: &mut [Scope]) {
+/// Declares the items of every module, and the alias of each named import. The extern crates of
+/// the root are not declared here: they are the extern prelude.
+fn declare(sources: &[Source], layout: &Layout, scopes: &mut [Scope]) {
+    let ids = &layout.ids;
     for (owner, source) in sources.iter().enumerate() {
         for (item, attributes) in source.items() {
+            if matches!(item, Item::ExternCrate(_)) && ids[owner] == "crate" {
+                continue;
+            }
             // A #[macro_export] macro is also declared at the crate root, wherever it is defined.
             let exported = matches!(item, Item::Macro(mac) if mac.mac.path.is_ident("macro_rules"))
                 && cfg::contains(attributes, "macro_export");
@@ -146,34 +157,22 @@ fn declare(sources: &[Source], ids: &[String], scopes: &mut [Scope]) {
     }
 }
 
-/// The extern crates of the root are visible in every module, unless the module declares the name.
-fn add_externs(sources: &[Source], ids: &[String], scopes: &mut [Scope]) {
+/// The extern crates of the root, by name: the extern prelude. It is visible in every module, in
+/// the type namespace, after the module's own scope.
+fn extern_prelude(sources: &[Source], ids: &[String]) -> BTreeMap<String, BTreeSet<Target>> {
+    let mut prelude = BTreeMap::<String, BTreeSet<Target>>::new();
     let Some(root) = sources.iter().position(|s| s.module.id == "crate") else {
-        return;
+        return prelude;
     };
-    let externs = sources[root]
-        .items()
-        .into_iter()
-        .filter(|(item, _)| matches!(item, Item::ExternCrate(_)))
-        .flat_map(|(item, _)| declarations(item, root, ids))
-        .collect::<Vec<_>>();
-    for scope in scopes.iter_mut() {
-        for (_, name, target) in &externs {
-            if NAMESPACES
-                .iter()
-                .any(|namespace| scope.declared.contains_key(&(*namespace, name.clone())))
-            {
-                continue;
-            }
-            for namespace in NAMESPACES {
-                scope
-                    .declared
-                    .entry((namespace, name.clone()))
-                    .or_default()
-                    .insert(target.clone());
-            }
+    for (item, _) in sources[root].items() {
+        if !matches!(item, Item::ExternCrate(_)) {
+            continue;
+        }
+        for (_, name, target) in declarations(item, root, ids) {
+            prelude.entry(name).or_default().insert(target);
         }
     }
+    prelude
 }
 
 /// Applies the imports of every module until no set grows. A module whose names grew

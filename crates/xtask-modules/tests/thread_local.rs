@@ -768,3 +768,57 @@ mod c {
         result.diagnostics
     );
 }
+
+fn default_graph(source: &str) -> ModuleGraph {
+    let directory = write_fixture(&[("lib.rs", source)]);
+    Options::default()
+        .analyze(&directory.path().join("lib.rs"))
+        .unwrap()
+}
+
+fn has_edge(result: &ModuleGraph, from: &str, to: &str) -> bool {
+    result
+        .edges
+        .iter()
+        .any(|reference| reference.from == from && reference.to == to)
+}
+
+#[test]
+fn untrusted_standard_thread_local_is_visited() {
+    let result = default_graph(
+        r#"
+//! Role: Test root.
+mod cache {
+    //! Role: The cache.
+    pub struct C;
+}
+mod user {
+    //! Role: The standard macro, untrusted.
+    use std::cell::RefCell;
+    thread_local! { static CACHE: RefCell<crate::cache::C> = RefCell::new(crate::cache::C); }
+}
+"#,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(has_edge(&result, "crate::user", "crate::cache"));
+}
+
+#[test]
+fn block_thread_local_is_visited() {
+    let result = default_graph(
+        r#"
+//! Role: Test root.
+mod cache {
+    //! Role: The cache.
+    pub struct C;
+}
+mod user {
+    //! Role: A block-level standard macro, untrusted.
+    use std::cell::RefCell;
+    fn f() { thread_local! { static X: RefCell<crate::cache::C> = RefCell::new(crate::cache::C); } }
+}
+"#,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(has_edge(&result, "crate::user", "crate::cache"));
+}

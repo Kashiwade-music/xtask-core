@@ -1,7 +1,7 @@
 //! Role: 名前空間ごとの宣言・名前付きの use・glob の表と、パスの解決を扱う。
 use crate::{loader, model::Settings};
 use std::collections::{BTreeMap, BTreeSet};
-use syn::{Item, UseTree};
+use syn::{Item, UseTree, ext::IdentExt};
 
 /// The namespaces of Rust names. A tuple or unit struct is declared in the type and value ones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -129,6 +129,11 @@ pub(crate) struct Layout {
     pub(crate) parents: Vec<Option<usize>>,
     /// The `use` items of each module, as imports.
     pub(crate) uses: Vec<Vec<Import>>,
+    /// The extern crates of the root: the extern prelude, visible in every module by name in the
+    /// type namespace. A glob import does not pass them on.
+    pub(crate) prelude: BTreeMap<String, BTreeSet<Target>>,
+    /// Whether a module or one of its ancestors may have `thread_local` imported by `#[macro_use]`.
+    pub(crate) macro_use: Vec<bool>,
 }
 
 pub(crate) type Textual = Vec<BTreeMap<String, BTreeSet<Target>>>;
@@ -173,7 +178,17 @@ impl Modules<'_> {
         }
         self.scope(module)
             .and_then(|scope| scope.binding(namespace, name))
+            .or_else(|| self.extern_prelude(namespace, name))
             .unwrap_or_default()
+    }
+
+    /// The extern prelude's targets of a name. It is only consulted when no scope of the module
+    /// binds the name, and only in the type namespace.
+    fn extern_prelude(&self, namespace: Namespace, name: &str) -> Option<BTreeSet<Target>> {
+        if namespace != Namespace::Type {
+            return None;
+        }
+        self.layout.prelude.get(name).cloned()
     }
 
     fn head(
@@ -439,12 +454,8 @@ pub(crate) fn use_imports(item: &syn::ItemUse) -> Vec<Import> {
 }
 
 /// The index of a child module, when it is one of the modules.
-pub(crate) fn child_index(
-    ids: &[String],
-    owner: usize,
-    name: &impl std::fmt::Display,
-) -> Option<usize> {
-    let child = loader::child_id(&ids[owner], name);
+pub(crate) fn child_index(ids: &[String], owner: usize, name: &syn::Ident) -> Option<usize> {
+    let child = loader::child_id(&ids[owner], &name.unraw());
     ids.binary_search(&child).ok()
 }
 
