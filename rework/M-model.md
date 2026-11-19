@@ -226,6 +226,7 @@ cargo test -p xtask-source
 | `static_inner_doc_attributes_and_block_docs_have_the_same_semantics`（`tests/roles.rs`） | 4 つ目の source（`//! General module documentation.\n//! Role: ...`）だけ、期待値を「role が `Err`、診断に `Role must be the first line of the first inner doc` を含む」に変える。他の 3 つは変えない | M3c |
 | `root_only_api_matches_analysis_limits_and_preserves_default_api`（`tests/roles.rs`） | 契約の変更（D2：`crate_role`、`crate_role_with_limit`、`DEFAULT_MAX_ROLE_CHARS` を消した）。`root_role_limit_applies_to_the_root_module_alone` に名前を変え、消した API の assert と、その API のためだけの入力（`mod missing_file; include!(..)`）を除く。解析を通す assert（上限 1・2・既定 80・81 での root の Role と診断）は変えない | M3a |
 | `zero_limit_is_a_configuration_error_in_all_configurable_apis`（`tests/roles.rs`） | 契約の変更（D2）。`zero_limit_is_a_configuration_error` に名前を変え、`crate_role_with_limit` の assert を除く。解析の誤りの assert は変えない | M3a |
+| `known_macro_and_derive_provider_aliases_remain_supported`（`tests/analysis.rs`） | 契約の変更（D1、DEC-10）。source から `use serde_json::json as data;` の行と `let _ = data!(..);` の文を除く。`check!` と `Copyable` の別名の部分、診断が空であること、辺が `{(crate, crate::a)}` であることは変えない（辺は `check!` の引数から出る） | M3c |
 | `formatted_macro_patterns_guards_and_json_values_are_references`（`tests/analysis.rs`） | source から `serde_json::json!(..)` の行を除き、期待値の辺から、その行だけが作っていた辺を除く。他（書式・pattern・guard）は変えない。json の振舞いは新しい試験 `json_requires_trust` が確かめる | M3c |
 
 表に無い既存の試験が通らなくなったら STOP する。
