@@ -7,19 +7,9 @@ use std::collections::BTreeSet;
 /// contents. Literal delimiters count; interior literal lines do not.
 ///
 /// This uses the Rust lexer in `proc-macro2`, preserving physical span locations
-/// even for escaped newlines. If the source cannot be tokenized, this convenience
-/// function conservatively counts every nonblank line. Policy checks use the
-/// fallible variant instead and report the malformed input as an error.
-pub fn code_line_count(source: &str) -> usize {
-    try_code_line_count(source).unwrap_or_else(|_| {
-        source
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count()
-    })
-}
-
-pub(crate) fn try_code_line_count(source: &str) -> Result<usize, String> {
+/// even for escaped newlines. Source that cannot be tokenized is an error, so a
+/// malformed file is never counted by a guess.
+pub fn code_line_count(source: &str) -> Result<usize, String> {
     let source = without_file_preamble(source);
     let tokens: TokenStream = source
         .parse()

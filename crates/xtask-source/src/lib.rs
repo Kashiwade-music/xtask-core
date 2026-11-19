@@ -136,8 +136,8 @@ pub fn check_files(files: &[PathBuf], limit: usize) -> Result<Vec<LineViolation>
     for path in identities.into_values() {
         let source =
             fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
-        let count = lines::try_code_line_count(&source)
-            .map_err(|error| format!("{}: {error}", path.display()))?;
+        let count =
+            code_line_count(&source).map_err(|error| format!("{}: {error}", path.display()))?;
         if count > limit {
             violations.push(LineViolation {
                 path: path.clone(),
