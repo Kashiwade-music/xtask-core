@@ -18,75 +18,129 @@ pub(crate) struct Problem {
 }
 
 /// rank(to) - rank(from) >= minlen を満たす rank を返す。目的は Σ weight * (rank(to) - rank(from)) を
-/// 小さくすること。繰返しの上限（手順 7）の中で最適に届けば最適解、届かなければその時点の実行可能解。
-/// 辺は閉路を作らないこと。閉路・範囲外の端・負の weight は `Err(LayoutError::Internal(..))`。
-/// 最小の rank は 0。
+/// 小さくすること。繰返しの上限の中で最適に届けば最適解、届かなければその時点の実行可能解。
+/// 連結成分ごとに解き、各成分の最小の rank を 0 にする。
+/// 閉路・範囲外の端・負の weight は `Err(LayoutError::Internal(..))`。
 pub(crate) fn solve(problem: &Problem) -> Result<Vec<i64>, LayoutError> {
-    let network = Network::new(problem)?;
-    let mut rank = initial_ranks(&network)?;
-    let mut tree_arc = feasible_tree(&network, &mut rank)?;
-    let mut tree = Tree::new(&network, &tree_arc)?;
-    let limit = 20 * problem.edges.len() + 100;
-    let mut exchanges = 0;
-    while let Some((_, leaving)) = leaving_arc(&tree) {
-        if exchanges == limit {
-            break;
+    for edge in &problem.edges {
+        if edge.from >= problem.node_count || edge.to >= problem.node_count {
+            return Err(LayoutError::Internal(
+                "simplex edge end is out of range".into(),
+            ));
         }
-        exchanges += 1;
-        let entering = entering_arc(&network, &tree, &tree_arc, &rank, leaving)?;
-        tree_arc[leaving] = false;
-        tree_arc[entering] = true;
-        tree = Tree::new(&network, &tree_arc)?;
-        rank = assign_ranks(&network, &tree);
+        if edge.weight < 0 {
+            return Err(LayoutError::Internal(
+                "simplex edge weight is negative".into(),
+            ));
+        }
     }
-    Ok(normalize(&rank, problem.node_count))
+    let mut rank = vec![0i64; problem.node_count];
+    for part in components(problem) {
+        let ranks = solve_connected(&part.problem)?;
+        for (local, &node) in part.nodes.iter().enumerate() {
+            rank[node] = ranks[local];
+        }
+    }
+    Ok(rank)
 }
 
-/// 単純化し、根 `root` からすべての node への辺を足した問題（手順 1・2）。
+/// 一つの連結成分。`nodes` は元の node の index（昇順）、`problem` はその中の番号に付け替えた問題。
+struct Part {
+    nodes: Vec<usize>,
+    problem: Problem,
+}
+
+/// 連結成分に分ける。成分は最小の node の昇順に並べる。
+fn components(problem: &Problem) -> Vec<Part> {
+    let count = problem.node_count;
+    let mut adjacent = vec![Vec::new(); count];
+    for edge in &problem.edges {
+        adjacent[edge.from].push(edge.to);
+        adjacent[edge.to].push(edge.from);
+    }
+    let mut part_of = vec![usize::MAX; count];
+    let mut local = vec![0usize; count];
+    let mut parts: Vec<Part> = Vec::new();
+    for start in 0..count {
+        if part_of[start] != usize::MAX {
+            continue;
+        }
+        let index = parts.len();
+        part_of[start] = index;
+        let mut nodes = vec![start];
+        let mut cursor = 0;
+        while cursor < nodes.len() {
+            let node = nodes[cursor];
+            cursor += 1;
+            for &other in &adjacent[node] {
+                if part_of[other] == usize::MAX {
+                    part_of[other] = index;
+                    nodes.push(other);
+                }
+            }
+        }
+        nodes.sort_unstable();
+        for (position, &node) in nodes.iter().enumerate() {
+            local[node] = position;
+        }
+        let problem = Problem {
+            node_count: nodes.len(),
+            edges: Vec::new(),
+        };
+        parts.push(Part { nodes, problem });
+    }
+    for edge in &problem.edges {
+        let part = &mut parts[part_of[edge.from]];
+        part.problem.edges.push(Constraint {
+            from: local[edge.from],
+            to: local[edge.to],
+            ..*edge
+        });
+    }
+    parts
+}
+
+/// 連結な問題を解く（手順 3〜8）。木の根は node 0。
+fn solve_connected(problem: &Problem) -> Result<Vec<i64>, LayoutError> {
+    let network = Network::new(problem);
+    let mut rank = initial_ranks(&network)?;
+    let tree_arc = feasible_tree(&network, &mut rank)?;
+    let mut tree = Tree::new(&network, tree_arc, rank)?;
+    let limit = 20 * problem.edges.len() + 100;
+    for _ in 0..limit {
+        let Some(leaving) = tree.leaving_arc() else {
+            break;
+        };
+        let entering = tree.entering_arc(&network, leaving)?;
+        tree.exchange(&network, leaving, entering)?;
+    }
+    Ok(normalize(&tree.rank, problem.node_count))
+}
+
+/// 単純化した連結な問題（手順 1）。木の根は node 0。
 struct Network {
-    /// node の数（根を含む）。根は index `root`。
     nodes: usize,
     root: usize,
-    /// 単純化した辺、続けて根の辺。
+    /// 単純化した辺。
     arcs: Vec<Constraint>,
     /// node ごとに接する辺の index（昇順）。
     adj: Vec<Vec<usize>>,
 }
 
 impl Network {
-    fn new(problem: &Problem) -> Result<Self, LayoutError> {
-        let node_count = problem.node_count;
-        for edge in &problem.edges {
-            if edge.from >= node_count || edge.to >= node_count {
-                return Err(LayoutError::Internal(
-                    "simplex edge end is out of range".into(),
-                ));
-            }
-            if edge.weight < 0 {
-                return Err(LayoutError::Internal(
-                    "simplex edge weight is negative".into(),
-                ));
-            }
-        }
-        let root = node_count;
-        let mut arcs = simplify(&problem.edges);
-        arcs.extend((0..node_count).map(|to| Constraint {
-            from: root,
-            to,
-            minlen: 0,
-            weight: 0,
-        }));
-        let mut adj = vec![Vec::new(); root + 1];
+    fn new(problem: &Problem) -> Self {
+        let arcs = simplify(&problem.edges);
+        let mut adj = vec![Vec::new(); problem.node_count];
         for (index, arc) in arcs.iter().enumerate() {
             adj[arc.from].push(index);
             adj[arc.to].push(index);
         }
-        Ok(Self {
-            nodes: root + 1,
-            root,
+        Self {
+            nodes: problem.node_count,
+            root: 0,
             arcs,
             adj,
-        })
+        }
     }
 }
 
@@ -210,214 +264,277 @@ fn feasible_tree(network: &Network, rank: &mut [i64]) -> Result<Vec<bool>, Layou
     Ok(tree_arc)
 }
 
-/// 木の構造（手順 5・6）。すべて `Tree::new` が一度に作る。
+/// 一度に調べる負の cut value の木の辺の数（手順 7 の出る辺）。
+const SEARCH_SIZE: usize = 30;
+
+/// 木と rank。交換のたびに、変わる部分だけを直す（手順 5〜7）。
 struct Tree {
-    /// node ごとの (親の node, 親との木の辺)。根は `None`。
-    parent: Vec<Option<(usize, usize)>>,
-    /// 後順の node の並び（子は親より前）。
-    post: Vec<usize>,
-    lim: Vec<i64>,
-    low: Vec<i64>,
-    /// 根以外の node の cut value（根は 0）。
+    rank: Vec<i64>,
+    /// 辺ごとの、木の辺かどうか。
+    in_tree: Vec<bool>,
+    /// 木の辺の並び。交換では、出る辺の位置に入る辺を置く。
+    list: Vec<usize>,
+    /// 出る辺の探索を続ける、`list` の位置。
+    cursor: usize,
+    /// node ごとの親との木の辺。根は None。
+    parent: Vec<Option<usize>>,
+    low: Vec<usize>,
+    lim: Vec<usize>,
+    /// 木の辺ごとの cut value（木の外の辺は 0）。
     cut: Vec<i64>,
 }
 
 impl Tree {
-    fn new(network: &Network, tree_arc: &[bool]) -> Result<Self, LayoutError> {
-        let parent = tree_parents(network, tree_arc)?;
-        let children = children_of(&parent);
-        let (post, lim, low) = postorder(&children, network.root);
-        let cut = cut_values(network, &parent, &post);
-        Ok(Self {
-            parent,
-            post,
-            lim,
-            low,
-            cut,
-        })
+    fn new(network: &Network, in_tree: Vec<bool>, rank: Vec<i64>) -> Result<Self, LayoutError> {
+        let list: Vec<usize> = (0..in_tree.len()).filter(|&arc| in_tree[arc]).collect();
+        if list.len() + 1 != network.nodes {
+            return Err(LayoutError::Internal(
+                "simplex tree does not span the nodes".into(),
+            ));
+        }
+        let mut tree = Self {
+            rank,
+            in_tree,
+            list,
+            cursor: 0,
+            parent: vec![None; network.nodes],
+            low: vec![0; network.nodes],
+            lim: vec![0; network.nodes],
+            cut: vec![0; network.arcs.len()],
+        };
+        let post = tree.number(network, network.root, None, 1);
+        if post.len() != network.nodes {
+            return Err(LayoutError::Internal(
+                "simplex tree does not span the nodes".into(),
+            ));
+        }
+        for &node in &post {
+            if let Some(arc) = tree.parent[node] {
+                tree.cut[arc] = tree.cut_value(network, node, arc);
+            }
+        }
+        Ok(tree)
     }
-}
 
-/// 根から木をたどって親を決める。
-fn tree_parents(
-    network: &Network,
-    tree_arc: &[bool],
-) -> Result<Vec<Option<(usize, usize)>>, LayoutError> {
-    let mut parent = vec![None; network.nodes];
-    let mut seen = vec![false; network.nodes];
-    let mut queue = vec![network.root];
-    seen[network.root] = true;
-    let mut head = 0;
-    while head < queue.len() {
-        let node = queue[head];
-        head += 1;
-        for &index in &network.adj[node] {
-            if !tree_arc[index] {
+    /// `top` の部分木の parent・low・lim を後順で振り直す（lim は `first` から）。後順の node の列を返す。
+    fn number(
+        &mut self,
+        network: &Network,
+        top: usize,
+        up: Option<usize>,
+        first: usize,
+    ) -> Vec<usize> {
+        let mut post = Vec::new();
+        let mut stack = vec![(top, up, 0usize)];
+        self.parent[top] = up;
+        self.low[top] = first;
+        let mut next = first;
+        while let Some(frame) = stack.last_mut() {
+            let (node, via) = (frame.0, frame.1);
+            let adjacency = &network.adj[node];
+            let mut child = None;
+            while frame.2 < adjacency.len() {
+                let arc = adjacency[frame.2];
+                frame.2 += 1;
+                if self.in_tree[arc] && Some(arc) != via {
+                    child = Some((other_end(&network.arcs[arc], node), arc));
+                    break;
+                }
+            }
+            match child {
+                Some((other, arc)) => {
+                    self.parent[other] = Some(arc);
+                    self.low[other] = next;
+                    stack.push((other, Some(arc), 0));
+                }
+                None => {
+                    stack.pop();
+                    self.lim[node] = next;
+                    next += 1;
+                    post.push(node);
+                }
+            }
+        }
+        post
+    }
+
+    /// node `child` と親を結ぶ木の辺 `tree_arc` の cut value（手順 6）。子の側の木の辺の cut value は求まっていること。
+    fn cut_value(&self, network: &Network, child: usize, tree_arc: usize) -> i64 {
+        let arc = network.arcs[tree_arc];
+        let child_is_tail = arc.from == child;
+        let mut total = arc.weight;
+        for &index in &network.adj[child] {
+            if index == tree_arc {
                 continue;
             }
-            let other = other_end(&network.arcs[index], node);
-            if !seen[other] {
-                seen[other] = true;
-                parent[other] = Some((node, index));
-                queue.push(other);
-            }
-        }
-    }
-    if queue.len() == network.nodes {
-        Ok(parent)
-    } else {
-        Err(LayoutError::Internal(
-            "simplex tree does not span the nodes".into(),
-        ))
-    }
-}
-
-/// 子の一覧。index の昇順。
-fn children_of(parent: &[Option<(usize, usize)>]) -> Vec<Vec<usize>> {
-    let mut children = vec![Vec::new(); parent.len()];
-    for (node, link) in parent.iter().enumerate() {
-        if let Some((up, _)) = link {
-            children[*up].push(node);
-        }
-    }
-    children
-}
-
-/// 後順で lim（1 から）と low を振る。子は index の昇順にたどる。
-fn postorder(children: &[Vec<usize>], root: usize) -> (Vec<usize>, Vec<i64>, Vec<i64>) {
-    let mut post = Vec::with_capacity(children.len());
-    let mut lim = vec![0i64; children.len()];
-    let mut low = vec![0i64; children.len()];
-    let mut stack = vec![(root, 0usize)];
-    while let Some(&(node, next)) = stack.last() {
-        if next < children[node].len() {
-            if let Some(top) = stack.last_mut() {
-                top.1 += 1;
-            }
-            stack.push((children[node][next], 0));
-        } else {
-            stack.pop();
-            post.push(node);
-            lim[node] = post.len() as i64;
-            let value = children[node]
-                .first()
-                .map_or(lim[node], |&first| low[first]);
-            low[node] = value;
-        }
-    }
-    (post, lim, low)
-}
-
-/// 後順に cut value を求める（手順 6）。子の cut value は親より先に求まっている。
-fn cut_values(network: &Network, parent: &[Option<(usize, usize)>], post: &[usize]) -> Vec<i64> {
-    let mut cut = vec![0i64; network.nodes];
-    for &node in post {
-        let value = cut_value(network, parent, &cut, node);
-        cut[node] = value;
-    }
-    cut
-}
-
-/// 根以外の node `child` の、親との木の辺の cut value。
-fn cut_value(
-    network: &Network,
-    parent: &[Option<(usize, usize)>],
-    cut: &[i64],
-    child: usize,
-) -> i64 {
-    let Some((up, tree_arc)) = parent[child] else {
-        return 0;
-    };
-    let arc = network.arcs[tree_arc];
-    let child_is_tail = arc.from == child;
-    let mut total = arc.weight;
-    for &index in &network.adj[child] {
-        if index == tree_arc {
-            continue;
-        }
-        let other_arc = network.arcs[index];
-        let is_out = other_arc.from == child;
-        let other = other_end(&other_arc, child);
-        if other == up {
-            continue;
-        }
-        let points_to_head = is_out == child_is_tail;
-        if points_to_head {
-            total += other_arc.weight;
-        } else {
-            total -= other_arc.weight;
-        }
-        if matches!(parent[other], Some((owner, _)) if owner == child) {
+            let other_arc = network.arcs[index];
+            let points_to_head = (other_arc.from == child) == child_is_tail;
             total += if points_to_head {
-                -cut[other]
+                other_arc.weight
             } else {
-                cut[other]
+                -other_arc.weight
+            };
+            if self.in_tree[index] {
+                total += if points_to_head {
+                    -self.cut[index]
+                } else {
+                    self.cut[index]
+                };
+            }
+        }
+        total
+    }
+
+    /// 負の cut value の木の辺を、前回の位置から順に探す。見つけた最初の SEARCH_SIZE 個のうち
+    /// 最も負のもの（同じなら先に見つけたもの）。
+    fn leaving_arc(&mut self) -> Option<usize> {
+        let count = self.list.len();
+        let mut best: Option<(usize, i64)> = None;
+        let mut found = 0;
+        for step in 0..count {
+            let position = (self.cursor + step) % count;
+            let value = self.cut[self.list[position]];
+            if value < 0 {
+                if best.is_none_or(|(_, least)| value < least) {
+                    best = Some((position, value));
+                }
+                found += 1;
+                if found == SEARCH_SIZE {
+                    break;
+                }
+            }
+        }
+        let (position, _) = best?;
+        self.cursor = position;
+        Some(self.list[position])
+    }
+
+    /// `node` が `top` の部分木にあるか。
+    fn contains(&self, top: usize, node: usize) -> bool {
+        self.low[top] <= self.lim[node] && self.lim[node] <= self.lim[top]
+    }
+
+    /// 出る辺で切った下側の部分木（`lim` の小さい端の側）と上側をつなぐ木の外の辺のうち、
+    /// slack が最小のもの（同じなら index の最小）。下側が出る辺の from の側なら上側から下側へ入る辺を、
+    /// to の側なら下側から上側へ出る辺を探す。下側の部分木だけをたどる。
+    fn entering_arc(&self, network: &Network, leaving: usize) -> Result<usize, LayoutError> {
+        let arc = network.arcs[leaving];
+        let (top, outward) = if self.lim[arc.from] < self.lim[arc.to] {
+            (arc.from, false)
+        } else {
+            (arc.to, true)
+        };
+        let mut best: Option<(usize, i64)> = None;
+        let mut stack = vec![top];
+        while let Some(node) = stack.pop() {
+            for &index in &network.adj[node] {
+                let candidate = network.arcs[index];
+                if self.in_tree[index] {
+                    let other = other_end(&candidate, node);
+                    if self.parent[other] == Some(index) {
+                        stack.push(other);
+                    }
+                    continue;
+                }
+                let (inside, outside) = if outward {
+                    (candidate.from, candidate.to)
+                } else {
+                    (candidate.to, candidate.from)
+                };
+                if inside != node || self.contains(top, outside) {
+                    continue;
+                }
+                let value = slack(&candidate, &self.rank);
+                let better = best.is_none_or(|(current, least)| {
+                    value < least || value == least && index < current
+                });
+                if better {
+                    best = Some((index, value));
+                }
+            }
+        }
+        best.map(|(index, _)| index)
+            .ok_or_else(|| LayoutError::Internal("no entering edge".into()))
+    }
+
+    /// 木の辺 `leaving` を外し、`entering` を入れる。rank・cut value・parent・low・lim のうち、
+    /// 変わる部分だけを直す。
+    fn exchange(
+        &mut self,
+        network: &Network,
+        leaving: usize,
+        entering: usize,
+    ) -> Result<(), LayoutError> {
+        let out = network.arcs[leaving];
+        let inn = network.arcs[entering];
+        let delta = slack(&inn, &self.rank);
+        if delta > 0 {
+            if self.lim[out.from] < self.lim[out.to] {
+                self.shift(network, out.from, leaving, -delta);
+            } else {
+                self.shift(network, out.to, leaving, delta);
+            }
+        }
+        let value = self.cut[leaving];
+        let lca = self.climb(network, inn.from, inn.to, value, true);
+        if self.climb(network, inn.to, inn.from, value, false) != lca {
+            return Err(LayoutError::Internal(
+                "simplex tree update lost its common ancestor".into(),
+            ));
+        }
+        self.cut[entering] = -value;
+        self.cut[leaving] = 0;
+        self.in_tree[leaving] = false;
+        self.in_tree[entering] = true;
+        let position = self
+            .list
+            .iter()
+            .position(|&arc| arc == leaving)
+            .ok_or_else(|| LayoutError::Internal("leaving arc is not in the tree".into()))?;
+        self.list[position] = entering;
+        let (up, first) = (self.parent[lca], self.low[lca]);
+        self.number(network, lca, up, first);
+        Ok(())
+    }
+
+    /// 木の辺 `via` の下の部分木 `top` の rank に `delta` を足す。
+    fn shift(&mut self, network: &Network, top: usize, via: usize, delta: i64) {
+        let mut stack = vec![(top, via)];
+        while let Some((node, from)) = stack.pop() {
+            self.rank[node] += delta;
+            for &index in &network.adj[node] {
+                if self.in_tree[index] && index != from {
+                    stack.push((other_end(&network.arcs[index], node), index));
+                }
+            }
+        }
+    }
+
+    /// `node` から、`other` を部分木に含む祖先まで上り、途中の木の辺の cut value に `value` を足すか引く。
+    /// `forward` は、上る道の向きと入る辺の向きが同じとき足す側。その祖先を返す。
+    fn climb(
+        &mut self,
+        network: &Network,
+        mut node: usize,
+        other: usize,
+        value: i64,
+        forward: bool,
+    ) -> usize {
+        while !self.contains(node, other) {
+            let Some(arc) = self.parent[node] else {
+                break;
+            };
+            let edge = network.arcs[arc];
+            let add = (node == edge.from) == forward;
+            self.cut[arc] += if add { value } else { -value };
+            node = if self.lim[edge.from] > self.lim[edge.to] {
+                edge.from
+            } else {
+                edge.to
             };
         }
+        node
     }
-    total
-}
-
-/// 負の cut value の木の辺のうち、子の index が最小のもの（子, 木の辺）。
-fn leaving_arc(tree: &Tree) -> Option<(usize, usize)> {
-    (0..tree.parent.len()).find_map(|node| match tree.parent[node] {
-        Some((_, arc)) if tree.cut[node] < 0 => Some((node, arc)),
-        _ => None,
-    })
-}
-
-fn is_descendant(tree: &Tree, node: usize, ancestor: usize) -> bool {
-    tree.low[ancestor] <= tree.lim[node] && tree.lim[node] <= tree.lim[ancestor]
-}
-
-/// 出る辺に替わる、木の外の辺を選ぶ（手順 7 の入る辺）。
-fn entering_arc(
-    network: &Network,
-    tree: &Tree,
-    tree_arc: &[bool],
-    rank: &[i64],
-    leaving: usize,
-) -> Result<usize, LayoutError> {
-    let arc = network.arcs[leaving];
-    let tail = if tree.lim[arc.from] < tree.lim[arc.to] {
-        arc.from
-    } else {
-        arc.to
-    };
-    let flip = tail == arc.to;
-    let mut best: Option<(usize, i64)> = None;
-    for (index, candidate) in network.arcs.iter().enumerate() {
-        if tree_arc[index] {
-            continue;
-        }
-        let crosses = is_descendant(tree, candidate.from, tail) == flip
-            && is_descendant(tree, candidate.to, tail) != flip;
-        if !crosses {
-            continue;
-        }
-        let value = slack(candidate, rank);
-        if best.is_none_or(|(_, current)| value < current) {
-            best = Some((index, value));
-        }
-    }
-    best.map(|(index, _)| index)
-        .ok_or_else(|| LayoutError::Internal("no entering edge".into()))
-}
-
-/// 根から木の辺に沿って rank を決め直す（根の rank は 0）。
-fn assign_ranks(network: &Network, tree: &Tree) -> Vec<i64> {
-    let mut rank = vec![0i64; network.nodes];
-    for &node in tree.post.iter().rev() {
-        if let Some((up, index)) = tree.parent[node] {
-            let arc = network.arcs[index];
-            rank[node] = if arc.from == up {
-                rank[up] + arc.minlen
-            } else {
-                rank[up] - arc.minlen
-            };
-        }
-    }
-    rank
 }
 
 /// 根を外し、最小の rank が 0 になるよう全体をずらす（手順 8）。
