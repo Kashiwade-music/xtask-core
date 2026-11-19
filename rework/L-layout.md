@@ -10,7 +10,7 @@
 - **region をまたぐ辺は境界の port で区切る。** 辺 u→v は、u と v の最も近い共通の祖先（LCA）の段で一本の区間になる。u 側の各 region の中では「u から右辺の出口 port（Exit）まで」の区間、v 側の各 region の中では「左辺の入口 port（Entry）から v まで」の区間になる。最後に区間をつないで一本の折れ線にする。
 - **平らな段の配置は Sugiyama 法で行う。** 層の割当て、ダミーの挿入、交差の削減、縦の座標、通路への配線の順に進む。
 - **最適化は一つの network simplex で行う。** 層の割当てと縦の座標の両方で、同じ実装（`simplex.rs`）を使う。
-- **座標はすべて整数（px、`i32`）で扱う。** 浮動小数の誤差による非決定性を持ち込まない。
+- **座標・rank・長さ・重みはすべて整数（`i64`）で扱う。** 浮動小数の誤差による非決定性を持ち込まない。公開の型も `i64`。10.1 節の上限の中では、どの和も 2^62 を超えないので、溢れの検査（`checked_*`）は書かない（1.5 節）。
 - **向きは左から右だけにする。** 辺は必ず始点の右辺から出て、終点の左辺に左から入る。逆向きの辺と同じ層の辺は、U ターン用のダミー（TurnEast・TurnWest）を通して回り込ませる。
 
 ### 1.2 ファイルと担当 unit
@@ -35,7 +35,7 @@
 
 消すもの（L1 で消す）：`src/prepare.rs`、`src/runtime.rs`、`src/validate.rs`、`runtime/`、`vendor/`、`tests/elk.rs`。`Cargo.toml` の依存のうち `serde`、`serde_json`、`tempfile` を消す（`serde_json` は `[dev-dependencies]` に移す）。
 
-### 1.3.1 unit の所有と確認
+### 1.3 unit の所有と確認
 
 | unit | 所有 | 確認（tier a） |
 |---|---|---|
@@ -46,14 +46,18 @@
 | L5 | `src/route.rs` | 同じ check と `cargo test -p xtask-layout --lib route::` |
 | L6 | `src/check.rs`、`src/metrics.rs` | 同じ check と `cargo test -p xtask-layout --lib check::`、`cargo test -p xtask-layout --lib metrics::` |
 | L7 | `src/hierarchy.rs`、`src/level.rs` の `run_level` | 同じ check と `cargo test -p xtask-layout --lib hierarchy::` |
-| L8 | `tests/baseline.rs`、`tests/common/**`、`examples/baseline_report.rs` | `cargo check -p xtask-layout --all-targets`、`cargo test -p xtask-layout --release --test baseline --no-run`、`cargo clippy -p xtask-layout --all-targets -- -D warnings` |
+| L8 | `tests/baseline.rs`、`tests/common/**`、`examples/baseline_report.rs` | `cargo check -p xtask-layout --all-targets`、`cargo test -p xtask-layout --release --test baseline --no-run` |
 
 - 試験は各ファイルの `#[cfg(test)] mod tests` に書く。
+- **実行の順。** L6 は W2（L2 の後、同じ lane）、L7 と L8 は W3。L6 の試験は手で作った `Layout` だけを使い、`layout` を呼ばない（W2 では他の段が `todo!()`）。`layout` を通す試験はすべて L7 が持つ。L7 の時点で L2〜L6 は統合済み。
 - **L7 の試験**（`hierarchy::tests`）：
-  - `nested_regions`：region r0 の中に r1、r1 の中に node a、r0 の中に node b、辺 a→b。layout が Ok で、`check::output` が Ok。
+  - `nested_regions`：region r0 の中に r1、r1 の中に node a、r0 の中に node b、辺 a→b。`crate::layout` が Ok（`check::output` も通っている）。
   - `cross_region_edge`：r0 の中の a から、r1 の中の b への辺。上と同じく Ok で、経路の始点が a の右辺、終点が b の左辺にある。
   - `region_without_boundary_edges`：辺の無い region が一つ。Ok で、region の矩形が node を含む。
-- `clippy -D warnings` は、crate が完成する L8 で初めて実行する。それより前の unit は、骨組みの `todo!()` に由来する `dead_code`・`unused_variables` の警告を残してよい（作業指示書 0.6 節）。
+  - `layout_two_nodes_verifies`：node 2 個（大きさ 80×40）、辺 1 本を `crate::layout` した結果を、`crate::verify` が受け入れる。
+  - `empty_graph_is_padding_only`：node も region も無い Graph の結果が `size == Size { width: 48, height: 48 }` で、配列がすべて空。
+  - `empty_region_has_header_space`：node の無い region が一つ（header 100×16）。Ok で、region の矩形の幅が 140 以上、高さが 56 以上。
+- `clippy -D warnings` は、crate が完成した後の W3 の tier b で Orchestrator が初めて実行する。それより前の unit は、骨組みの `todo!()` に由来する `dead_code`・`unused_variables` の警告を残してよい（作業指示書 0.6 節）。
 
 ### 1.4 L1 が作る骨組み（同じ wave の後の lane が `lib.rs` を触らないため）
 
@@ -64,8 +68,8 @@ L1 は、上の表のすべての `src/*.rs` を作る。後の unit が所有�
 | `layering.rs` | `pub(crate) fn assign(input: &LevelInput) -> Result<Layers, LayoutError>` |
 | `chains.rs` | `pub(crate) fn build(input: &LevelInput, layers: &Layers) -> Result<Chains, LayoutError>` |
 | `order.rs` | `pub(crate) fn arrange(chains: &Chains) -> Result<Order, LayoutError>`、`pub(crate) fn crossings(chains: &Chains, layers: &[Vec<ItemId>]) -> usize` |
-| `position.rs` | `pub(crate) fn vertical(chains: &Chains, order: &Order) -> Vec<i32>` |
-| `route.rs` | `pub(crate) fn finish(input: &LevelInput, chains: &Chains, order: &Order, y: &[i32]) -> Result<LevelOutput, LayoutError>` |
+| `position.rs` | `pub(crate) fn vertical(chains: &Chains, order: &Order) -> Result<Vec<i64>, LayoutError>` |
+| `route.rs` | `pub(crate) fn finish(input: &LevelInput, chains: &Chains, order: &Order, y: &[i64]) -> Result<LevelOutput, LayoutError>` |
 | `check.rs` | `pub(crate) fn input(graph: &Graph) -> Result<(), LayoutError>`、`pub(crate) fn output(graph: &Graph, layout: &Layout) -> Result<(), String>` |
 | `metrics.rs` | 10.3 節の `Metrics` の型（このとおり）と `pub(crate) fn compute(width: f64, height: f64, routes: &[Vec<(f64, f64)>]) -> Metrics` |
 | `hierarchy.rs` | `pub(crate) fn layout(graph: &Graph) -> Result<Layout, LayoutError>` |
@@ -110,12 +114,13 @@ pub fn metrics(width: f64, height: f64, routes: &[Vec<(f64, f64)>]) -> Metrics {
 }
 ```
 
-### 1.3 共通の規則
+### 1.5 共通の規則
 
 - 関数はすべて**純粋**にする。入力を参照で受け取り、新しい値を返す。段階をまたいで書き換える構造体（後から埋める field、`Option` で「未計算」を表す field）を作らない。
 - 繰り返しの順序はすべて index の昇順にする。`HashMap` と `HashSet` を使わない（`BTreeMap`、`Vec` を使う）。並べ替えはすべて `sort_by` に明示の tie-break を付け、安定な比較にする。
 - 乱数を使わない。
-- `unwrap` と `expect` は、直前の行で成り立つことが明らかな場合だけ使う。内部の矛盾は `LayoutError::Internal(String)` で返す。
+- `unwrap` と `expect` は、直前の行で成り立つことが明らかな場合だけ使う。内部の矛盾は `LayoutError::Internal(String)` で返す。内部の矛盾が起こりうる関数（`simplex::solve`、`position::vertical`、`order::arrange`、`route::finish` など）は、すべて `Result<_, LayoutError>` を返す。
+- **溢れが起きない理由**（検査を書かない根拠）。10.1 節の上限で、要素（入力の node・region と、ダミー・ラベル・U ターン）の数は `nodes + regions + edges × (2 × (nodes + regions) + 5) < 2 × 10^11`。一つの要素が座標に足す量は `MAX_SIZE + 2 × NODE_GAP + PORT_PITCH × (link の数 + 1) + PORT_MARGIN` 以下。したがって座標・rank・重みの和は `10^18` 未満で、`i64::MAX`（約 9.2 × 10^18）に届かない。
 - 1 関数 80 行、1 ファイル 1000 code 行を超えない。
 
 ---
@@ -131,24 +136,24 @@ use std::fmt;
 /// 幅と高さ（px）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Size {
-    pub width: i32,
-    pub height: i32,
+    pub width: i64,
+    pub height: i64,
 }
 
 /// 点（px）。y は下向きに増える。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Point {
-    pub x: i32,
-    pub y: i32,
+    pub x: i64,
+    pub y: i64,
 }
 
 /// 左上の点と大きさ（px）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Rect {
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
+    pub x: i64,
+    pub y: i64,
+    pub width: i64,
+    pub height: i64,
 }
 
 /// 配置の要求。node・region・edge は配列の index で参照する。
@@ -227,6 +232,8 @@ pub enum LayoutError {
     FixedLength,
     /// `Layering::Fixed` と region は同時に使えない。
     FixedWithRegions,
+    /// node・region・edge の数が上限（`MAX_NODES`、`MAX_REGIONS`、`MAX_EDGES`）を超える。
+    TooMany,
     /// 配置の途中の矛盾（実装の誤り）。
     Internal(String),
 }
@@ -242,6 +249,7 @@ impl fmt::Display for LayoutError {
             Self::InvalidSize => write!(formatter, "a size is negative or larger than 100000"),
             Self::FixedLength => write!(formatter, "fixed layering must give one column per node"),
             Self::FixedWithRegions => write!(formatter, "fixed layering cannot be used with regions"),
+            Self::TooMany => write!(formatter, "the graph has more than 100000 nodes or regions, or more than 1000000 edges"),
             Self::Internal(message) => write!(formatter, "internal layout error: {message}"),
         }
     }
@@ -250,30 +258,34 @@ impl fmt::Display for LayoutError {
 impl std::error::Error for LayoutError {}
 
 /// 同じ層で上下に並ぶ大きな要素（node、box、label）どうしの間隔。
-pub(crate) const NODE_GAP: i32 = 40;
+pub(crate) const NODE_GAP: i64 = 40;
 /// 大きな要素と小さな要素（dummy、turn、port）の間隔。
-pub(crate) const MIXED_GAP: i32 = 16;
+pub(crate) const MIXED_GAP: i64 = 16;
 /// 小さな要素どうしの間隔。
-pub(crate) const SMALL_GAP: i32 = 12;
+pub(crate) const SMALL_GAP: i64 = 12;
 /// 層と層の間の通路の最小の幅。
-pub(crate) const LAYER_GAP: i32 = 48;
+pub(crate) const LAYER_GAP: i64 = 48;
 /// 通路の中の縦線（track）どうしの間隔。
-pub(crate) const TRACK_GAP: i32 = 12;
+pub(crate) const TRACK_GAP: i64 = 12;
 /// 通路の端から最初の track までの最小の距離。
-pub(crate) const TRACK_MARGIN: i32 = 16;
+pub(crate) const TRACK_MARGIN: i64 = 16;
 /// region の左・右・下の余白。上の余白は見出しの高さ + この値。
-pub(crate) const REGION_PAD: i32 = 20;
+pub(crate) const REGION_PAD: i64 = 20;
 /// 図全体の余白。
-pub(crate) const DIAGRAM_PAD: i32 = 24;
+pub(crate) const DIAGRAM_PAD: i64 = 24;
 /// U ターンの縦の長さ。
-pub(crate) const TURN_HEIGHT: i32 = 12;
+pub(crate) const TURN_HEIGHT: i64 = 12;
 /// node の一辺に並ぶ port の最小の間隔と、上下の余り。
-pub(crate) const PORT_PITCH: i32 = 16;
-pub(crate) const PORT_MARGIN: i32 = 24;
+pub(crate) const PORT_PITCH: i64 = 16;
+pub(crate) const PORT_MARGIN: i64 = 24;
 /// 交差の削減の最大の往復回数。
 pub(crate) const MAX_SWEEPS: usize = 12;
 /// 大きさの上限。
-pub(crate) const MAX_SIZE: i32 = 100_000;
+pub(crate) const MAX_SIZE: i64 = 100_000;
+/// 数の上限（溢れが起きない根拠。1.5 節）。
+pub(crate) const MAX_NODES: usize = 100_000;
+pub(crate) const MAX_REGIONS: usize = 100_000;
+pub(crate) const MAX_EDGES: usize = 1_000_000;
 ```
 
 ### 2.2 段の内部の型（`src/level.rs` の前半、L1 がこのとおりに書く）
@@ -311,9 +323,9 @@ pub(crate) enum ItemKind {
 pub(crate) struct BoxItem {
     pub region: usize,
     /// (edge, y)。左辺の入口。
-    pub entries: Vec<(usize, i32)>,
+    pub entries: Vec<(usize, i64)>,
     /// (edge, y)。右辺の出口。
-    pub exits: Vec<(usize, i32)>,
+    pub exits: Vec<(usize, i64)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -346,7 +358,8 @@ pub(crate) enum RootLayering {
     Fixed(Vec<u32>),
 }
 
-/// 段の入力。`items` は Node・Box・Entry・Exit だけを持つ。
+/// 段の入力。`items` は Node・Box・Entry・Exit だけを、この順に持つ
+/// （内容の item（Node・Box）が先頭に続き、その後に Entry、Exit が続く。9.4 節）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LevelInput {
     pub items: Vec<Item>,
@@ -354,11 +367,21 @@ pub(crate) struct LevelInput {
     pub frame: Frame,
 }
 
+impl LevelInput {
+    /// 内容の item（Node・Box）の数。`items[..content_count()]` が内容の item。
+    pub(crate) fn content_count(&self) -> usize {
+        self.items
+            .iter()
+            .take_while(|item| matches!(item.kind, ItemKind::Node(_) | ItemKind::Box(_)))
+            .count()
+    }
+}
+
 /// 層の割当ての結果（3 章）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Layers {
-    /// 入力の item ごとの層。Entry・Exit は 0 を入れる（使わない）。
-    pub layer: Vec<i32>,
+    /// 内容の item（`items[..content_count()]`）ごとの層。Entry・Exit は持たない。
+    pub layer: Vec<i64>,
 }
 
 /// 隣の層の二つの要素を結ぶ線。`left` は層 L、`right` は層 L + 1。
@@ -376,7 +399,8 @@ pub(crate) struct Step {
     pub forward: bool,
 }
 
-/// ダミーを入れた後の段（4 章）。
+/// ダミーを入れた後の段（4 章）。`build` だけが作り、その後は変えない。
+/// `layer_count` は `layer` の最大 + 1 の派生の値（設計書 6.1 節の 3 の「許すもの」）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Chains {
     /// 入力の item（同じ index）の後にダミーが続く。大きさは port の数を反映済み。
@@ -395,9 +419,9 @@ pub(crate) struct Order {
     /// 層ごとの item の上から下への並び。
     pub layers: Vec<Vec<ItemId>>,
     /// link ごとの、left の item の上辺から port までの距離。
-    pub east: Vec<i32>,
+    pub east: Vec<i64>,
     /// link ごとの、right の item の上辺から port までの距離。
-    pub west: Vec<i32>,
+    pub west: Vec<i64>,
 }
 
 /// 段の配置の結果。座標は段の左上を (0, 0) とする。
@@ -436,32 +460,36 @@ pub(crate) fn assign(input: &LevelInput) -> Result<Layers, LayoutError>
 
 ### 3.1 対象
 
-- Node と Box の item だけに層を付ける。Entry と Exit は層を持たない（`layer` は 0 を入れて無視する。境界の層は 4 章で付ける）。
+- 内容の item（`items[..content_count()]`、Node と Box）だけに層を付ける。Entry と Exit は層を持たない（境界の層は 4 章で付ける）。`Layers.layer` の長さは `content_count()`。
 - 端が Entry・Exit の segment は、層の割当てに使わない。
 
 ### 3.2 `Frame::Root(RootLayering::Fixed(columns))`
 
-`layer[i] = 2 * columns[i]`（i32）。奇数の層は、ラベルと U ターンのために空けておく。これで終わり。
+1. 列番号を詰める。`columns` の異なる値を昇順に並べ、値から順位（0 から）への表を作る（`BTreeMap<u32, i64>`）。
+2. `layer[i] = 2 * 順位(columns[i])`。奇数の層は、ラベルと U ターンのために空けておく。これで終わり。
+
+列番号の値の大きさは層の数に影響しない（`[0, 1_000_000_000]` も `[0, 2]` になる）。
 
 ### 3.3 `Optimize`（Root の Optimize と、すべての Region）
 
 1. **閉路の除去。** 3.1 節の対象の segment を、重み 1 の辺の多重集合として `acyclic::order` に渡す（6.2 節）。返る順位で `from` が `to` より後になる segment は、向きを逆にして扱う。
-2. **問題の作成。** `simplex::Problem` の node は item（Node・Box）。segment ごとに辺を一本足す。
+2. **問題の作成。** `simplex::Problem` の node は内容の item（`node_count = content_count()`）。3.1 節の対象の segment ごとに辺を一本足す。
    - 向きは、手順 1 で逆にしたものは `to → from`、それ以外は `from → to`。
    - `minlen` はラベル付きなら 2、それ以外は 1。
    - `weight` は 1。
-   - Entry・Exit の item も simplex の node に含めてよいが、辺を持たないので結果は無視する。
-3. **解く。** `simplex::solve(&problem)` で、node ごとの rank を得る。最小の rank は 0 になる。
+3. **解く。** `simplex::solve(&problem)?` で、node ごとの rank を得る。最小の rank は 0 になる。
 4. **均衡。** item の index の昇順に、次を行う。
    - 対象は、Node と Box の item のうち、入ってくる辺の重みの和と出ていく辺の重みの和が等しいもの（辺の無い item を含む）。Entry と Exit は対象にしない。
    - 置ける範囲 `[lo, hi]` を求める。`lo` は、入ってくる辺の `rank(from) + minlen` の最大（入る辺が無ければ 0）。`hi` は、出ていく辺の `rank(to) - minlen` の最小（無ければ、その時点の最大の rank）。
    - 範囲の中で、Node と Box の数が最も少ない層を選ぶ。同数なら小さい層を選ぶ。
    - 選んだ層の数が今の層の数より**少ないときだけ**移す。
-5. Node と Box の item は `layer[i] = rank[i]`、Entry と Exit の item は `layer[i] = 0`。
+5. `layer[i] = rank[i]`（内容の item だけ）。
 
 ### 3.4 試験（`#[cfg(test)] mod tests`）
 
 - **`fixed_doubles_columns`**：Root Fixed `[0, 1, 1]` の結果が `[0, 2, 2]` になる。
+- **`fixed_columns_are_compressed`**：Root Fixed `[0, 1_000_000_000, 7]` の結果が `[0, 4, 2]` になる。
+- **`boundary_items_have_no_layer`**：Region の段で、node 1 個と Entry 1 個、segment が Entry→node のとき、`layer` の長さが 1。
 - **`chain_layers`**：a→b、b→c（Region、header 0）の結果が `[0, 1, 2]` になる。
 - **`label_needs_two_layers`**：a→b でラベルが `Size{width: 10, height: 10}` のとき、結果が `[0, 2]` になる。
 - **`cycle_is_broken`**：a→b、b→a の結果で、二つの層が異なる。
@@ -535,8 +563,11 @@ segment の index の昇順に、次のとおり作る。`a = l(from)`、`b = l(
 2. 候補の層のうち、そこにある item が一つ以上あって、すべて `Dummy` のものを消す。Label、Turn、Node、Box が一つでもあれば残す。
    - item が一つも無い内側の層は、ダミーが無いので消しても link は変わらない。これも消す。
 3. 該当する層を、右（大きい層）から順に消す。消す層の Dummy `d` については次を行う。
-   - `d` を left に持つ link と right に持つ link は、ちょうど一本ずつある。この二本を一本にまとめる。新しい link の left は前の link の left、right は後の link の right にする。
-   - 前の link が置かれていた path の Step を新しい link に替える。後の link の Step は消す。向きは元の Step のものを保つ。
+   - `d` を right に持つ link `p`（`p.left` は層 L−1）と、`d` を left に持つ link `q`（`q.right` は層 L+1）は、ちょうど一本ずつある。
+   - 二本を一本の link `n = Link { edge, left: p.left, right: q.right }` にまとめる（幾何の左右で決める。道のりの順ではない）。
+   - `d` を通る path では、`p` と `q` の Step が隣り合い、向きは同じである。前向き（`forward: true`）の path では `p, q` の順、逆向きの path では `q, p` の順に並ぶ。
+   - 隣り合う二つの Step のうち、**path の中で先に来る Step** を `Step { link: n, forward: 元の向き }` に替え、後に来る Step を消す。
+   - 例：前向き `(a, d), (d, b)` → `(a, b)`。逆向き `Step(q = (d, b), backward), Step(p = (a, d), backward)` → `Step((a, b), backward)`。
    - 消した層より大きい層の番号を、一つずつ詰める。
 4. 消した item は `items` から取り除き、index を詰め直す。link と path の index もそれに合わせて書き直す。
    - 入力の item は先頭にあり消えないので、入力の index は変わらない。
@@ -549,7 +580,8 @@ Node の item の高さを `max(size.height, (max(左辺の link の数, 右辺�
 
 ### 4.5 試験
 
-- **`forward_span_three`**：層 0 → 3 の segment で、Dummy が 2 個、link が 3 本、path が 3 Step。
+- **`forward_span_three`**：Root Fixed、node a, c, e, b の列が `[0, 1, 2, 3]`（層 0, 2, 4, 6）で、segment は a→b だけ。c と e が層 2 と層 4 を残すので、結果は層 0〜6 の 7 層。a→b の Dummy は層 1, 2, 3, 4, 5 に作られ、Dummy だけの層 1, 3, 5 が消えて、Dummy が 2 個（層 2 と 4 の、新しい層 1 と 2）、`layer_count` が 4、a→b の link が 3 本、path が 3 Step（すべて forward）になる。
+- **`backward_dummy_layer_removed`**：Root Fixed、node a, c, b の列が `[0, 1, 2]`（層 0, 2, 4）で、segment は b→a だけ（逆向き）。手順のとおり作った後、Dummy だけの層 1 と 3 が消える。結果の path の Step は 5 個で、向きは `[true, false, false, false, true]`、各 link の `left` の層 + 1 が `right` の層に等しい。
 - **`label_in_middle`**：層 0 → 2 のラベル付きで、層 1 が Label になる。
 - **`backward_makes_turns`**：Root Optimize、層 a=1 → b=0 の segment で、TurnEast が層 3、TurnWest が層 0、`layer_count` が 4 になる。
   - shift した後の層は from が 2、to が 1。
@@ -615,10 +647,10 @@ return best
 
 ### 5.6 交差の数（`crossings`）
 
-1. 層の組 (L, L+1) ごとに、その間の link を集める。各 link の鍵を `(pos(left) * 4096 + 左の port の順, pos(right) * 4096 + 右の port の順)` とする。port の順は次のとおり。
+1. 層の組 (L, L+1) ごとに、その間の link を集める。各 link の鍵を二つの組 `left_key = (pos(left), 左の port の順)`、`right_key = (pos(right), 右の port の順)` とする（`(usize, usize)` の辞書順で比べる。数を掛けて一つの整数にしない）。port の順は次のとおり。
    - Box は、その item の同じ辺の port を y の昇順に並べたときの順位。
    - それ以外は 0。
-2. 鍵の左の値、右の値の順で昇順に並べる。右の値の列の転倒の数（`i < j` かつ `right_i > right_j` の組の数）を、併合整列で数える。
+2. `(left_key, right_key)` の昇順に並べる。`right_key` の列の転倒の数（`i < j` かつ `right_key_i > right_key_j` の組の数）を、併合整列で数える。
 3. すべての組の和を返す。
 
 ### 5.7 port の並び（最後に一回だけ）
@@ -653,14 +685,18 @@ pub(crate) struct Problem {
 pub(crate) struct Constraint {
     pub from: usize,
     pub to: usize,
-    pub minlen: i32,
-    pub weight: i32,
+    pub minlen: i64,
+    pub weight: i64,
 }
 
-/// rank(to) - rank(from) >= minlen を満たし、Σ weight * (rank(to) - rank(from)) を最小にする。
-/// 辺は閉路を作らないこと（呼出し側の責任。debug では検査する）。最小の rank は 0。
-pub(crate) fn solve(problem: &Problem) -> Vec<i32>
+/// rank(to) - rank(from) >= minlen を満たす rank を返す。目的は Σ weight * (rank(to) - rank(from)) を
+/// 小さくすること。繰返しの上限（手順 7）の中で最適に届けば最適解、届かなければその時点の実行可能解。
+/// 辺は閉路を作らないこと。閉路・範囲外の端・負の weight は `Err(LayoutError::Internal(..))`。
+/// 最小の rank は 0。
+pub(crate) fn solve(problem: &Problem) -> Result<Vec<i64>, LayoutError>
 ```
+
+最初に入力を調べる：端が `node_count` 以上、`weight < 0`、Kahn 法（手順 3）で全 node を取り出せない（閉路）のどれかなら `Err(LayoutError::Internal(..))`。手順 7 で入る辺の候補が一つも無いときも `Err(LayoutError::Internal("no entering edge"))`（正しい実装では起きない）。
 
 手順（Gansner ほか 1993 の方法。dagre の `network-simplex.js` と同じ構造。コードは写さず、この手順から書く）：
 
@@ -697,8 +733,8 @@ pub(crate) fn solve(problem: &Problem) -> Vec<i32>
    - **交換**：e を木から外して f を入れる。
      - 根 r から木をたどり直して、親・子・`low`・`lim`・cut value を作り直す。
      - rank は根から木の辺に沿って決め直す。木の辺 g で親 p から子 c へ進むとき、`g.from == p` なら `rank(c) = rank(p) + g.minlen`、そうでなければ `rank(c) = rank(p) - g.minlen`。
-   - 繰返しは最大 `20 * 辺の数 + 100` 回にする。超えたら、その時点の rank（実行可能）で終わる。
-   - 交換のたびに全部を作り直すので、計算量は O(辺の数²) になりうる。KPI の K4 に届かなければ、設計者が差分の更新に替える（差戻し）。実装者は最適化しない。
+   - 繰返しは最大 `20 * 辺の数 + 100` 回にする。超えたら、その時点の rank（実行可能だが最適とは限らない）で終わる。これは誤りではない。
+   - 交換のたびに全部を作り直す（dagre と同じ）ので、計算量は O(辺の数²) になりうる。W3 の tier b で K4 を測り、届かなければ設計者が差分の更新に替える（差戻し）。実装者は最適化しない。
 8. **後処理。** r を外し、最小の rank が 0 になるよう全体をずらして返す。
 
 試験：
@@ -708,13 +744,14 @@ pub(crate) fn solve(problem: &Problem) -> Vec<i32>
 - **`zero_weight_free`**：0→1 の weight が 0 のとき、`rank(1) - rank(0) >= 1` を満たす。
 - **`disconnected`**：node 3 個、辺 0 本の結果が `[0, 0, 0]` になる。
 - **`offsets`**：node 0, 1, 2 と、辺 2→0（minlen 10、weight 1）、2→1（minlen 0、weight 1）の場合。結果では `rank(0) - 10 == rank(1)`、つまり `[10, 0, 0]` になる。
+- **`cycle_is_internal_error`**：0→1、1→0 で `Err(LayoutError::Internal(_))` になる。
 
 ### 6.2 閉路の除去（`src/acyclic.rs`）
 
 ```rust
 /// 重み付きの辺 (from, to, weight) の多重集合から、逆向きの辺の重みの和が小さくなる順位を返す。
 /// 結果は node ごとの順位（0 から）。自己ループは無視する。
-pub(crate) fn order(node_count: usize, edges: &[(usize, usize, i32)]) -> Vec<usize>
+pub(crate) fn order(node_count: usize, edges: &[(usize, usize, i64)]) -> Vec<usize>
 ```
 
 Eades–Lin–Smyth の貪欲法：
@@ -741,8 +778,8 @@ while R が空でない:
 ## 7. 縦の座標（`src/position.rs`、L4）
 
 ```rust
-/// item ごとの上辺の y。最小は 0。
-pub(crate) fn vertical(chains: &Chains, order: &Order) -> Vec<i32>
+/// item ごとの上辺の y。最小は 0。simplex の誤りはそのまま返す。
+pub(crate) fn vertical(chains: &Chains, order: &Order) -> Result<Vec<i64>, LayoutError>
 ```
 
 `simplex::Problem` を次のとおり作って解く。
@@ -783,7 +820,7 @@ pub(crate) fn vertical(chains: &Chains, order: &Order) -> Vec<i32>
 ## 8. 通路と経路（`src/route.rs`、L5）
 
 ```rust
-pub(crate) fn finish(input: &LevelInput, chains: &Chains, order: &Order, y: &[i32]) -> Result<LevelOutput, LayoutError>
+pub(crate) fn finish(input: &LevelInput, chains: &Chains, order: &Order, y: &[i64]) -> Result<LevelOutput, LayoutError>
 ```
 
 ### 8.1 通路の track
@@ -838,7 +875,7 @@ segment ごとに、path の Step を順にたどる。
 2. `size` はその外接の大きさ。
 
 **Region：**
-1. `[top, bottom]` を、chains のすべての item（Entry と Exit を含む）の `[y, y + height]` と、すべての経路の点の y を含む最小の範囲とする。
+1. `[top, bottom]` を、chains のすべての item（Entry と Exit を含む）の `[y, y + height]` と、すべての経路の点の y を含む最小の範囲とする。item も点も無いとき（中身の無い region）は `top = bottom = 0`。
 2. 全体を `dy = header.height + REGION_PAD - top` だけ下にずらす。
 3. `size = (X(layer_count - 1), header.height + REGION_PAD + (bottom - top) + REGION_PAD)`。高さの最小は `header.height + 2 * REGION_PAD`。
 4. Entry の矩形は `(0, y, 0, 0)`、Exit の矩形は `(size.width, y, 0, 0)`。
@@ -863,10 +900,12 @@ pub(crate) fn run_level(input: &LevelInput) -> Result<LevelOutput, LayoutError> 
     let layers = crate::layering::assign(input)?;
     let chains = crate::chains::build(input, &layers)?;
     let order = crate::order::arrange(&chains)?;
-    let y = crate::position::vertical(&chains, &order);
+    let y = crate::position::vertical(&chains, &order)?;
     crate::route::finish(input, &chains, &order, &y)
 }
 ```
+
+L1 の骨組みでは本体は `todo!("L7")`。L7 がこのとおりに書く。
 
 ### 9.2 段の木
 
@@ -913,13 +952,16 @@ pub(crate) fn run_level(input: &LevelInput) -> Result<LevelOutput, LayoutError> 
 
 `lib.rs` の `layout` は L1 が書いたもの（1.4 節）。L7 は `hierarchy::layout` の本体と `level::run_level` の本体を書く。
 
+- **空の要求。** `graph.nodes` も `graph.regions` も空なら、`run_level` を呼ばずに `Layout { size: Size { width: 2 * DIAGRAM_PAD, height: 2 * DIAGRAM_PAD }, nodes: vec![], regions: vec![], edges: vec![] }` を返す（edge は node が無いので必ず空。`check::input` が保証する）。
+- region があれば段 0 には Box の item があるので、段 0 が空になることは無い。中身の無い region は、8.4 節の規則で見出しと余白だけの箱になる。
+
 ---
 
 ## 10. 検証と指標（`src/check.rs`、`src/metrics.rs`、L6）
 
 ### 10.1 入力の検証 `check::input(graph) -> Result<(), LayoutError>`
 
-`LayoutError` の各 variant の条件を、variant の並びの順に調べる。大きさは、node の size、region の header、ラベルの各値が 0 以上 `MAX_SIZE` 以下であること。
+最初に数を調べる：`nodes.len() > MAX_NODES`、`regions.len() > MAX_REGIONS`、`edges.len() > MAX_EDGES` のどれかなら `TooMany`。その後、`LayoutError` の残りの variant の条件を、variant の並びの順に調べる。大きさは、node の size、region の header、ラベルの各値が 0 以上 `MAX_SIZE` 以下であること。`Layering::Fixed` の列番号の値には上限を設けない（3.2 節で詰める）。
 
 ### 10.2 出力の不変条件 `check::output(graph, layout) -> Result<(), String>`
 
@@ -927,17 +969,18 @@ pub(crate) fn run_level(input: &LevelInput) -> Result<LevelOutput, LayoutError> 
 
 1. 配列の長さが要求と同じ。
 2. 矩形はすべて幅・高さ 0 以上で、図の範囲 `[0, size]` の中にある。
-3. node は、その region の矩形の内側にある。region は、親の region の矩形の内側にある。
-4. 祖先と子孫の関係に無い二つの要素（node と node、node と region、region と region）の矩形が重ならない。共有する辺は重なりとみなさない。
-5. 経路は次をすべて満たす。
+3. **大きさ。** node の矩形は要求の `size` 以上（幅は等しいか大きい、高さは等しいか大きい）。ラベルの矩形の幅と高さは要求のラベルとちょうど等しい。region の矩形は、幅が `header.width + 2 * REGION_PAD` 以上、高さが `header.height + 2 * REGION_PAD` 以上。
+4. node は、その region の矩形の内側にある。region は、親の region の矩形の内側にある。どちらも、親の region の見出しの帯（`[region.y, region.y + header.height + REGION_PAD)`）にかからない（子の上辺の y が `region.y + header.height + REGION_PAD` 以上）。
+5. 祖先と子孫の関係に無い二つの要素（node と node、node と region、region と region）の矩形が重ならない。共有する辺は重なりとみなさない。
+6. 経路は次をすべて満たす。
    - 点が 2 個以上ある。
    - 隣り合う点は x か y の一方だけが異なる。
    - 長さ 0 の線分が無い。
-6. 経路の始点は始点の node の右辺上（`x == rect.x + width`、y が範囲内）にあり、最初の線分は右へ向かう。終点は終点の node の左辺上にあり、最後の線分は右へ向かう。
-7. 経路の線分は、端以外の node の矩形の内部を通らない。端の node も、最初と最後の線分以外は通らない。内部とは境界を除く部分。
-8. ラベルは、要求にラベルがあるときだけある。ラベルは node の矩形と重ならない。
+7. 経路の始点は始点の node の右辺上（`x == rect.x + width`、y が範囲内）にあり、最初の線分は右へ向かう。終点は終点の node の左辺上にあり、最後の線分は右へ向かう。
+8. 経路の線分は、端以外の node の矩形の内部を通らない。端の node も、最初と最後の線分以外は通らない。内部とは境界を除く部分。
+9. ラベルは、要求にラベルがあるときだけある。ラベルは node の矩形と重ならない。
 
-計算量の注意：7 は、node の矩形を x の昇順に並べ、線分の x の範囲と重なるものだけを二分探索で調べる。
+計算量：5 と 8 は、全組を単純に比べる（5 は要素の組、8 は線分と node の組）。基準の最大（node 199、辺 679）で百万回程度の比較であり、K4 で監視する。x で並べた二分探索で絞る方式は、矩形の右端が x の順に並ばないため正しくないので使わない。
 
 ### 10.3 指標 `metrics::compute(width, height, routes) -> Metrics`（公開版は `lib.rs` の `metrics`）
 
@@ -959,8 +1002,14 @@ ELK の基準の折れ線にも同じ関数を使うため、引数は f64 に�
 
 ### 10.4 試験
 
-- **`verify_accepts_simple_layout`**：node 2 個、辺 1 本を `layout` した結果を verify が受け入れる。
-- **`verify_rejects_overlap`**：手で作った重なる矩形を verify が拒む。
+L6 の試験は、すべて手で作った `Graph` と `Layout` で行い、`layout` を呼ばない（1.3 節）。基準にする正しい Layout は次のもの：node a（80×40）、b（80×40）、辺 a→b。`size = 248×88`、a の矩形 `(24, 24, 80, 40)`、b の矩形 `(144, 24, 80, 40)`、辺の点 `[(104, 44), (144, 44)]`。
+
+- **`verify_accepts_hand_made_layout`**：上の Layout を verify が受け入れる。
+- **`verify_rejects_overlap`**：b の矩形を `(90, 24, 80, 40)` にすると拒む。
+- **`verify_rejects_shrunken_node`**：a の矩形の幅を 70 にすると拒む（辺の始点も `(94, 44)` に合わせる）。
+- **`verify_rejects_header_overlap`**：region r（header 60×16）に a を入れ、a の上辺を `r.y + 10` に置いた Layout を拒む。
+- **`verify_rejects_label_size`**：ラベル（30×10）付きの辺で、ラベルの矩形を 20×10 にすると拒む。
+- **`input_rejects_too_many`**：`MAX_NODES + 1` 個の node（大きさ 0）の Graph で、`check::input` が `TooMany`。
 - **`metrics_counts_one_crossing`**：十字の二本の線で crossings が 1 になる。
 
 ---
@@ -976,7 +1025,7 @@ ELK の基準の折れ線にも同じ関数を使うため、引数は f64 に�
 `dev/layout-baseline/<group>/*.json` の `input` を、次のとおり `Graph` に変換する。
 
 - **node**：`input.nodes` の順に変換し、id から index への表を作る。
-  - size は `width.ceil() as i32`、`height.ceil() as i32`。
+  - size は `width.ceil() as i64`、`height.ceil() as i64`。
   - region は、下の region の変換で埋める。`Graph` を組み立てる前に表で決める。
 - **region**：`input.regions` を木の前順でたどり、index を振る。
   - parent は木の親。
@@ -996,15 +1045,17 @@ fn every_baseline_input_lays_out() // 全 146 件で layout が Ok、verify が 
 fn layout_is_deterministic()       // 全件で 2 回の結果が等しい
 ```
 
-この試験は時間がかかりうるので、unit の確認では実行しない。Orchestrator が checkpoint で `--release` で実行する。
+この試験は時間がかかりうるので、unit の確認では実行しない。Orchestrator が W3 の tier b と CP で `--release` で実行する。
 
 ### 11.3 比較表 `examples/baseline_report.rs`
 
 `cargo run -p xtask-layout --release --example baseline_report` は次を出力する。
 
 1. markdown の表を標準出力に出す。
-   - 行は図ごと。列は name、nodes、edges、crossings（ELK / 本実装）、bends（ELK / 本実装）、area（ELK / 本実装）、時間（ms）。
-   - 最後に合計の行と、比（本実装 ÷ ELK）の行を付ける。
+   - 行は図ごと。列は group、name、nodes、edges、crossings（ELK / 本実装）、bends（ELK / 本実装）、area（ELK / 本実装）、時間（ms）。
+   - 最後に次の行を付ける（設計書 2 章の測り方）。
+     - 全 146 件の合計の行と、比（本実装 ÷ ELK）の行（K1〜K3）。ELK の和が 0 の列は、本実装も 0 なら比を `1.00`、そうでなければ `inf` と書く。
+     - `kivact` の 121 件の時間の和（K4）。
 2. 同じ内容を `target/layout-baseline-report.md` に書く。
 
-時間は `std::time::Instant` で `layout` だけを測る。
+時間は `std::time::Instant` で `layout` だけを測る。1 thread で、まず全件を一度配置し（暖機、測らない）、その後に各件を一度ずつ配置して測る。
