@@ -378,10 +378,11 @@ mod tests {
         let items = vec![node(0, 10), node(1, 10), node(2, 10)];
         let input = fixed(items, vec![segment(0, 2, 0, None)], &[0, 1, 2]);
         let chains = run(&input);
-        assert_eq!(chains.paths[0].len(), 5);
+        assert_eq!(chains.layer_count, 5);
+        assert_eq!(chains.paths[0].len(), 6);
         assert_eq!(
             directions(&chains, 0),
-            vec![true, false, false, false, true]
+            vec![true, false, false, false, false, true]
         );
         assert_links_adjacent(&chains);
     }
