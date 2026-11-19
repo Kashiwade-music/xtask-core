@@ -22,6 +22,16 @@ M3b（commit 695c72a、merge 済み 27a56d3）の報告による。STOP の項�
 
 注（STOP ではない）：`crates/xtask-modules/src/visitor.rs` の `visit_macro` が 207 行で、作業指示書 0.2 の 6（1 関数 80 code 行）を超えたまま。意味のある helper に分ける必要がある。設計者の判断の後の fix で直す。
 
+## 差戻し（W2 の M3b の fix で新規、未解決）
+
+M3b の fix lane（0b36b98、merge 済み 17db880）の報告による。9・10 は解消。残るのは次の一件。
+
+| # | unit | 場所 | STOP の文（要旨） | 付属書の節 |
+|---|---|---|---|---|
+| 11 | M3b | `crates/xtask-modules/tests/thread_local.rs`：`untrusted_glob_makes_thread_local_uncertain`（698 行目） | この試験は、provider が不確かなときの診断 `crate::b: macro provider cannot be established: thread_local` を要求する。同じ規則の `external_crate_globs_do_not_create_bare_statics`（462 行目）は、同じ状況で診断が 1 件（`::FAKE`）だけであることを要求する。付属書の「診断を足さない」に従うと後者は通るが前者が落ち、旧 `confirm()` の診断を残すと後者が落ちる。両方の試験の違いは、後者の consumer が `FAKE` を import している点だけ（報告による）。**W2 の tier b（`cargo test -p xtask-modules`）の失敗の原因（残り 1 件）** | M-model.md の M3b の手順 6（`uncertain` と診断の規則）、既存の試験の移行（M3 全体） |
+
+注（STOP ではない）：`crates/xtask-modules/src/cfg.rs` の `expansion_diagnostics` が 94 code 行で、作業指示書 0.2 の 6（1 関数 80 code 行）を超えたまま。fix の lane で分ける。
+
 ## 未解決の注意（設計者の判断が要る）
 
 M3a の fix lane（3f3c058）の報告による。STOP ではないが、付属書の手順と食い違う可能性がある。
