@@ -4,10 +4,9 @@ use crate::model::{
     Archive, Content, Diagram, DiagramKind, Edge, EdgeStyle, Item, Label, Mode, Node, Point, Rect,
     Region, Scene,
 };
-use crate::{DecodeError, MAX_BODY_LEN};
+use crate::model::{DecodeError, FORMAT_VERSION, MAX_BODY_LEN};
 
 pub(crate) const MAGIC: &[u8] = b"XTASKMAP";
-pub(crate) const FORMAT_VERSION: u32 = 1;
 /// 見出し（magic、版、本体の長さ）の大きさ。
 pub(crate) const HEADER_LEN: usize = 20;
 const COMPRESSION_LEVEL: u8 = 6;

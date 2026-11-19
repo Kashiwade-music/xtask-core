@@ -1,4 +1,4 @@
-//! Role: 図のファイル（架構図の保存形式）の型・符号化・復号・検証を公開する。
+//! Role: 図のファイル（架構図の保存形式）の符号化・復号の入口を公開する。
 
 mod codec;
 mod model;
@@ -10,12 +10,7 @@ mod validate;
 pub use model::*;
 pub use validate::validate;
 
-use codec::{FORMAT_VERSION, HEADER_LEN, MAGIC};
-
-/// 本体（圧縮前）の長さの上限。
-pub const MAX_BODY_LEN: usize = 64 * 1024 * 1024;
-/// ファイルの長さの上限。viewer は読む前にこれを確かめる。
-pub const MAX_FILE_LEN: u64 = 65 * 1024 * 1024;
+use codec::{HEADER_LEN, MAGIC};
 
 /// 検証に通らない値、上限を超える値は Err（文は validate の文、または "archive is too large"）。
 pub fn encode(archive: &Archive) -> Result<Vec<u8>, String> {
@@ -44,31 +39,3 @@ pub fn decode(bytes: &[u8]) -> Result<Archive, DecodeError> {
     validate(&archive).map_err(DecodeError::Corrupt)?;
     Ok(archive)
 }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DecodeError {
-    /// magic が違う、またはファイルが 20 バイトより短い。
-    NotArchive,
-    /// 読めない版。
-    Version { found: u32 },
-    /// 本体の長さが上限（`MAX_BODY_LEN`）を超える。
-    TooLarge,
-    /// 圧縮・文法・意味の誤り。文は最初の誤り。
-    Corrupt(String),
-}
-
-impl std::fmt::Display for DecodeError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotArchive => write!(formatter, "not an xtask architecture file"),
-            Self::Version { found } => write!(
-                formatter,
-                "unsupported architecture file version {found}; this program reads version {FORMAT_VERSION}"
-            ),
-            Self::TooLarge => write!(formatter, "architecture file is too large"),
-            Self::Corrupt(reason) => write!(formatter, "corrupt architecture file: {reason}"),
-        }
-    }
-}
-
-impl std::error::Error for DecodeError {}

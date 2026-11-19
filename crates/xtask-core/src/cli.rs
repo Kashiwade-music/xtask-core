@@ -17,7 +17,7 @@ const USAGE: &str = concat!(
 #[derive(Debug)]
 pub enum Command {
     Help,
-    Check(Config),
+    Check(Box<Config>),
 }
 
 /// Parse arguments excluding the executable name. `root` is the repository root
@@ -73,7 +73,7 @@ pub fn parse_args(
     if write_seen {
         config.output = Output::Policy;
     }
-    Ok(Command::Check(config))
+    Ok(Command::Check(Box::new(config)))
 }
 
 /// The value of `--root`. A relative path is resolved from the current directory.
@@ -138,7 +138,7 @@ mod tests {
 
     fn check_config(command: Command) -> Config {
         match command {
-            Command::Check(config) => config,
+            Command::Check(config) => *config,
             Command::Help => panic!("expected a check command"),
         }
     }

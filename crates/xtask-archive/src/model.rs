@@ -1,4 +1,4 @@
-//! Role: 図のファイルが持つ図・要素・経路の型を定義する。
+//! Role: 図のファイルの型・復号の誤り・上限と版の定数を定義する（他の module を参照しない葉）。
 
 /// 図のファイルの全体。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,3 +120,38 @@ pub struct Point {
     pub x: i32,
     pub y: i32,
 }
+
+/// 図のファイルの版。読めるのは同じ版だけ。
+pub(crate) const FORMAT_VERSION: u32 = 1;
+/// 本体（圧縮前）の長さの上限。
+pub const MAX_BODY_LEN: usize = 64 * 1024 * 1024;
+/// ファイルの長さの上限。viewer は読む前にこれを確かめる。
+pub const MAX_FILE_LEN: u64 = 65 * 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DecodeError {
+    /// magic が違う、またはファイルが 20 バイトより短い。
+    NotArchive,
+    /// 読めない版。
+    Version { found: u32 },
+    /// 本体の長さが上限（`MAX_BODY_LEN`）を超える。
+    TooLarge,
+    /// 圧縮・文法・意味の誤り。文は最初の誤り。
+    Corrupt(String),
+}
+
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotArchive => write!(formatter, "not an xtask architecture file"),
+            Self::Version { found } => write!(
+                formatter,
+                "unsupported architecture file version {found}; this program reads version {FORMAT_VERSION}"
+            ),
+            Self::TooLarge => write!(formatter, "architecture file is too large"),
+            Self::Corrupt(reason) => write!(formatter, "corrupt architecture file: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for DecodeError {}
