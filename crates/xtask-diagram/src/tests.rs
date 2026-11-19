@@ -9,7 +9,8 @@ use xtask_workspace::{
     Dependency, DependencyKind, Edition, Package, Target, TargetKind, Workspace,
 };
 
-use crate::{Body, Drawing, Input, Outcome, Plan, TargetInput, draw, plan};
+use crate::model::{Body, Drawing};
+use crate::{Input, Outcome, Plan, TargetInput, draw, plan};
 
 fn package(name: &str) -> Package {
     Package {
