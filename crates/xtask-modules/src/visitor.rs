@@ -5,7 +5,7 @@ use crate::{
     model::{Env, Reference},
     symbols::{
         Block, Import, LocalBinding, Modules, NAMESPACES, Namespace, Scope, Target, Textual,
-        declarations, use_imports,
+        declarations, is_local_macro, local_macro_targets, use_imports,
     },
     thread_local_items,
 };
@@ -962,43 +962,6 @@ impl<'ast> Visit<'ast> for References<'_> {
             self.visit_named_macro(mac, &name);
         }
     }
-}
-
-/// Targets a macro invocation path resolves to in the macro namespace.
-pub(crate) fn local_macro_targets(
-    modules: &Modules,
-    textual: &Textual,
-    module: usize,
-    path: &syn::Path,
-    blocks: &[Block],
-) -> BTreeSet<Target> {
-    let mut parts = path
-        .segments
-        .iter()
-        .map(|s| s.ident.to_string())
-        .collect::<Vec<_>>();
-    if path.leading_colon.is_some() {
-        parts.insert(0, String::new());
-    }
-    let targets = modules.resolve(module, blocks, &parts, Some(Namespace::Macro));
-    if is_local_macro(&targets) || parts.len() != 1 || path.leading_colon.is_some() {
-        return targets;
-    }
-    // Bare names also see textual-scope macro_rules of this module and its ancestors.
-    let mut scope = Some(module);
-    while let Some(current) = scope {
-        if let Some(found) = textual.get(current).and_then(|table| table.get(&parts[0])) {
-            return found.clone();
-        }
-        scope = modules.layout.parents.get(current).copied().flatten();
-    }
-    targets
-}
-
-pub(crate) fn is_local_macro(targets: &BTreeSet<Target>) -> bool {
-    targets
-        .iter()
-        .any(|target| matches!(target, Target::Item(_, Namespace::Macro)))
 }
 
 /// Modules containing a trusted item-position invocation of a crate-local macro.
