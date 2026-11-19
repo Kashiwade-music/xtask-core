@@ -13,5 +13,5 @@ mod style;
 mod tests;
 
 pub use analysis::{AnalysisSettings, Features};
-pub use policy::{DiagramTargets, Diagrams, Limits, Policy};
+pub use policy::{DiagramTargets, Diagrams, Limits, Policy, pattern_matches};
 pub use style::{StyleException, StyleRule, StyleSettings};

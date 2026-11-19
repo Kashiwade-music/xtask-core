@@ -143,17 +143,19 @@ impl Policy {
     /// Omitted providers are public; an empty list makes a provider private.
     pub fn visible(&self, provider: &str, consumer: &str) -> bool {
         provider == consumer
-            || self
-                .visible_to
-                .get(provider)
-                .is_none_or(|patterns| patterns.iter().any(|pattern| matches(pattern, consumer)))
+            || self.visible_to.get(provider).is_none_or(|patterns| {
+                patterns
+                    .iter()
+                    .any(|pattern| pattern_matches(pattern, consumer))
+            })
     }
 }
 
-fn matches(pattern: &str, consumer: &str) -> bool {
+/// A pattern is a package name, or a prefix followed by a trailing `*`.
+pub fn pattern_matches(pattern: &str, name: &str) -> bool {
     match pattern.strip_suffix('*') {
-        Some(prefix) => consumer.starts_with(prefix),
-        None => consumer == pattern,
+        Some(prefix) => name.starts_with(prefix),
+        None => name == pattern,
     }
 }
 
