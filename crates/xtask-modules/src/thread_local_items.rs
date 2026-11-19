@@ -2,7 +2,7 @@
 use crate::{
     cfg,
     loader::Source,
-    model::Env,
+    model::{Env, Settings},
     symbols::{Import, Layout, Modules, Namespace, Scope, Target, Textual},
     visitor::local_macro_targets,
 };
@@ -145,7 +145,14 @@ pub(crate) fn standard_statics(
         let macro_use_visible = macro_use_visible(layout, &macro_use, module);
         for (item, _) in source.items() {
             let Item::Macro(item) = item else { continue };
-            if !is_standard_call(&modules, textual, module, &item.mac.path, macro_use_visible) {
+            if !is_standard_call(
+                &modules,
+                textual,
+                module,
+                &item.mac.path,
+                macro_use_visible,
+                env,
+            ) {
                 continue;
             }
             let parsed = syn::parse2::<Statics>(item.mac.tokens.clone()).map_err(|error| {
@@ -186,6 +193,7 @@ fn is_standard_call(
     module: usize,
     path: &syn::Path,
     macro_use: bool,
+    env: Env,
 ) -> bool {
     let targets = local_macro_targets(modules, textual, module, path, &[]);
     if !targets.is_empty() {
@@ -202,17 +210,24 @@ fn is_standard_call(
         .iter()
         .map(|segment| segment.ident.to_string())
         .collect::<Vec<_>>();
+    let settings = env.settings;
     let bare = path.is_ident("thread_local")
         && !unknown_glob
         && !macro_use
-        && !uncertain(modules, module, "thread_local", &mut BTreeSet::new());
+        && !uncertain(
+            modules,
+            module,
+            "thread_local",
+            &mut BTreeSet::new(),
+            settings,
+        );
     let qualified = segments
         .iter()
         .map(String::as_str)
         .eq(["std", "thread_local"])
         && (path.leading_colon.is_some()
             || !unknown_glob
-                && !uncertain(modules, module, "std", &mut BTreeSet::new())
+                && !uncertain(modules, module, "std", &mut BTreeSet::new(), settings)
                 && modules
                     .resolve(module, &[], &["std".to_owned()], Some(Namespace::Type))
                     .is_empty());
@@ -222,7 +237,13 @@ fn is_standard_call(
 /// Whether a name may be bound by something other than the standard library, through an
 /// import of the module, or of a module that it glob-imports, that does not resolve. This
 /// reads the imports collected before resolution and the first pass of the names.
-fn uncertain(modules: &Modules, module: usize, name: &str, visited: &mut BTreeSet<usize>) -> bool {
+fn uncertain(
+    modules: &Modules,
+    module: usize,
+    name: &str,
+    visited: &mut BTreeSet<usize>,
+    settings: &Settings,
+) -> bool {
     if !visited.insert(module) {
         return false;
     }
@@ -232,14 +253,17 @@ fn uncertain(modules: &Modules, module: usize, name: &str, visited: &mut BTreeSe
         }
         let targets = modules.resolve(module, &[], &import.path, None);
         if targets.is_empty() {
-            if import.glob && is_standard_glob(modules, module, &import.path) {
+            // A trusted glob is known to provide no macros (see `Settings::trusted_globs`).
+            let trusted = settings.trusted_globs.contains(&import.path.join("::"));
+            if import.glob && (trusted || is_standard_glob(modules, module, &import.path)) {
                 continue;
             }
             return true;
         }
         if import.glob
             && targets.iter().any(|target| {
-                matches!(target, Target::Module(owner) if uncertain(modules, *owner, name, visited))
+                matches!(target, Target::Module(owner)
+                    if uncertain(modules, *owner, name, visited, settings))
             })
         {
             return true;
