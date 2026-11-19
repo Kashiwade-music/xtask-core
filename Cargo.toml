@@ -22,6 +22,8 @@ xtask-workspace = { path = "crates/xtask-workspace" }
 xtask-modules = { path = "crates/xtask-modules" }
 xtask-policy = { path = "crates/xtask-policy" }
 xtask-layout = { path = "crates/xtask-layout" }
+xtask-style = { path = "crates/xtask-style" }
+xtask-diagram = { path = "crates/xtask-diagram" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

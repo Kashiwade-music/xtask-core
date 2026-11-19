@@ -1,96 +1,118 @@
-//! Role: 独立した検査を上限付きで並列実行し、入力順に結果を返す。
-use std::sync::atomic::{AtomicUsize, Ordering};
+//! Role: 入力ごとに一つの scoped thread で処理し、panic を入力ごとの誤りにする。
+use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
+use std::sync::mpsc;
+use std::thread;
 
+/// 入力ごとの結果（入力と同じ順）。f が panic した入力は Err（panic の文）。
+/// 同時に動く thread は CPU の数まで。
 pub(crate) fn map<T: Sync, R: Send>(
     inputs: &[T],
-    operation: impl Fn(&T) -> R + Sync,
-) -> Result<Vec<R>, String> {
-    let workers = std::thread::available_parallelism()
-        .map_or(1, usize::from)
-        .min(8)
-        .min(inputs.len());
-    map_with_workers(inputs, operation, workers)
+    f: impl Fn(&T) -> R + Sync,
+) -> Vec<Result<R, String>> {
+    let limit = thread::available_parallelism().map_or(1, NonZeroUsize::get);
+    map_with_limit(inputs, limit, f)
 }
 
-fn map_with_workers<T: Sync, R: Send>(
+pub(crate) fn map_with_limit<T: Sync, R: Send>(
     inputs: &[T],
-    operation: impl Fn(&T) -> R + Sync,
-    workers: usize,
-) -> Result<Vec<R>, String> {
-    if workers <= 1 {
-        return Ok(inputs.iter().map(operation).collect());
-    }
-    let next = AtomicUsize::new(0);
-    std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..workers)
-            .map(|_| {
-                let next = &next;
-                let operation = &operation;
-                scope.spawn(move || {
-                    let mut results = Vec::new();
-                    loop {
-                        let index = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(input) = inputs.get(index) else {
-                            break;
-                        };
-                        results.push((index, operation(input)));
-                    }
-                    results
-                })
-            })
-            .collect();
-        let mut results = Vec::with_capacity(inputs.len());
-        let mut failed = false;
-        // Join every worker even if one panics, so scope does not rethrow it.
-        for handle in handles {
-            match handle.join() {
-                Ok(completed) => results.extend(completed),
-                Err(_) => failed = true,
+    limit: usize,
+    f: impl Fn(&T) -> R + Sync,
+) -> Vec<Result<R, String>> {
+    let limit = limit.max(1);
+    let mut finished = BTreeMap::new();
+    thread::scope(|scope| {
+        let (sender, receiver) = mpsc::channel::<usize>();
+        let mut running = BTreeMap::new();
+        let mut next = 0;
+        loop {
+            while running.len() < limit && next < inputs.len() {
+                let signal = Finished {
+                    index: next,
+                    sender: sender.clone(),
+                };
+                let (input, f) = (&inputs[next], &f);
+                running.insert(
+                    next,
+                    scope.spawn(move || {
+                        let _signal = signal;
+                        f(input)
+                    }),
+                );
+                next += 1;
             }
+            if running.is_empty() {
+                break;
+            }
+            let index = receiver.recv().expect("a running worker holds a sender");
+            let handle = running
+                .remove(&index)
+                .expect("the finished worker is running");
+            finished.insert(
+                index,
+                handle.join().map_err(|payload| panic_message(&*payload)),
+            );
         }
-        if failed {
-            return Err("parallel check worker panicked".into());
-        }
-        results.sort_unstable_by_key(|(index, _)| *index);
-        Ok(results.into_iter().map(|(_, result)| result).collect())
-    })
+    });
+    finished.into_values().collect()
+}
+
+/// worker の終わり（正常の return と panic の巻戻しの両方）で index を送る。
+struct Finished {
+    index: usize,
+    sender: mpsc::Sender<usize>,
+}
+
+impl Drop for Finished {
+    fn drop(&mut self) {
+        let _ = self.sender.send(self.index);
+    }
+}
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_owned()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "worker panicked".to_owned()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    //! Role: 並列検査の順序、全件実行、およびworkerの失敗通知を検証する。
+    //! Role: 並列処理の結果の順序、panic の隔離、送るだけの型の扱いを検証する。
     use super::*;
 
     #[test]
-    fn results_match_sequential_order_including_errors() {
-        let inputs: Vec<_> = (0..100).collect();
-        let operation = |&value: &usize| {
-            if value % 7 == 0 {
-                Err(value)
-            } else {
-                Ok(value * 2)
-            }
-        };
-        let sequential = map_with_workers(&inputs, operation, 1).unwrap();
-        assert_eq!(map_with_workers(&inputs, operation, 8).unwrap(), sequential);
-        assert!(
-            map_with_workers::<usize, usize>(&[], |value| *value, 8)
-                .unwrap()
-                .is_empty()
+    fn results_follow_input_order() {
+        assert_eq!(
+            map_with_limit(&[3, 1, 2], 2, |x| x * 10),
+            vec![Ok(30), Ok(10), Ok(20)]
         );
     }
 
     #[test]
-    fn worker_panic_is_reported_after_all_workers_are_joined() {
-        let error = map_with_workers(
-            &[0, 1, 2],
-            |&value| {
-                assert_ne!(value, 1, "worker failure");
-                value
-            },
-            2,
-        )
-        .unwrap_err();
-        assert!(error.contains("worker panicked"));
+    fn panic_isolated_with_one_worker() {
+        let results = map_with_limit(&[0, 1], 1, |&x| if x == 0 { panic!("boom") } else { x });
+        assert_eq!(results, vec![Err("boom".to_owned()), Ok(1)]);
+    }
+
+    #[test]
+    fn every_input_may_panic() {
+        let results: Vec<Result<u8, String>> =
+            map_with_limit(&[0, 1, 2], 2, |&x: &u8| -> u8 { panic!("p{x}") });
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(Result::is_err));
+    }
+
+    #[test]
+    fn send_only_results() {
+        let results = map_with_limit(&[1_u8, 2, 3], 2, |&x| std::cell::Cell::new(x));
+        let values: Vec<u8> = results
+            .into_iter()
+            .map(|result| result.expect("no panic").get())
+            .collect();
+        assert_eq!(values, vec![1, 2, 3]);
     }
 }
