@@ -1,0 +1,10 @@
+[limits]
+max_code_lines = 1000
+
+[analysis]
+# kivact の prelude を未知の提供元とみなさない。prelude は attribute の component も与えるが、
+# viewer は使わない。使うときは trusted_attributes にも書く（設計書 DEC-9）。
+trusted_globs = ["kivact::prelude"]
+
+[visible_to]
+xtask-render = ["xtask-viewer"]

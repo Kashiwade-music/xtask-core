@@ -1,0 +1,99 @@
+[workspace]
+members = ["crates/xtask-render", "crates/xtask-viewer"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+kivact = { git = "https://github.com/Kashiwade-music/kivact", rev = "2b8df5aceea40c9ae23950f9d6c942559c89e840" }
+xtask-archive = { path = "../crates/xtask-archive" }
+xtask-render = { path = "crates/xtask-render" }
+
+# A standalone App reads profiles only from its own root manifest; these are Kivact's recommended release settings (size and speed; fat LTO lengthens release builds).
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = "s"
+strip = "symbols"
+# panic stays unwind: an embedded UI (a DAW plugin) must not unwind a panic into its host.
+
+# The drawing, shaping and layout hot paths favour speed.
+[profile.release.package.vello_cpu]
+opt-level = 3
+[profile.release.package.vello_common]
+opt-level = 3
+[profile.release.package.fearless_simd]
+opt-level = 3
+[profile.release.package.kurbo]
+opt-level = 3
+[profile.release.package.skrifa]
+opt-level = 3
+[profile.release.package.read-fonts]
+opt-level = 3
+[profile.release.package.harfrust]
+opt-level = 3
+[profile.release.package.parley]
+opt-level = 3
+[profile.release.package.taffy]
+opt-level = 3
+[profile.release.package.kivact-layout]
+opt-level = 3
+[profile.release.package.kivact-engine]
+opt-level = 3
+[profile.release.package.arvane-render]
+opt-level = 3
+[profile.release.package.arvane-compose]
+opt-level = 3
+[profile.release.package.arvane-text]
+opt-level = 3
+
+# Third-party crates that run only on the asset worker thread (SVG parsing
+# and rasterizing, image decoding) or wait on the OS (file dialogs, the
+# clipboard) favour size. Crates on the UI thread keep their level, even
+# when they look cold: the accessibility adapter (AccessKit, every update
+# while assistive technology is active), shader validation and translation
+# (naga), date, number and message formatting (ICU, kivact-i18n) and SVG
+# path data (svgtypes, `Path::parse_svg`).
+[profile.release.package.usvg]
+opt-level = "z"
+[profile.release.package.resvg]
+opt-level = "z"
+[profile.release.package.tiny-skia]
+opt-level = "z"
+[profile.release.package.tiny-skia-path]
+opt-level = "z"
+[profile.release.package.rustybuzz]
+opt-level = "z"
+[profile.release.package.ttf-parser]
+opt-level = "z"
+[profile.release.package.fontdb]
+opt-level = "z"
+[profile.release.package.roxmltree]
+opt-level = "z"
+[profile.release.package.simplecss]
+opt-level = "z"
+[profile.release.package.image]
+opt-level = "z"
+[profile.release.package.zune-jpeg]
+opt-level = "z"
+[profile.release.package.zune-core]
+opt-level = "z"
+[profile.release.package.image-webp]
+opt-level = "z"
+[profile.release.package.png]
+opt-level = "z"
+[profile.release.package.gif]
+opt-level = "z"
+[profile.release.package.fdeflate]
+opt-level = "z"
+[profile.release.package.miniz_oxide]
+opt-level = "z"
+[profile.release.package.flate2]
+opt-level = "z"
+[profile.release.package.rfd]
+opt-level = "z"
+[profile.release.package.arboard]
+opt-level = "z"
