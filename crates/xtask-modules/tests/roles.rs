@@ -351,7 +351,6 @@ fn static_inner_doc_attributes_and_block_docs_have_the_same_semantics() {
         "#![doc = \"Role: Coordinate modules.\"]\nfn run() {}",
         "/*! Role: Coordinate modules. */\nfn run() {}",
         "//! Role: Coordinate modules.\r\nfn run() {}\r\n",
-        "//! General module documentation.\n//! Role: Coordinate modules.\n//! More details.\nfn run() {}",
     ] {
         let graph = root(source);
         assert_eq!(
@@ -364,6 +363,32 @@ fn static_inner_doc_attributes_and_block_docs_have_the_same_semantics() {
             graph.diagnostics
         );
     }
+    let graph = root(
+        "//! General module documentation.\n//! Role: Coordinate modules.\n//! More details.\nfn run() {}",
+    );
+    assert!(graph.modules[0].role.is_err());
+    assert!(
+        graph
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("Role must be the first line of the first inner doc")),
+        "{:?}",
+        graph.diagnostics
+    );
+}
+
+#[test]
+fn role_must_be_first() {
+    let graph = root("//! Doc.\n//! Role: x\nfn run() {}");
+    assert!(graph.modules[0].role.is_err());
+    assert!(
+        graph
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("Role must be the first line of the first inner doc")),
+        "{:?}",
+        graph.diagnostics
+    );
 }
 
 #[test]

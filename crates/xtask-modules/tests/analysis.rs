@@ -835,10 +835,41 @@ fn formatted_macro_patterns_guards_and_json_values_are_references() {
         mod a {pub fn f()->usize {1} pub enum E {V}}
         mod b {fn f(){
             let _ = matches!(0, _ if crate::a::f() > 0);
-            let _ = serde_json::json!({"outer":[{"value": crate::a::f()}]});
             todo!("{}", crate::a::f());
         }}
     "#,
+        )],
+        Options::default(),
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(edges(&result), BTreeSet::from([("crate::b", "crate::a")]));
+}
+
+#[test]
+fn json_requires_trust() {
+    let source = r#"
+        mod a { pub fn f() -> u8 { 1 } }
+        fn f() { serde_json::json!({"a": crate::a::f()}) }
+    "#;
+    let untrusted = graph(&[("lib.rs", source)], Options::default());
+    assert!(!untrusted.diagnostics.is_empty());
+    let trusted = graph(
+        &[("lib.rs", source)],
+        Options {
+            trusted_macros: BTreeSet::from(["serde_json::json".into()]),
+            ..Default::default()
+        },
+    );
+    assert!(trusted.diagnostics.is_empty(), "{:?}", trusted.diagnostics);
+    assert!(edges(&trusted).is_empty());
+}
+
+#[test]
+fn implicit_format_capture() {
+    let result = graph(
+        &[(
+            "lib.rs",
+            "mod a { pub const N: u8 = 1; } mod b { use crate::a::N; fn f() -> String { format!(\"{N}\") } }",
         )],
         Options::default(),
     );

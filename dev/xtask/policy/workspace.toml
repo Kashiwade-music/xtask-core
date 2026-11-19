@@ -6,6 +6,7 @@ max_code_lines = 1000
 [analysis]
 trusted_attributes = ["serde"]
 trusted_derives = ["Deserialize", "Serialize"]
+trusted_macros = ["json", "serde_json::json", "Token", "syn::Token"]
 
 [visible_to]
 xtask-source = ["xtask-core"]

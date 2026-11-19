@@ -139,7 +139,7 @@ pub(crate) fn expansion_diagnostics(
 ) -> Result<Vec<String>, String> {
     let mut diagnostics = Vec::new();
     for meta in metas {
-        let name = path_text(meta.path());
+        let name = crate::ast::path_text(meta.path());
         if name == "derive" {
             derive_diagnostics(meta, env, intrinsic_derives, &mut diagnostics)?;
         } else if !is_modeled_attribute(&name)
@@ -150,15 +150,6 @@ pub(crate) fn expansion_diagnostics(
         }
     }
     Ok(diagnostics)
-}
-
-/// The path joined with `::`, as written.
-fn path_text(path: &syn::Path) -> String {
-    path.segments
-        .iter()
-        .map(|s| s.ident.to_string())
-        .collect::<Vec<_>>()
-        .join("::")
 }
 
 /// Adds a diagnostic for each derive of a `derive` attribute that is neither intrinsic nor trusted.

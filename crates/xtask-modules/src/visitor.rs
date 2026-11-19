@@ -1,6 +1,7 @@
 //! Role: 有効なRust構文を走査し、名前解決済みのモジュール参照を収集する。
 use crate::{
     ast, cfg, loader,
+    macros::{self, Arguments, MacroGrammar},
     model::{Env, Reference},
     symbols::{
         Block, Import, LocalBinding, Modules, NAMESPACES, Namespace, Scope, Target, Textual,
@@ -11,7 +12,6 @@ use crate::{
 use std::{collections::BTreeSet, path::Path};
 use syn::{
     Item,
-    parse::Parser,
     spanned::Spanned,
     visit::{self, Visit},
 };
@@ -132,7 +132,7 @@ impl References<'_> {
         } else {
             crate::intrinsic::DERIVES
                 .iter()
-                .map(|s| s.to_string())
+                .map(|(name, _)| name.to_string())
                 .collect()
         };
         for name in self.visible_names() {
@@ -381,14 +381,6 @@ impl References<'_> {
         }
     }
 
-    /// Whether the scopes that a macro call sees name an unknown external glob.
-    fn macro_provider_unknown(&self, parts: &[String]) -> bool {
-        self.unknown_glob_visible()
-            || parts
-                .first()
-                .is_some_and(|name| name == "json" || name == "Token")
-    }
-
     /// Records the references of a path in one namespace, and visits its qualified self and
     /// the generic arguments of its segments.
     fn path_in(&mut self, qself: Option<&syn::QSelf>, path: &syn::Path, namespace: Namespace) {
@@ -493,7 +485,7 @@ impl References<'_> {
     /// Records the edges of a call whose macro is local, and reports it unless the macro is trusted.
     fn local_macro_call(&mut self, mac: &syn::Macro, local_macro: BTreeSet<Target>) {
         self.edge(local_macro);
-        let path = macro_path_text(&mac.path);
+        let path = ast::path_text(&mac.path);
         if !self.env.settings.trusted_macros.contains(&path) {
             let message = format!(
                 "{}: local macro expansion is unsupported: {path}",
@@ -556,7 +548,7 @@ impl References<'_> {
             }
             return name.map(str::to_owned);
         }
-        if self.macro_provider_unknown(parts) {
+        if self.unknown_glob_visible() {
             let message = format!(
                 "{}: macro provider cannot be established: {}",
                 self.id(),
@@ -568,23 +560,25 @@ impl References<'_> {
         Some(parts.last().cloned().unwrap_or_default())
     }
 
-    /// Visits the arguments of a built-in macro by its name. A name whose grammar is not modeled
-    /// reports a diagnostic.
+    /// Visits the arguments of a built-in macro by its grammar. A name that the grammar table does
+    /// not model reports a diagnostic, unless it has no arguments to visit.
     fn visit_named_macro(&mut self, mac: &syn::Macro, name: &str) {
-        let modeled = match name {
-            "json" => {
-                self.visit_json(mac);
-                true
-            }
-            "Token" => true,
-            "matches" => self.visit_matches(mac),
-            "assert" | "assert_eq" | "assert_ne" | "debug_assert" | "debug_assert_eq"
-            | "debug_assert_ne" | "format" | "format_args" | "print" | "println" | "eprint"
-            | "eprintln" | "panic" | "write" | "writeln" | "dbg" | "vec" | "todo"
-            | "unimplemented" => self.visit_arguments(mac, name),
-            "stringify" | "concat" | "env" | "option_env" | "file" | "line" | "column"
-            | "module_path" | "cfg" | "include_str" | "include_bytes" => true,
-            _ => false,
+        let modeled = match macros::grammar(name) {
+            Some(grammar) => self.visit_grammar(mac, grammar),
+            None => matches!(
+                name,
+                "stringify"
+                    | "concat"
+                    | "env"
+                    | "option_env"
+                    | "file"
+                    | "line"
+                    | "column"
+                    | "module_path"
+                    | "cfg"
+                    | "include_str"
+                    | "include_bytes"
+            ),
         };
         if !modeled {
             let message = format!("{}: macro token analysis is unsupported: {name}", self.id());
@@ -592,61 +586,49 @@ impl References<'_> {
         }
     }
 
-    /// Visits the expressions of a `serde_json::json!` call.
-    fn visit_json(&mut self, mac: &syn::Macro) {
-        match crate::json::expressions(mac.tokens.clone()) {
-            Ok(expressions) => {
-                for expr in &expressions {
-                    self.visit_expr(expr);
-                }
+    /// Visits the arguments of a call by its grammar. Returns false when the tokens do not match it.
+    fn visit_grammar(&mut self, mac: &syn::Macro, grammar: MacroGrammar) -> bool {
+        if let MacroGrammar::Matches { trailing_format } = grammar {
+            return self.visit_matches(mac, trailing_format);
+        }
+        match macros::arguments(mac.tokens.clone(), grammar) {
+            Ok(arguments) => {
+                self.visit_arguments(arguments);
+                true
             }
-            Err(_) => {
-                let message = format!(
-                    "{}: unsupported serde_json::json! argument grammar",
-                    self.id()
-                );
-                self.diagnostics.insert(message);
-            }
+            Err(_) => false,
         }
     }
 
-    /// Visits a `matches!` call: its expression, then its pattern and guard in a block of their
-    /// own. Returns false when the arguments do not parse.
-    fn visit_matches(&mut self, mac: &syn::Macro) -> bool {
-        let Ok(MatchesArgs(expr, pat, guard)) = syn::parse2::<MatchesArgs>(mac.tokens.clone())
-        else {
+    /// Visits a `matches!`-style call: its expression, its pattern and guard in a block of their
+    /// own, then its format arguments. Returns false when the arguments do not parse.
+    fn visit_matches(&mut self, mac: &syn::Macro, trailing_format: bool) -> bool {
+        let Ok(arguments) = macros::matches_arguments(mac.tokens.clone(), trailing_format) else {
             return false;
         };
-        self.visit_expr(&expr);
+        self.visit_expr(&arguments.expr);
         self.blocks.push(Block::default());
-        self.visit_pat(&pat);
-        self.bind_pattern(&pat);
-        if let Some(guard) = guard {
-            self.visit_expr(&guard);
+        self.visit_pat(&arguments.pattern);
+        self.bind_pattern(&arguments.pattern);
+        if let Some(guard) = &arguments.guard {
+            self.visit_expr(guard);
         }
         self.blocks.pop();
+        self.visit_arguments(arguments.format);
         true
     }
 
-    /// Visits the comma-separated arguments of a formatting or assertion macro, or the operands of
-    /// `vec![value; count]`. Returns false when the arguments do not parse.
-    fn visit_arguments(&mut self, mac: &syn::Macro, name: &str) -> bool {
-        let parser = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated;
-        if let Ok(args) = parser.parse2(mac.tokens.clone()) {
-            for arg in &args {
-                self.visit_expr(arg);
+    /// Visits the expressions of a call, then the names that its format string captures: each is a
+    /// reference to a value of the scope.
+    fn visit_arguments(&mut self, arguments: Arguments) {
+        for expr in &arguments.exprs {
+            self.visit_expr(expr);
+        }
+        for name in &arguments.captures {
+            if let Some(path) = macros::capture_path(name) {
+                self.reference(&path, Namespace::Value);
             }
-            return true;
         }
-        if name != "vec" {
-            return false;
-        }
-        let Ok(RepeatArgs(value, count)) = syn::parse2::<RepeatArgs>(mac.tokens.clone()) else {
-            return false;
-        };
-        self.visit_expr(&value);
-        self.visit_expr(&count);
-        true
     }
 }
 
@@ -767,7 +749,7 @@ impl<'ast> Visit<'ast> for References<'_> {
             .stmts
             .iter()
             .map(|statement| match statement {
-                syn::Stmt::Item(item) => self.enabled(loader::attrs(item)),
+                syn::Stmt::Item(item) => self.enabled(ast::attrs(item)),
                 _ => true,
             })
             .collect::<Vec<_>>();
@@ -888,7 +870,7 @@ impl<'ast> Visit<'ast> for References<'_> {
             .env
             .settings
             .trusted_macros
-            .contains(&macro_path_text(&item.mac.path))
+            .contains(&ast::path_text(&item.mac.path))
         {
             let local_macro = local_macro_targets(
                 &self.modules,
@@ -945,7 +927,7 @@ impl<'ast> Visit<'ast> for References<'_> {
             .env
             .settings
             .trusted_macros
-            .contains(&macro_path_text(&mac.path))
+            .contains(&ast::path_text(&mac.path))
         {
             return;
         }
@@ -953,15 +935,6 @@ impl<'ast> Visit<'ast> for References<'_> {
             self.visit_named_macro(mac, &name);
         }
     }
-}
-
-/// Macro invocation path as written, joined with `::` and without a leading `::`.
-fn macro_path_text(path: &syn::Path) -> String {
-    path.segments
-        .iter()
-        .map(|s| s.ident.to_string())
-        .collect::<Vec<_>>()
-        .join("::")
 }
 
 /// Targets a macro invocation path resolves to in the macro namespace.
@@ -1017,7 +990,7 @@ pub(crate) fn opaque_modules(
                 || !env
                     .settings
                     .trusted_macros
-                    .contains(&macro_path_text(&item.mac.path))
+                    .contains(&ast::path_text(&item.mac.path))
             {
                 continue;
             }
@@ -1033,37 +1006,4 @@ pub(crate) fn opaque_modules(
         }
     }
     opaque
-}
-
-/// The arguments of `matches!(expression, pattern if guard)`, with an optional trailing comma.
-struct MatchesArgs(syn::Expr, syn::Pat, Option<syn::Expr>);
-
-impl syn::parse::Parse for MatchesArgs {
-    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        let expr = input.parse()?;
-        input.parse::<syn::Token![,]>()?;
-        let pat = syn::Pat::parse_multi_with_leading_vert(input)?;
-        let guard = if input.peek(syn::Token![if]) {
-            input.parse::<syn::Token![if]>()?;
-            Some(input.parse()?)
-        } else {
-            None
-        };
-        if input.peek(syn::Token![,]) {
-            input.parse::<syn::Token![,]>()?;
-        }
-        Ok(Self(expr, pat, guard))
-    }
-}
-
-/// The arguments of `vec![value; count]`.
-struct RepeatArgs(syn::Expr, syn::Expr);
-
-impl syn::parse::Parse for RepeatArgs {
-    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
-        let value = input.parse()?;
-        input.parse::<syn::Token![;]>()?;
-        let count = input.parse()?;
-        Ok(Self(value, count))
-    }
 }

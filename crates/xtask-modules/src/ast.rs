@@ -1,6 +1,36 @@
 //! Role: Rust構文の各種ノードから属性を取り出す共通処理を提供する。
 //! Attribute access that does not inspect macro token trees.
-use syn::{Attribute, Expr};
+use syn::{Attribute, Expr, Item};
+
+/// The path joined with `::`, as written, without a leading `::`.
+pub(crate) fn path_text(path: &syn::Path) -> String {
+    path.segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+pub(crate) fn attrs(item: &Item) -> &[Attribute] {
+    match item {
+        Item::Const(i) => &i.attrs,
+        Item::Enum(i) => &i.attrs,
+        Item::ExternCrate(i) => &i.attrs,
+        Item::Fn(i) => &i.attrs,
+        Item::ForeignMod(i) => &i.attrs,
+        Item::Impl(i) => &i.attrs,
+        Item::Macro(i) => &i.attrs,
+        Item::Mod(i) => &i.attrs,
+        Item::Static(i) => &i.attrs,
+        Item::Struct(i) => &i.attrs,
+        Item::Trait(i) => &i.attrs,
+        Item::TraitAlias(i) => &i.attrs,
+        Item::Type(i) => &i.attrs,
+        Item::Union(i) => &i.attrs,
+        Item::Use(i) => &i.attrs,
+        _ => &[],
+    }
+}
 
 pub(crate) fn expr_attrs(expr: &Expr) -> &[Attribute] {
     match expr {
