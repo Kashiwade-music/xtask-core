@@ -360,6 +360,7 @@ dependencies = [
  "proc-macro2",
  "syn 2.0.119",
  "tempfile",
+ "xtask-source",
 ]
 
 [[package]]

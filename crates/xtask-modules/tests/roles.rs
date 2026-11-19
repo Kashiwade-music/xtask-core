@@ -1,30 +1,24 @@
 //! Role: Verify module role declarations and their scope.
 
+mod common;
+
+use common::{Options, write_fixture};
 use std::{collections::BTreeSet, fs};
-use xtask_modules::{
-    AnalysisOptions, DEFAULT_MAX_ROLE_CHARS, ModuleGraph, analyze, crate_role,
-    crate_role_with_limit,
-};
+use xtask_modules::ModuleGraph;
 
 // Role fixtures are written verbatim: annotation injection would mask failures.
-fn graph(files: &[(&str, &str)], options: AnalysisOptions) -> ModuleGraph {
-    let directory = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    for (name, source) in files {
-        let path = directory.path().join(name);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, source).unwrap();
-    }
-    analyze(&directory.path().join("lib.rs"), &options).unwrap()
+fn graph(files: &[(&str, &str)], options: Options) -> ModuleGraph {
+    let directory = write_fixture(files);
+    options.analyze(&directory.path().join("lib.rs")).unwrap()
 }
 
 fn root(source: &str) -> ModuleGraph {
-    graph(&[("lib.rs", source)], AnalysisOptions::default())
+    graph(&[("lib.rs", source)], Options::default())
 }
 
 fn root_file(source: &str) -> (tempfile::TempDir, std::path::PathBuf) {
-    let directory = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let directory = write_fixture(&[("lib.rs", source)]);
     let path = directory.path().join("lib.rs");
-    fs::write(&path, source).unwrap();
     (directory, path)
 }
 
@@ -32,7 +26,7 @@ fn root_file(source: &str) -> (tempfile::TempDir, std::path::PathBuf) {
 fn missing_role_is_a_diagnostic_and_keeps_the_module() {
     let graph = root("pub fn run() {}");
     assert_eq!(graph.modules.len(), 1);
-    assert_eq!(graph.modules[0].role, None);
+    assert_eq!(graph.modules[0].role.as_deref().ok(), None);
     assert_eq!(graph.diagnostics.len(), 1);
     assert!(graph.diagnostics[0].contains("missing module role"));
 }
@@ -54,13 +48,13 @@ fn root_external_inline_and_path_modules_keep_their_own_roles() {
                 "//! Role: Provide renamed behavior.\npub fn run() {}",
             ),
         ],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
     let roles: BTreeSet<_> = graph
         .modules
         .iter()
-        .map(|module| (module.id.as_str(), module.role.as_deref()))
+        .map(|module| (module.id.as_str(), module.role.as_deref().ok()))
         .collect();
     assert_eq!(
         roles,
@@ -81,7 +75,7 @@ fn duplicate_role_declarations_fail_even_when_identical() {
         "//! Role: Coordinate modules.\n//! Role: Another responsibility.\nfn run() {}",
     ] {
         let graph = root(source);
-        assert_eq!(graph.modules[0].role, None);
+        assert_eq!(graph.modules[0].role.as_deref().ok(), None);
         assert!(
             graph
                 .diagnostics
@@ -101,7 +95,7 @@ fn empty_or_malformed_role_descriptions_are_errors() {
         "//! Role:     \nfn run() {}",
     ] {
         let graph = root(source);
-        assert_eq!(graph.modules[0].role, None);
+        assert_eq!(graph.modules[0].role.as_deref().ok(), None);
         assert!(!graph.diagnostics.is_empty(), "{source:?}");
     }
 }
@@ -112,12 +106,12 @@ fn unicode_role_length_counts_characters_and_rejects_excessive_length() {
     let graph = root(&short);
     assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
     assert_eq!(
-        graph.modules[0].role.as_deref(),
+        graph.modules[0].role.as_deref().ok(),
         Some("責".repeat(80).as_str())
     );
     let long = format!("//! Role: {}\nfn run() {{}}", "責".repeat(81));
     let graph = root(&long);
-    assert_eq!(graph.modules[0].role, None);
+    assert_eq!(graph.modules[0].role.as_deref().ok(), None);
     assert!(!graph.diagnostics.is_empty());
 }
 
@@ -132,23 +126,23 @@ fn configured_limit_applies_to_root_external_and_inline_modules() {
     ];
     let allowed = graph(
         &files,
-        AnalysisOptions {
+        Options {
             max_role_chars: 2,
             ..Default::default()
         },
     );
     assert!(allowed.diagnostics.is_empty(), "{:?}", allowed.diagnostics);
     assert_eq!(allowed.modules.len(), 3);
-    assert!(allowed.modules.iter().all(|module| module.role.is_some()));
+    assert!(allowed.modules.iter().all(|module| module.role.is_ok()));
     let rejected = graph(
         &files,
-        AnalysisOptions {
+        Options {
             max_role_chars: 1,
             ..Default::default()
         },
     );
     assert_eq!(rejected.modules.len(), 3);
-    assert!(rejected.modules.iter().all(|module| module.role.is_none()));
+    assert!(rejected.modules.iter().all(|module| module.role.is_err()));
     assert_eq!(rejected.diagnostics.len(), 3);
     assert!(
         rejected
@@ -164,7 +158,7 @@ fn configured_limit_can_exceed_eighty_and_counts_unicode_scalars() {
     let long_source = format!("//! Role: {long_role}\nmod inline {{\n//! Role: {long_role}\n}}");
     let allowed = graph(
         &[("lib.rs", &long_source)],
-        AnalysisOptions {
+        Options {
             max_role_chars: 90,
             ..Default::default()
         },
@@ -174,16 +168,16 @@ fn configured_limit_can_exceed_eighty_and_counts_unicode_scalars() {
         allowed
             .modules
             .iter()
-            .all(|module| module.role.as_deref() == Some(long_role.as_str()))
+            .all(|module| module.role.as_deref().ok() == Some(long_role.as_str()))
     );
     let rejected = graph(
         &[("lib.rs", &long_source)],
-        AnalysisOptions {
+        Options {
             max_role_chars: 89,
             ..Default::default()
         },
     );
-    assert!(rejected.modules.iter().all(|module| module.role.is_none()));
+    assert!(rejected.modules.iter().all(|module| module.role.is_err()));
     assert!(
         rejected
             .diagnostics
@@ -196,88 +190,62 @@ fn configured_limit_can_exceed_eighty_and_counts_unicode_scalars() {
     let source = format!("//! Role: {scalars}\n");
     let allowed = graph(
         &[("lib.rs", &source)],
-        AnalysisOptions {
+        Options {
             max_role_chars: 3,
             ..Default::default()
         },
     );
-    assert_eq!(allowed.modules[0].role.as_deref(), Some(scalars));
+    assert_eq!(allowed.modules[0].role.as_deref().ok(), Some(scalars));
     assert!(allowed.diagnostics.is_empty());
     let rejected = graph(
         &[("lib.rs", &source)],
-        AnalysisOptions {
+        Options {
             max_role_chars: 2,
             ..Default::default()
         },
     );
-    assert_eq!(rejected.modules[0].role, None);
+    assert_eq!(rejected.modules[0].role.as_deref().ok(), None);
     assert!(rejected.diagnostics[0].contains("at most 2 Unicode characters"));
 }
 
 #[test]
-fn root_only_api_matches_analysis_limits_and_preserves_default_api() {
-    assert_eq!(DEFAULT_MAX_ROLE_CHARS, 80);
-    assert_eq!(
-        AnalysisOptions::default().max_role_chars,
-        DEFAULT_MAX_ROLE_CHARS
-    );
+fn root_role_limit_applies_to_the_root_module_alone() {
     let (_directory, path) = root_file("//! Role: 責任\n");
-    assert_eq!(crate_role(&path).unwrap(), "責任");
-    assert_eq!(crate_role_with_limit(&path, 2).unwrap(), "責任");
-    assert!(
-        crate_role_with_limit(&path, 1)
-            .unwrap_err()
-            .contains("at most 1 Unicode characters")
-    );
-    let result = analyze(
-        &path,
-        &AnalysisOptions {
-            max_role_chars: 1,
+    let role = |limit: usize| {
+        Options {
+            max_role_chars: limit,
             ..Default::default()
-        },
-    )
-    .unwrap();
-    assert_eq!(result.modules[0].role, None);
-    assert!(result.diagnostics[0].contains("at most 1 Unicode characters"));
+        }
+        .analyze(&path)
+        .unwrap()
+    };
+    assert_eq!(role(2).modules[0].role.as_deref().ok(), Some("責任"));
+    let rejected = role(1);
+    assert_eq!(rejected.modules[0].role.as_deref().ok(), None);
+    assert!(rejected.diagnostics[0].contains("at most 1 Unicode characters"));
 
     let long_role = "責".repeat(81);
-    fs::write(
-        &path,
-        format!("//! Role: {long_role}\nmod missing_file; include!(\"absent.rs\");"),
-    )
-    .unwrap();
-    assert!(
-        crate_role(&path)
-            .unwrap_err()
-            .contains("at most 80 Unicode characters")
+    fs::write(&path, format!("//! Role: {long_role}\nfn run() {{}}")).unwrap();
+    let default = Options::default().analyze(&path).unwrap();
+    assert_eq!(default.modules[0].role.as_deref().ok(), None);
+    assert!(default.diagnostics[0].contains("at most 80 Unicode characters"));
+    assert_eq!(
+        role(81).modules[0].role.as_deref().ok(),
+        Some(long_role.as_str())
     );
-    assert_eq!(crate_role_with_limit(&path, 81).unwrap(), long_role);
 }
 
 #[test]
-fn zero_limit_is_a_configuration_error_in_all_configurable_apis() {
+fn zero_limit_is_a_configuration_error() {
     let (_directory, path) = root_file("//! Role: Valid role\n");
-    let error = analyze(
-        &path,
-        &AnalysisOptions {
-            max_role_chars: 0,
-            ..Default::default()
-        },
-    )
+    let error = Options {
+        max_role_chars: 0,
+        ..Default::default()
+    }
+    .analyze(&path)
     .unwrap_err();
     assert!(error.contains("(crate): max_role_chars must be greater than 0"));
     assert!(error.contains("lib.rs"));
-    assert!(
-        crate_role_with_limit(&path, 0)
-            .unwrap_err()
-            .contains("max_role_chars must be greater than 0")
-    );
-    let absent = path.with_file_name("not-present.rs");
-    assert!(
-        crate_role_with_limit(&absent, 0)
-            .unwrap_err()
-            .contains("max_role_chars must be greater than 0")
-    );
 }
 
 #[test]
@@ -288,7 +256,7 @@ fn control_characters_and_multiline_static_doc_values_are_rejected() {
         "#![doc = \"Role: First line\\nsecond line\"]\nfn run() {}",
     ] {
         let graph = root(source);
-        assert_eq!(graph.modules[0].role, None);
+        assert_eq!(graph.modules[0].role.as_deref().ok(), None);
         assert!(!graph.diagnostics.is_empty(), "{source:?}");
     }
 }
@@ -303,7 +271,7 @@ fn outer_docs_comments_and_string_contents_cannot_supply_a_role() {
         "#[doc = \"Role: Describe the following function.\"]\nfn run() {}",
     ] {
         let graph = root(source);
-        assert_eq!(graph.modules[0].role, None);
+        assert_eq!(graph.modules[0].role.as_deref().ok(), None);
         assert!(
             graph
                 .diagnostics
@@ -325,12 +293,12 @@ fn parent_or_declaration_docs_do_not_fill_a_childs_missing_role() {
             ),
             ("child.rs", "pub fn run() {}"),
         ],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert_eq!(graph.diagnostics.len(), 2, "{:?}", graph.diagnostics);
     for id in ["crate::child", "crate::inline"] {
         let module = graph.modules.iter().find(|module| module.id == id).unwrap();
-        assert_eq!(module.role, None);
+        assert_eq!(module.role.as_deref().ok(), None);
         assert!(graph.diagnostics.iter().any(|message| message.contains(id)));
     }
 }
@@ -345,7 +313,7 @@ fn cfg_excluded_modules_do_not_require_roles() {
             ),
             ("disabled_file.rs", "#![cfg(off)]\npub fn run() {}"),
         ],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert_eq!(graph.modules.len(), 1);
     assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
@@ -361,12 +329,12 @@ fn roles_supplied_only_by_cfg_attr_do_not_replace_original_declarations() {
             "lib.rs",
             "#![cfg_attr(on, doc = \"Role: Generated documentation.\")]\nfn run() {}",
         )],
-        AnalysisOptions {
+        Options {
             cfg: BTreeSet::from(["on".into()]),
             ..Default::default()
         },
     );
-    assert_eq!(graph.modules[0].role, None);
+    assert_eq!(graph.modules[0].role.as_deref().ok(), None);
     assert!(
         graph
             .diagnostics
@@ -387,7 +355,7 @@ fn static_inner_doc_attributes_and_block_docs_have_the_same_semantics() {
     ] {
         let graph = root(source);
         assert_eq!(
-            graph.modules[0].role.as_deref(),
+            graph.modules[0].role.as_deref().ok(),
             Some("Coordinate modules.")
         );
         assert!(
@@ -409,7 +377,7 @@ fn missing_roles_preserve_reference_edges_and_cycle_detection() {
             ("a.rs", "pub fn run() { crate::b::run(); }"),
             ("b.rs", "pub fn run() { crate::a::run(); }"),
         ],
-        AnalysisOptions::default(),
+        Options::default(),
     );
     assert_eq!(graph.modules.len(), 3);
     assert_eq!(graph.edges.len(), 2);
