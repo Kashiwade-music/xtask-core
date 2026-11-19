@@ -1,6 +1,6 @@
 //! Role: 図の移動と固定の遷移（履歴、固定、視点の変更）。
 use crate::camera;
-use crate::state::{AppState, Camera, Loaded, Nav};
+use crate::state::{AppState, Camera, Gesture, Loaded, Nav};
 
 /// 図 `diagram`（archive の index）を開く。今の図と同じ kind なら移動せず、固定だけを解く。
 /// 違えば、今の図を履歴に積む。index が無ければ何もしない。
@@ -65,6 +65,7 @@ pub fn go(state: AppState, diagram: usize) {
     state.nav.set(open(&nav, &loaded, diagram));
     state.camera.set(Camera::Fit);
     state.hover.set(None);
+    state.gesture.set(Gesture::Idle);
 }
 
 pub fn go_back(state: AppState) {
@@ -72,6 +73,7 @@ pub fn go_back(state: AppState) {
     state.nav.set(back(&nav));
     state.camera.set(Camera::Fit);
     state.hover.set(None);
+    state.gesture.set(Gesture::Idle);
 }
 
 pub fn fit(state: AppState) {
@@ -89,6 +91,7 @@ pub fn reveal(state: AppState, diagram: usize, item: u32) {
     next.pinned = Some(item);
     state.nav.set(next);
     state.hover.set(None);
+    state.gesture.set(Gesture::Idle);
 
     let viewport = state.viewport.get();
     let now = state.camera.get_untracked();
