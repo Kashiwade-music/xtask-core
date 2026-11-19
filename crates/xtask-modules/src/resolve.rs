@@ -29,13 +29,18 @@ pub(crate) fn analyze(loaded: Loaded, env: Env) -> Result<ModuleGraph, String> {
     // the standard thread_local macro. Each call is judged on it, and the second pass declares
     // the statics of the standard calls.
     let first = tables(&sources, &layout, &[], env);
-    let statics = thread_local_items::standard_statics(&sources, &layout, &first, &textual, env)?;
-    let scopes = tables(&sources, &layout, &statics, env);
+    let thread_local_items::Standard {
+        declared,
+        calls,
+        diagnostics: thread_local_diagnostics,
+    } = thread_local_items::standard_statics(&sources, &layout, &first, &textual, env)?;
+    let scopes = tables(&sources, &layout, &declared, env);
     let modules = Modules {
         layout: &layout,
         scopes: &scopes,
     };
     let mut diagnostics = loading.into_iter().collect::<BTreeSet<_>>();
+    diagnostics.extend(thread_local_diagnostics);
     let opaque = crate::visitor::opaque_modules(&sources, &modules, &textual, env);
     let mut edges = BTreeSet::new();
     for (module, source) in sources.iter().enumerate() {
@@ -47,6 +52,7 @@ pub(crate) fn analyze(loaded: Loaded, env: Env) -> Result<ModuleGraph, String> {
             env,
             opaque: &opaque,
             blocks: Vec::new(),
+            calls: &calls,
             edges: &mut edges,
             diagnostics: &mut diagnostics,
         };
@@ -55,9 +61,9 @@ pub(crate) fn analyze(loaded: Loaded, env: Env) -> Result<ModuleGraph, String> {
         if source.module.kind == ModuleKind::File {
             visitor.expansions(source.attributes());
         }
-        for (item, attributes) in source.items() {
+        for (index, (item, attributes)) in source.items().into_iter().enumerate() {
             visitor.expansions(attributes);
-            visitor.module_item(item);
+            visitor.module_item(index, item);
         }
     }
     let modules = sources.into_iter().map(|s| s.module).collect::<Vec<_>>();

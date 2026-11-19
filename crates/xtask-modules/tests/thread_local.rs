@@ -736,3 +736,35 @@ std::thread_local! {
         result.edges
     );
 }
+
+#[test]
+fn invalid_cfg_on_thread_local_static_is_one_diagnostic() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod a {
+    //! Role: Declarations.
+    thread_local! {
+        #[cfg(a::b)]
+        pub static A: u8 = 0;
+        pub static B: u8 = 1;
+    }
+}
+mod c {
+    //! Role: Consumer.
+    use crate::a::B;
+}
+"#,
+    );
+    assert_eq!(result.diagnostics.len(), 1, "{:?}", result.diagnostics);
+    assert!(
+        result.diagnostics[0].contains("lib.rs:"),
+        "{:?}",
+        result.diagnostics
+    );
+    assert!(
+        result.diagnostics[0].contains("unsupported cfg predicate"),
+        "{:?}",
+        result.diagnostics
+    );
+}
