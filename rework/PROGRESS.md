@@ -110,3 +110,10 @@ K5（図のファイルの大きさ）と K6（検査の時間）は CP で測�
 | K2 折れの数の比 | 1.3 以下 | 1.13 | 達成 |
 | K3 面積の比 | 1.5 以下 | 0.54 | 達成 |
 | K4 配置の時間の和（121 件） | 3.0 秒以下 | 1.783 秒 | 達成 |
+
+### CP（途中。commit 9996441 の時点）
+
+- K5 図のファイルの大きさ：17927 バイト（目標 102400 以下）。達成。`check --write` を node の無い PATH（`NODE_FREE_PATH`）で実行して測った。
+- K6 検査の時間：`check` を暖機の後に 3 回測った。0.772、0.758、0.752 秒。中央値 0.758 秒（基準 1.203 × 1.05 = 1.263 秒以下）。達成。
+- AC-1：`git ls-files` に `.js`・`.cjs`・`.html`・`.css` は無い。node の無い PATH で `check --write` は図のファイルを書いたが、循環参照の違反（差戻し 20）で終了コードが 1。未達。
+- tier c の途中：`cargo fmt --all --check` 成功。`cargo +1.85.0 check --workspace --all-targets --locked` 成功（let チェーンを 1.85 で通る形に直した後、`c45ab73` を merge）。`cargo test --workspace` 成功（失敗 0）。viewer の fmt・clippy・`KIVACT_TEST_MIRROR=off cargo test --workspace` 成功。`cargo clippy --workspace --all-targets -- -D warnings` は差戻し 19 で未達。`cargo run -p xtask-core -- check` は差戻し 20 で未達（違反 23 件のうち、Role と行数は解消済み、循環 10 件が残る）。viewer の `check --root` も循環 2 件（xtask-render）が残る。
