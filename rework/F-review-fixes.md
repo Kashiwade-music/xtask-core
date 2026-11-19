@@ -103,6 +103,12 @@ CP（`27f0849`）の後に、設計者が 5 つの領域を独立にレビュー
 
 ---
 
+## F6：可視性の照合を一つにする（F4b の残り）
+
+- `xtask-policy` に `pub fn pattern_matches(pattern: &str, name: &str) -> bool` を置き（今の private な `matches` を公開にして名前を変える）、`Policy::visible` もそれを使う。
+- `xtask-core/src/visibility.rs` の `matches` を消し、`xtask_policy::pattern_matches` を使う。
+- 試験：既存の試験がそのまま通ること。
+
 ## 6. 進め方
 
 lane ごとに一つの worktree で行う：F1、F2、F3a → F3b、F4a、F4b、F5（最大 6）。lane は別の crate のファイルだけを変える（F3b の `xtask-policy` の文は F3 の lane が持つ）。設計者がすべてを merge し、作業指示書 2.3 節の CP を最初から実行する。
@@ -112,3 +118,5 @@ lane ごとに一つの worktree で行う：F1、F2、F3a → F3b、F4a、F4b�
 - `run_level` を `level.rs` に戻す（layout）：付属書 X の X3 で閉路を解くために移した。戻すと閉路が戻る。
 - `decompose` の O(深さ²)（layout）：深さ 400 で 86 ms。付属書が求める計算量の中で、実際の図の深さは小さい。
 - `verify` に `i64::MAX` 近くの手作りの `Rect` を渡すと溢れる（layout）：公開の `verify` に渡るのは配置の結果か、10.1 節の上限の中の値だけ。
+- F3b の 6 の前半（worklist の逆引きの表）：import がどの module の表を読むかは、途中の segment・別名・glob の解決先によって解決の途中で決まるので、path から前もって作る表では戻し先が欠け、不動点が正しくなくなる（実装者の STOP で確かめた）。値が増えたら import を持つ module を戻す今の方式を保つ。表全体の clone と比較は既に無い。`Fallback` の enum（6 の後半）は採った。
+- F4b の 5 の `matches`（パターンが member に当たるかの判定）：xtask-policy の照合が private なので、F4b の lane では消せなかった。F6 で xtask-policy に公開の照合を置いて一つにする。
