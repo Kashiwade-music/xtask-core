@@ -387,8 +387,8 @@ cargo test -p xtask-modules
 - **`external_glob_reexport_keeps_uncertainty`**：`mod p { pub use ext::*; } mod c { use crate::p::*; #[derive(Clone)] struct S; }` で、`crate::c` に「提供元が不明」の診断がある。
 - **`block_glob_does_not_hide_module_glob`**：module で `use foo::*;`（外部）、block で `use std::fmt::*;` のとき、`#[derive(Clone)]` が「提供元が不明」の診断になる。
 - **`glob_uses_every_resolved_module`**：glob の path が二つの module に解決される場合に、両方の名前が使える。
-- **`trusted_glob_allows_thread_local`**：trusted_globs に `framework::prelude` を入れ、`use framework::prelude::*; thread_local!{...}` で、診断が空になる。
-- **`untrusted_glob_makes_thread_local_uncertain`**：`use framework::prelude::*; thread_local!{ static C: u8 = 0; }`（trusted_globs が空）で、`macro provider cannot be established: thread_local` の診断がある。
+- **`trusted_glob_allows_thread_local`**：`mod b { use framework::prelude::*; thread_local!{ pub static C: u8 = 0; } } mod c { use crate::b::C; }` で、trusted_globs に `framework::prelude` を入れると、診断が空になる（static が作られ、c の import が解決する）。
+- **`untrusted_glob_makes_thread_local_uncertain`**：上と同じ source で、trusted_globs と trusted_macros を空（既定の Settings）にすると、診断がちょうど 1 件で、`::C` で終わる（提供元が不確かなので static を作らず、c の import が解決しない）。`macro provider cannot be established: thread_local` の診断は出ない。提供元の不確かさは、作られなかった static を使う側の診断で表れる（既存の `external_crate_globs_do_not_create_bare_statics` と同じ契約。W2 の差戻し 11 で、付属書の当初の期待値を改めた）。
 - **`thread_local_type_reference`**：`thread_local!{ static C: RefCell<crate::cache::C> = ... }` で、`crate::cache` への辺がある。
 - **既存の `tests/thread_local.rs`**：全件を期待値を変えずに通す（手順 6 の規則は、この試験が固定する旧い振舞い）。
 - **`block_use_is_processed_once`**：block の中の `use crate::a::f;` の誤り（解決できない局所の import）の診断が 1 件だけ出る。
