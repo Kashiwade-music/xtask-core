@@ -363,6 +363,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "xtask-policy"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "xtask-source"
 version = "0.1.0"
 dependencies = [
@@ -385,7 +393,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "toml",
+ "xtask-policy",
+ "xtask-source",
 ]
 
 [[package]]
