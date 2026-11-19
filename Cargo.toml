@@ -1,6 +1,7 @@
 [workspace]
 members = ["crates/*"]
 resolver = "3"
+exclude = ["viewer"]
 
 [workspace.package]
 version = "0.1.0"
@@ -30,3 +31,6 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = "warn"
+
+[profile.dev.package.xtask-layout]
+opt-level = 3
