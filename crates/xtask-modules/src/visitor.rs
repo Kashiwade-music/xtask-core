@@ -222,8 +222,10 @@ impl References<'_> {
                 &parts[..k],
                 Some(Namespace::Type),
             ) {
-                if let Target::Module(owner) = target
-                    && self.opaque.contains(&owner)
+                let Target::Module(owner) = target else {
+                    continue;
+                };
+                if self.opaque.contains(&owner)
                     && !self
                         .modules
                         .scope(owner)
@@ -825,9 +827,10 @@ impl<'ast> Visit<'ast> for References<'_> {
             .collect::<Vec<_>>();
         // Block items are visible throughout the block, including before their declaration.
         for statement in &live {
-            if let syn::Stmt::Item(item) = statement
-                && !matches!(item, Item::Mod(_))
-            {
+            let syn::Stmt::Item(item) = statement else {
+                continue;
+            };
+            if !matches!(item, Item::Mod(_)) {
                 for (namespace, name, target) in
                     declarations(item, self.module, &self.modules.layout.ids)
                 {
