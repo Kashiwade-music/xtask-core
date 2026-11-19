@@ -1,7 +1,10 @@
 //! Role: マクロ、属性、derive と外部 provider の解決（trust の要否を含む）を検証する。
+#[path = "common/analysis.rs"]
+mod analysis_support;
 mod common;
 
-use common::{Options, edges, graph};
+use analysis_support::{edges, graph};
+use common::Options;
 use std::collections::BTreeSet;
 
 #[test]
