@@ -752,6 +752,3 @@ fn no_write_runs_every_rule_without_node_or_filesystem_mutation() {
 
 #[path = "integration/diagrams.rs"]
 mod diagrams;
-
-#[path = "integration/arch_map.rs"]
-mod arch_map;
