@@ -28,15 +28,15 @@
 | A1 | W1 | 2 | 統合済み（5cadc2b） |
 | M1 | W1 | 3 | 統合済み（658a9f1、差戻し 1〜4 は fix lane f6685ca で解消） |
 | M2 | W1 | 4 | 統合済み（f53b057、差戻し 5 は fix lane 286038e で解消） |
-| L2 | W2 | 1 | 未着手 |
-| L6 | W2 | 1（L2 の後） | 未着手 |
-| L3 | W2 | 2 | 未着手 |
-| L4 | W2 | 3 | 未着手 |
-| L5 | W2 | 4 | 未着手 |
-| M3a | W2 | 5 | 未着手 |
-| M3b | W2 | 5（M3a の後） | 未着手 |
-| M3c | W2 | 5（M3b の後） | 未着手 |
-| V1 | W2 | 6 | 未着手 |
+| L2 | W2 | 1 | 差戻し（OPEN.md の 6。8fe2ad8 は merge 済み） |
+| L6 | W2 | 1（L2 の後） | 統合待ち（e196bdc、merge 済み。W2 の tier b 待ち） |
+| L3 | W2 | 2 | 統合待ち（845010a、merge 済み。W2 の tier b 待ち） |
+| L4 | W2 | 3 | 統合待ち（757fa60、merge 済み。W2 の tier b 待ち） |
+| L5 | W2 | 4 | 統合待ち（eb5182d、merge 済み。W2 の tier b 待ち） |
+| M3a | W2 | 5 | 差戻し（OPEN.md の 7・8。20353c5 は merge 済み。clippy の fix は W2-5-fix） |
+| M3b | W2 | 5（M3a の後） | 未着手（M3a の差戻しのため起動しない） |
+| M3c | W2 | 5（M3b の後） | 未着手（M3a の差戻しのため起動しない） |
+| V1 | W2 | 6 | 統合待ち（1adf297、merge 済み。W2 の tier b 待ち。viewer の tier b は成功） |
 | L7 | W3 | 1 | 未着手 |
 | L8 | W3 | 2 | 未着手 |
 | C1 | W3 | 3 | 未着手 |
@@ -54,4 +54,6 @@
 ## wave の記録
 
 - `W1 merged e13ecfe: tier b 失敗`（xtask-policy の試験 1 件が失敗。設計者の付属書の改訂の後に解消）
+- `W2 fix merged 93f1618: clippy 成功（xtask-archive・xtask-policy・xtask-modules）。tier b は未成功：xtask-layout の試験 1 件（OPEN.md の 6）と xtask-modules の試験 1 件（OPEN.md の 7）が設計者の判断待ち`
+- `W2 merged 571b7b5: tier b 失敗`（root check は成功。失敗：xtask-layout の試験 1 件（OPEN.md の 6）、xtask-modules の試験 1 件（OPEN.md の 7）、xtask-modules の clippy 指摘 2 件（fix lane W2-5-fix で直す）。viewer の check と xtask-render の試験 8 件は成功）
 - `W1 fix merged d3641fc: tier b 成功`（fix lane f6685ca（M1）と 286038e（M2）を merge。check、xtask-archive 12、xtask-policy 24、xtask-source 14、xtask-workspace 12、xtask-layout --lib 10 が成功）
