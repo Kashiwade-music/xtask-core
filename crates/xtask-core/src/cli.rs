@@ -2,7 +2,8 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use crate::{Config, Output, run};
+use crate::config::{Config, Output};
+use crate::run::run;
 
 const USAGE: &str = concat!(
     "usage: xtask check [--root PATH] [--write]\n",

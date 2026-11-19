@@ -8,7 +8,7 @@ use xtask_diagram::{Input, Outcome, TargetInput};
 use xtask_policy::DiagramTargets;
 use xtask_workspace::TargetKind;
 
-use crate::Output;
+use crate::config::Output;
 use crate::context::Context;
 use crate::model::{TargetAnalysis, TargetOutcome};
 use crate::parallel;

@@ -24,6 +24,33 @@ impl Report {
     }
 }
 
+/// The messages of one stage: errors that fail the run, and notes that only inform.
+#[derive(Debug, Default)]
+pub(crate) struct Findings {
+    pub(crate) errors: Vec<String>,
+    pub(crate) notes: Vec<String>,
+}
+
+impl Findings {
+    /// Every message of the stage, errors first, as the diagram file records them.
+    pub(crate) fn messages(&self) -> Vec<String> {
+        self.errors.iter().chain(&self.notes).cloned().collect()
+    }
+
+    pub(crate) fn append(&mut self, other: Findings) {
+        self.errors.extend(other.errors);
+        self.notes.extend(other.notes);
+    }
+
+    pub(crate) fn into_report(self) -> Report {
+        Report {
+            errors: self.errors,
+            notes: self.notes,
+            ..Report::default()
+        }
+    }
+}
+
 /// The analysis of one Cargo target, in each configuration it is analyzed under.
 #[derive(Debug)]
 pub struct TargetAnalysis {

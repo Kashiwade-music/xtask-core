@@ -4,19 +4,28 @@ use xtask_core::{Config, Output, run};
 
 fn main() -> Result<(), String> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let [root, mode] = args.as_slice() else {
-        return Err("usage: benchmark ROOT check|write".into());
+    let [root] = args.as_slice() else {
+        return Err("usage: benchmark ROOT".into());
     };
-    let mut config = Config::new(root);
-    config.output = match mode.as_str() {
-        "check" => Output::None,
-        "write" => Output::Policy,
-        _ => return Err("mode must be check or write".into()),
-    };
+    let mut success = true;
+    for (label, output) in [("check", Output::None), ("check --write", Output::Policy)] {
+        let mut config = Config::new(root);
+        config.output = output;
+        success &= measure(label, &config)?;
+    }
+    if success {
+        Ok(())
+    } else {
+        Err("benchmark found check errors".into())
+    }
+}
+
+/// Run the checks once and print the time they take. Returns whether they found no errors.
+fn measure(label: &str, config: &Config) -> Result<bool, String> {
     let start = Instant::now();
-    let report = run(&config)?;
+    let report = run(config)?;
     println!(
-        "seconds={:.6} errors={} archive={}",
+        "{label}: seconds={:.6} errors={} archive={}",
         start.elapsed().as_secs_f64(),
         report.errors.len() + report.style.len(),
         report.archive.is_some()
@@ -34,11 +43,5 @@ fn main() -> Result<(), String> {
     for diagnostic in &report.style {
         eprintln!("error: {diagnostic}");
     }
-    if !report.is_success() {
-        return Err(format!(
-            "benchmark found {} check errors",
-            report.errors.len() + report.style.len()
-        ));
-    }
-    Ok(())
+    Ok(report.is_success())
 }

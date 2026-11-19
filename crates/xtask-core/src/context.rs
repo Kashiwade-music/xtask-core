@@ -9,7 +9,7 @@ use xtask_policy::{AnalysisSettings, Policy};
 use xtask_source::normalize;
 use xtask_workspace::{TargetKind, Workspace};
 
-use crate::{Config, Output};
+use crate::config::{Config, Output};
 
 /// The inputs that every stage reads. A failure while loading it stops the run.
 pub(crate) struct Context {
@@ -56,18 +56,14 @@ fn load_policy(path: &Path) -> Result<Policy, String> {
     }
 }
 
-/// The analysis environment: the features of each member, and the cfg of the target and of the
-/// host. Each is read once, before any job starts.
-pub(crate) struct Environment {
-    pub(crate) features: BTreeMap<String, BTreeSet<String>>,
-    target_cfg: BTreeSet<String>,
-    host_cfg: BTreeSet<String>,
-}
+/// The features that Cargo selects for each workspace member, read once for the whole run.
+pub(crate) type FeatureTable = BTreeMap<String, BTreeSet<String>>;
 
-impl Environment {
-    pub(crate) fn load(context: &Context) -> Result<Self, String> {
-        let features = context.workspace.features(&context.settings)?;
-        if let Some(package) = context
+impl Context {
+    /// The features of each member under the analysis settings. Every member must have an entry.
+    pub(crate) fn features(&self) -> Result<FeatureTable, String> {
+        let features = self.workspace.features(&self.settings)?;
+        if let Some(package) = self
             .workspace
             .packages
             .iter()
@@ -78,6 +74,18 @@ impl Environment {
                 package.name
             ));
         }
+        Ok(features)
+    }
+}
+
+/// The cfg of the target and of the host, read once before any job starts.
+pub(crate) struct Environment {
+    target_cfg: BTreeSet<String>,
+    host_cfg: BTreeSet<String>,
+}
+
+impl Environment {
+    pub(crate) fn load(context: &Context) -> Result<Self, String> {
         let root = &context.workspace.root;
         let extra = context.settings.cfg();
         let target = context.settings.target();
@@ -89,7 +97,6 @@ impl Environment {
             None => target_cfg.clone(),
         };
         Ok(Self {
-            features,
             target_cfg,
             host_cfg,
         })

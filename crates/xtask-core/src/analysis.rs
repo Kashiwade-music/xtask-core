@@ -5,42 +5,47 @@ use xtask_archive::Mode;
 use xtask_modules::{Configuration, Settings};
 use xtask_workspace::{Edition, Package, Target, TargetKind};
 
-use crate::context::{Context, Environment};
-use crate::model::{Report, TargetAnalysis, TargetOutcome};
+use crate::context::{Context, Environment, FeatureTable};
+use crate::model::{Findings, TargetAnalysis, TargetOutcome};
 use crate::parallel;
 
-/// Analyze every target under each of its configurations. An environment that cannot be read
-/// fails every target, and the other stages still run.
+/// The outcome of each configuration of one target, in the order of its modes.
+type Outcomes = Vec<(Mode, TargetOutcome)>;
+
+/// Analyze every target under each of its configurations. When the features or the environment
+/// cannot be read, every target fails and the other stages still run.
 pub(crate) fn analyze_targets(
     context: &Context,
+    features: &Result<FeatureTable, String>,
     environment: &Result<Environment, String>,
-) -> (Vec<TargetAnalysis>, Report) {
-    match environment {
-        Ok(environment) => analyzed(context, environment),
-        Err(error) => failed(context, error),
+) -> (Vec<TargetAnalysis>, Findings) {
+    match (features, environment) {
+        (Ok(features), Ok(environment)) => analyzed(context, features, environment),
+        (Err(error), _) | (_, Err(error)) => failed(context, error),
     }
 }
 
-fn failed(context: &Context, error: &str) -> (Vec<TargetAnalysis>, Report) {
+fn failed(context: &Context, error: &str) -> (Vec<TargetAnalysis>, Findings) {
     let reason = analysis_failure(context, error);
-    let reason = reason.as_str();
-    let mut report = Report::default();
-    report.errors.push(reason.to_string());
     let analysis = context
         .workspace
         .packages
         .iter()
         .flat_map(|package| {
-            package.targets.iter().map(move |target| {
+            package.targets.iter().map(|target| {
                 let outcomes = modes(target)
                     .into_iter()
-                    .map(|mode| (mode, TargetOutcome::Failed(reason.to_string())))
+                    .map(|mode| (mode, TargetOutcome::Failed(reason.clone())))
                     .collect();
                 target_analysis(package, target, outcomes)
             })
         })
         .collect();
-    (analysis, report)
+    let findings = Findings {
+        errors: vec![reason],
+        notes: Vec::new(),
+    };
+    (analysis, findings)
 }
 
 /// The diagnostic for a failed environment. It names the configured analysis target: cargo's
@@ -52,36 +57,22 @@ fn analysis_failure(context: &Context, error: &str) -> String {
     }
 }
 
-fn analyzed(context: &Context, environment: &Environment) -> (Vec<TargetAnalysis>, Report) {
-    let mut report = Report::default();
-    let settings = package_settings(context, environment);
-    let (mut analysis, jobs) = plan(context, environment, &settings, &mut report);
-    let results = parallel::map(&jobs, |job| job.run());
-    for (job, result) in jobs.iter().zip(results) {
-        let outcomes = match result {
-            Ok(outcomes) => outcomes,
-            Err(panic) => job
-                .modes
-                .iter()
-                .map(|mode| {
-                    let reason = format!("analysis panicked: {panic}");
-                    (*mode, TargetOutcome::Failed(reason))
-                })
-                .collect(),
-        };
-        for (mode, outcome) in &outcomes {
-            record(&mut report, job.package, job.target, *mode, outcome);
-        }
-        analysis[job.slot].outcomes = outcomes;
-    }
-    trusted_note(context, &mut report);
-    (analysis, report)
+fn analyzed(
+    context: &Context,
+    features: &FeatureTable,
+    environment: &Environment,
+) -> (Vec<TargetAnalysis>, Findings) {
+    let settings = package_settings(context, features);
+    let (planned, mut findings) = plan(context, environment, &settings);
+    let results = run_jobs(&planned);
+    let (analysis, job_findings) = assemble(planned, results);
+    findings.append(job_findings);
+    findings.append(trusted_note(context));
+    (analysis, findings)
 }
 
 /// One target's analysis, to run in parallel with the others.
 struct Job<'a> {
-    /// The index of the target's entry in the analysis list.
-    slot: usize,
     package: &'a Package,
     target: &'a Target,
     settings: &'a Settings,
@@ -91,7 +82,7 @@ struct Job<'a> {
 
 impl Job<'_> {
     /// Analyze the target under each configuration. The results follow `modes`.
-    fn run(&self) -> Vec<(Mode, TargetOutcome)> {
+    fn run(&self) -> Outcomes {
         let results =
             xtask_modules::analyze(&self.target.src_path, self.settings, &self.configurations);
         self.modes
@@ -107,73 +98,136 @@ impl Job<'_> {
             })
             .collect()
     }
+
+    /// The outcomes of a finished job. A panic of its thread fails every configuration.
+    fn outcomes(&self, result: Result<Outcomes, String>) -> Outcomes {
+        result.unwrap_or_else(|panic| {
+            self.modes
+                .iter()
+                .map(|mode| {
+                    let reason = format!("analysis panicked: {panic}");
+                    (*mode, TargetOutcome::Failed(reason))
+                })
+                .collect()
+        })
+    }
 }
 
-/// The analysis list with every target in order, and the jobs for the targets that need an
-/// analysis. A target that is skipped already has its outcomes.
+/// A target in the analysis list: finished already, or waiting for its analysis job.
+enum Planned<'a> {
+    /// A target that needs no analysis, with its outcomes.
+    Done(TargetAnalysis),
+    Job(Job<'a>),
+}
+
+/// The analysis list in target order, with the targets that need an analysis as jobs, and the
+/// diagnostics of the targets that were skipped.
 fn plan<'a>(
     context: &'a Context,
     environment: &Environment,
     settings: &'a [Settings],
-    report: &mut Report,
-) -> (Vec<TargetAnalysis>, Vec<Job<'a>>) {
-    let mut analysis = Vec::new();
-    let mut jobs = Vec::new();
-    for (index, package) in context.workspace.packages.iter().enumerate() {
+) -> (Vec<Planned<'a>>, Findings) {
+    let mut planned = Vec::new();
+    let mut findings = Findings::default();
+    for (package, setting) in context.workspace.packages.iter().zip(settings) {
         for target in &package.targets {
-            let slot = analysis.len();
-            analysis.push(target_analysis(package, target, Vec::new()));
-            let setting = &settings[index];
-            if let Some(outcomes) = skipped(package, target, &setting.features, report) {
-                analysis[slot].outcomes = outcomes;
-                continue;
+            match skipped(package, target, &setting.features) {
+                Some((outcomes, skip)) => {
+                    findings.append(skip);
+                    planned.push(Planned::Done(target_analysis(package, target, outcomes)));
+                }
+                None => planned.push(Planned::Job(job(environment, package, target, setting))),
             }
-            let modes = modes(target);
-            let configurations = modes
-                .iter()
-                .map(|mode| environment.configuration(&target.kinds, *mode))
-                .collect();
-            jobs.push(Job {
-                slot,
-                package,
-                target,
-                settings: setting,
-                modes,
-                configurations,
-            });
         }
     }
-    (analysis, jobs)
+    (planned, findings)
 }
 
-/// The outcomes of a target that needs no analysis: an unsupported edition, or inactive
-/// `required-features`. `None` means the target is analyzed.
+fn job<'a>(
+    environment: &Environment,
+    package: &'a Package,
+    target: &'a Target,
+    settings: &'a Settings,
+) -> Job<'a> {
+    let modes = modes(target);
+    let configurations = modes
+        .iter()
+        .map(|mode| environment.configuration(&target.kinds, *mode))
+        .collect();
+    Job {
+        package,
+        target,
+        settings,
+        modes,
+        configurations,
+    }
+}
+
+/// Run the analysis of every job in parallel. The results follow the order of the jobs.
+fn run_jobs(planned: &[Planned]) -> Vec<Result<Outcomes, String>> {
+    let jobs: Vec<&Job> = planned
+        .iter()
+        .filter_map(|entry| match entry {
+            Planned::Done(_) => None,
+            Planned::Job(job) => Some(job),
+        })
+        .collect();
+    parallel::map(&jobs, |job| job.run())
+}
+
+/// The analysis list with every outcome in target order, and the diagnostics of the jobs.
+fn assemble(
+    planned: Vec<Planned>,
+    results: Vec<Result<Outcomes, String>>,
+) -> (Vec<TargetAnalysis>, Findings) {
+    let mut results = results.into_iter();
+    let mut analysis = Vec::with_capacity(planned.len());
+    let mut findings = Findings::default();
+    for entry in planned {
+        match entry {
+            Planned::Done(target) => analysis.push(target),
+            Planned::Job(job) => {
+                let result = results.next().expect("one result for each job");
+                let outcomes = job.outcomes(result);
+                findings.append(record(job.package, job.target, &outcomes));
+                analysis.push(target_analysis(job.package, job.target, outcomes));
+            }
+        }
+    }
+    (analysis, findings)
+}
+
+/// The outcomes of a target that needs no analysis, with its diagnostics: an unsupported
+/// edition, or inactive `required-features`. `None` means the target is analyzed.
 fn skipped(
     package: &Package,
     target: &Target,
     features: &BTreeSet<String>,
-    report: &mut Report,
-) -> Option<Vec<(Mode, TargetOutcome)>> {
+) -> Option<(Outcomes, Findings)> {
     if let Some(message) = unsupported_edition(target.edition) {
-        report
-            .errors
-            .push(format!("{}::{}: {message}", package.name, target.name));
+        let findings = Findings {
+            errors: vec![format!("{}::{}: {message}", package.name, target.name)],
+            notes: Vec::new(),
+        };
         let outcomes = modes(target)
             .into_iter()
             .map(|mode| (mode, TargetOutcome::UnsupportedEdition(message.clone())))
             .collect();
-        return Some(outcomes);
+        return Some((outcomes, findings));
     }
     if !target
         .required_features
         .iter()
         .all(|feature| features.contains(feature))
     {
-        report.notes.push(format!(
-            "skipped {}::{}: required features are inactive",
-            package.name, target.name
-        ));
-        return Some(vec![(Mode::Normal, TargetOutcome::FeatureGated)]);
+        let findings = Findings {
+            errors: Vec::new(),
+            notes: vec![format!(
+                "skipped {}::{}: required features are inactive",
+                package.name, target.name
+            )],
+        };
+        return Some((vec![(Mode::Normal, TargetOutcome::FeatureGated)], findings));
     }
     None
 }
@@ -221,18 +275,14 @@ fn is_unit_test_kind(kind: &TargetKind) -> bool {
 }
 
 /// The analysis settings of each package, in the order of the workspace's packages.
-fn package_settings(context: &Context, environment: &Environment) -> Vec<Settings> {
+fn package_settings(context: &Context, features: &FeatureTable) -> Vec<Settings> {
     let analysis = &context.settings;
     context
         .workspace
         .packages
         .iter()
         .map(|package| Settings {
-            features: environment
-                .features
-                .get(&package.name)
-                .cloned()
-                .unwrap_or_default(),
+            features: features.get(&package.name).cloned().unwrap_or_default(),
             trusted_attributes: analysis.trusted_attributes().clone(),
             trusted_derives: analysis.trusted_derives().clone(),
             trusted_macros: analysis.trusted_macros().clone(),
@@ -242,11 +292,7 @@ fn package_settings(context: &Context, environment: &Environment) -> Vec<Setting
         .collect()
 }
 
-fn target_analysis(
-    package: &Package,
-    target: &Target,
-    outcomes: Vec<(Mode, TargetOutcome)>,
-) -> TargetAnalysis {
+fn target_analysis(package: &Package, target: &Target, outcomes: Outcomes) -> TargetAnalysis {
     TargetAnalysis {
         package: package.name.clone(),
         target: target.name.clone(),
@@ -255,58 +301,64 @@ fn target_analysis(
     }
 }
 
-/// Report the diagnostics and cycles of one analyzed configuration, or its failure.
-fn record(
-    report: &mut Report,
-    package: &Package,
-    target: &Target,
-    mode: Mode,
-    outcome: &TargetOutcome,
-) {
+/// The diagnostics and cycles of each analyzed configuration of a target, or its failure.
+fn record(package: &Package, target: &Target, outcomes: &[(Mode, TargetOutcome)]) -> Findings {
+    let mut findings = Findings::default();
+    for (mode, outcome) in outcomes {
+        let label = configuration_label(package, target, *mode);
+        match outcome {
+            TargetOutcome::Analyzed(graph) => {
+                findings.errors.extend(
+                    graph
+                        .diagnostics
+                        .iter()
+                        .map(|diagnostic| format!("{label}: {diagnostic}")),
+                );
+                findings.errors.extend(graph.cycles.iter().map(|cycle| {
+                    format!(
+                        "{label}: module reference cycle among: {}",
+                        cycle.join(", ")
+                    )
+                }));
+            }
+            TargetOutcome::Failed(message) => findings.errors.push(format!("{label}: {message}")),
+            TargetOutcome::FeatureGated | TargetOutcome::UnsupportedEdition(_) => {}
+        }
+    }
+    findings
+}
+
+/// The name of one configuration of a target, as the diagnostics show it.
+fn configuration_label(package: &Package, target: &Target, mode: Mode) -> String {
     let kinds: Vec<&str> = target.kinds.iter().map(TargetKind::as_str).collect();
     let test = if mode == Mode::Test {
         ", cfg(test)"
     } else {
         ""
     };
-    let label = format!(
+    format!(
         "{}::{} ({}{test})",
         package.name,
         target.name,
         kinds.join("+")
-    );
-    match outcome {
-        TargetOutcome::Analyzed(graph) => {
-            report.errors.extend(
-                graph
-                    .diagnostics
-                    .iter()
-                    .map(|diagnostic| format!("{label}: {diagnostic}")),
-            );
-            report.errors.extend(graph.cycles.iter().map(|cycle| {
-                format!(
-                    "{label}: module reference cycle among: {}",
-                    cycle.join(", ")
-                )
-            }));
-        }
-        TargetOutcome::Failed(message) => report.errors.push(format!("{label}: {message}")),
-        TargetOutcome::FeatureGated | TargetOutcome::UnsupportedEdition(_) => {}
-    }
+    )
 }
 
-fn trusted_note(context: &Context, report: &mut Report) {
+fn trusted_note(context: &Context) -> Findings {
     let settings = &context.settings;
     if settings.trusted_attributes().is_empty()
         && settings.trusted_derives().is_empty()
         && settings.trusted_macros().is_empty()
     {
-        return;
+        return Findings::default();
     }
-    report.notes.push(format!(
-        "source-only macro assumptions: attributes {:?}, derives {:?}, macros {:?}; generated code is not analyzed",
-        settings.trusted_attributes(),
-        settings.trusted_derives(),
-        settings.trusted_macros()
-    ));
+    Findings {
+        errors: Vec::new(),
+        notes: vec![format!(
+            "source-only macro assumptions: attributes {:?}, derives {:?}, macros {:?}; generated code is not analyzed",
+            settings.trusted_attributes(),
+            settings.trusted_derives(),
+            settings.trusted_macros()
+        )],
+    }
 }
