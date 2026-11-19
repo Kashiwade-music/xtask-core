@@ -34,7 +34,7 @@
 | L4 | W2 | 3 | 統合済み（757fa60。W2 の途中の tier b 成功） |
 | L5 | W2 | 4 | 統合済み（eb5182d。W2 の途中の tier b 成功） |
 | M3a | W2 | 5 | 統合済み（20353c5、差戻し 7・8 は fix 3f3c058 で解消。ただし OPEN.md の「未解決の注意」の 1〜5 は設計者の判断待ち） |
-| M3b | W2 | 5（M3a の後） | 差戻し（OPEN.md の 11。9・10 は fix 0b36b98 で解消し 17db880 で merge 済み。thread_local の試験 1 件が失敗） |
+| M3b | W2 | 5（M3a の後） | 差戻し（OPEN.md の 12・13。11 は付属書の改訂と fix c2cf509 で、9・10 は fix 0b36b98 で解消。c2cf509 は 1963ea2 で merge 済み。thread_local の試験 1 件が失敗） |
 | M3c | W2 | 5（M3b の後） | 未着手 |
 | V1 | W2 | 6 | 統合済み（1adf297。viewer の tier b 成功） |
 | L7 | W3 | 1 | 未着手 |
@@ -62,3 +62,5 @@
 - `W2 M3b merged 27a56d3: tier b 失敗`（xtask-modules の試験：unit 1、analysis 60、roles 16 が成功、thread_local の試験 11 件が失敗。差戻し 9・10（OPEN.md）。visit_macro が 207 行で 0.2 の 6 を超える。M3c は M3b の差戻しのため未起動。W2 のウェーブは未完了）
 
 - `W2 M3b fix merged 17db880: tier b 失敗`（9・10 は解消（二回の解決、visit_macro の分割、thread_local の試験 22 件が成功、analysis 60、roles 16、unit 1）。残り：thread_local の試験 1 件（OPEN.md の 11）。M3c は未起動。W2 のウェーブは未完了）
+
+- `W2 M3b fix merged 1963ea2: tier b 失敗`（thread_local の試験 22 件が成功、1 件が失敗（OPEN.md の 12）。expansion_diagnostics を分割済み、clippy 成功。uncertain の文と実装の違い（OPEN.md の 13）。M3c は未起動。W2 のウェーブは未完了）

@@ -32,6 +32,15 @@ M3b の fix lane（0b36b98、merge 済み 17db880）の報告による。9・10 
 
 注（STOP ではない）：`crates/xtask-modules/src/cfg.rs` の `expansion_diagnostics` が 94 code 行で、作業指示書 0.2 の 6（1 関数 80 code 行）を超えたまま。fix の lane で分ける。
 
+## 差戻し（W2 の M3b の fix で新規、未解決）
+
+M3b の fix lane（c2cf509、merge 済み 1963ea2）の報告による。差戻し 11 の試験の欄の改訂は反映済み。残るのは次の二件。
+
+| # | unit | 場所 | STOP の文（要旨） | 付属書の節 |
+|---|---|---|---|---|
+| 12 | M3b | `crates/xtask-modules/tests/thread_local.rs`：`untrusted_glob_makes_thread_local_uncertain`（706 行目） | 既定の Settings（`trusted_macros` が空）で、診断が 2 件出る：`crate::b: item macro expansion is unsupported: thread_local`（item 位置の `thread_local!` が、信頼されていない macro として未対応の診断を出す）と `crate::c: unresolved explicit local import: crate::b::C`。付属書の試験の欄は「診断がちょうど 1 件で `::C` で終わる」を求める。`trusted_macros` に `thread_local` を入れて試すと 1 件（`::C`）で通ることを確かめたが、試験の設定は付属書どおりに戻した。**W2 の tier b（`cargo test -p xtask-modules`）の失敗の原因（残り 1 件）** | M-model.md の M3b の「試験」の欄（`untrusted_glob_makes_thread_local_uncertain`） |
+| 13 | M3b | `crates/xtask-modules/src/thread_local_items.rs`：`uncertain` | 付属書 M3b の手順 6 の `uncertain` の文どおりに実装すると、trusted_globs に入れた glob（解決できないもの）を不確かとみなし、`trusted_glob_allows_thread_local`（診断が空を求める）が通らない。実装は、trusted_globs に入っている glob を飛ばすようにした（`Settings` の doc「known to provide no macros」に合わせた）。付属書の文と実装が違う逸脱のため、設計者が規則を確かめる | M-model.md の M3b の手順 6（`uncertain`） |
+
 ## 未解決の注意（設計者の判断が要る）
 
 M3a の fix lane（3f3c058）の報告による。STOP ではないが、付属書の手順と食い違う可能性がある。
