@@ -78,7 +78,7 @@ cargo xtask check --help
 
 style検査が有効な場合は、どのモードでもrustfmtとClippyを実行する。そのため `target/` 以下へのビルド出力が生じ、build scriptとprocedural macroが実行される。
 
-各targetは通常構成と `cfg(test)` 構成の両方を解析する。
+test・benchのtargetは `cfg(test)` 構成だけを解析する。`test` が有効な library・binary・example・procedural macro のtargetは、通常構成と `cfg(test)` 構成の両方を解析する。それ以外のtarget（`test = false` のtargetを含む。exampleの既定値がこれにあたる）は通常構成だけを解析する。`required-features` が無効なtargetは解析せず、図にその旨を記録する。
 
 ## 設定
 

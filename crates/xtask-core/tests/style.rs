@@ -414,3 +414,50 @@ fn exact_item_exceptions_work_for_options_selectors() {
         report.notes
     );
 }
+
+#[test]
+fn item_exceptions_survive_analysis_environment_failure() {
+    let policy = concat!(
+        "[style]\nenabled=true\n",
+        "disabled_rules=['format','import-granularity','unstable-features','checked-unwrap','flexible-references','derivable-impls','new-default','len-is-empty','missing-docs','safety-docs','safety-comments']\n",
+        "[analysis]\ntarget='bogus-target-triple'\n",
+        "[[style.exceptions]]\nrule='hex-literals'\npath='src/a.rs'\nitem='a::reviewed'\nreason='Fixture names a file module item while module analysis is unavailable'\n"
+    );
+    let directory = fixture(
+        &[
+            (
+                "src/lib.rs",
+                "//! Role: Declare a file module under a failed analysis.\nmod a;\n",
+            ),
+            (
+                "src/a.rs",
+                "//! Role: Hold one reviewed and one unreviewed hex literal.\npub(crate) fn reviewed() -> u8 { 0xAA }\npub(crate) fn unreviewed() -> u8 { 0xBB }\n",
+            ),
+        ],
+        policy,
+    );
+    let report = check_unchanged(directory.path());
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|error| error.contains("module analysis")),
+        "the analysis environment failure is not reported: {:#?}",
+        report.errors
+    );
+    let hex: Vec<_> = report
+        .style
+        .iter()
+        .filter(|diagnostic| diagnostic.rule == StyleRule::HexLiterals)
+        .collect();
+    assert_eq!(hex.len(), 1, "{:#?}", report.style);
+    assert_eq!(hex[0].item.as_deref(), Some("a::unreviewed"));
+    assert!(
+        !report
+            .notes
+            .iter()
+            .any(|note| note.contains("unused style exception")),
+        "{:#?}",
+        report.notes
+    );
+}

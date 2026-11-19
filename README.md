@@ -93,7 +93,12 @@ When style checks are enabled, rustfmt and Clippy run in every mode. They
 produce Cargo build output under `target/`, and they execute build scripts and
 procedural macros.
 
-Both the normal and the `cfg(test)` configuration of each target are analyzed.
+A test or bench target is analyzed only under `cfg(test)`. A library, binary,
+example or procedural macro target with `test` enabled is analyzed under both the
+normal and the `cfg(test)` configuration. Any other target, including one with
+`test = false` (the default for examples), is analyzed only under the normal
+configuration. A target whose `required-features` are inactive is not analyzed;
+the diagram records that.
 
 ## Configuration
 

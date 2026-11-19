@@ -1,6 +1,6 @@
 //! Role: 検査の対象の Rust source の一覧と、file ごとの root module の path を作り、行数を検査する。
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use xtask_modules::ModuleKind;
 use xtask_source::normalize;
@@ -43,10 +43,66 @@ pub(crate) fn collect(context: &Context, analysis: &[TargetAnalysis]) -> Sources
             modules.entry(path.clone()).or_insert(id);
         }
     }
+    add_fallback_modules(context, &resolved, &files, &mut modules);
     Sources {
         files: files.into_iter().collect(),
         modules,
         errors,
+    }
+}
+
+/// Name every file that no analyzed target names, so that an item exception still applies when
+/// the analysis fails. The directory of each target's root file is the base of its paths.
+fn add_fallback_modules(
+    context: &Context,
+    resolved: &BTreeMap<PathBuf, Option<PathBuf>>,
+    files: &BTreeSet<PathBuf>,
+    modules: &mut BTreeMap<PathBuf, String>,
+) {
+    let roots: Vec<(PathBuf, PathBuf)> = context
+        .workspace
+        .packages
+        .iter()
+        .flat_map(|package| &package.targets)
+        .filter_map(|target| {
+            let root = resolved.get(&target.src_path)?.clone()?;
+            let directory = root.parent()?.to_path_buf();
+            Some((root, directory))
+        })
+        .collect();
+    for file in files {
+        if modules.contains_key(file) {
+            continue;
+        }
+        if let Some(path) = fallback_path(&roots, file) {
+            modules.insert(file.clone(), path);
+        }
+    }
+}
+
+/// The module path of `file`, from the first target whose root file it is, or else from the first
+/// target whose root directory holds it. The root file is `crate`; `a.rs` and `a/mod.rs` are
+/// `crate::a`.
+fn fallback_path(roots: &[(PathBuf, PathBuf)], file: &Path) -> Option<String> {
+    if roots.iter().any(|(root, _)| root.as_path() == file) {
+        return Some("crate".into());
+    }
+    let (_, directory) = roots
+        .iter()
+        .find(|(_, directory)| file.starts_with(directory))?;
+    let relative = file.strip_prefix(directory).ok()?;
+    let mut segments: Vec<String> = relative
+        .with_extension("")
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    if segments.last().is_some_and(|name| name == "mod") {
+        segments.pop();
+    }
+    if segments.is_empty() {
+        Some("crate".into())
+    } else {
+        Some(format!("crate::{}", segments.join("::")))
     }
 }
 
