@@ -334,7 +334,7 @@ fn assign_tracks(chains: &Chains, order: &Order, y: &[i64]) -> Tracks {
     let gaps = chains.layer_count.saturating_sub(1);
     let mut track = vec![None; chains.links.len()];
     let mut count = vec![0; gaps];
-    for gap in 0..gaps {
+    for (gap, slot) in count.iter_mut().enumerate().take(gaps) {
         let channels: Vec<(usize, Channel)> = (0..chains.links.len())
             .filter(|&link| chains.layer[chains.links[link].left] == gap)
             .filter_map(|link| channel(chains, order, y, link).map(|found| (link, found)))
@@ -344,7 +344,7 @@ fn assign_tracks(chains: &Chains, order: &Order, y: &[i64]) -> Tracks {
         for (&(link, _), &k) in channels.iter().zip(tracks.iter()) {
             track[link] = Some(k);
         }
-        count[gap] = tracks.iter().max().map_or(0, |&k| k + 1);
+        *slot = tracks.iter().max().map_or(0, |&k| k + 1);
     }
     Tracks { track, count }
 }

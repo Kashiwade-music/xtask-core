@@ -116,8 +116,8 @@ fn sweep(chains: &Chains, adjacency: &Adjacency, initial: Vec<Vec<ItemId>>) -> V
     let mut stall = 0;
     for _ in 0..MAX_SWEEPS {
         let mut pos = positions(chains.items.len(), &current);
-        for layer in 1..current.len() {
-            reorder(chains, adjacency, &mut pos, &mut current[layer], true);
+        for layer in current.iter_mut().skip(1) {
+            reorder(chains, adjacency, &mut pos, layer, true);
         }
         for layer in (0..current.len().saturating_sub(1)).rev() {
             reorder(chains, adjacency, &mut pos, &mut current[layer], false);
@@ -205,14 +205,14 @@ fn transpose(
 ) {
     for _ in 0..TRANSPOSE_PASSES {
         let mut changed = false;
-        for index in 0..layers.len() {
-            for i in 0..layers[index].len().saturating_sub(1) {
-                let upper = layers[index][i];
-                let lower = layers[index][i + 1];
+        for layer in layers.iter_mut() {
+            for i in 0..layer.len().saturating_sub(1) {
+                let upper = layer[i];
+                let lower = layer[i + 1];
                 let keep = pair_cost(chains, adjacency, pos, upper, lower);
                 let swap = pair_cost(chains, adjacency, pos, lower, upper);
                 if swap < keep {
-                    layers[index].swap(i, i + 1);
+                    layer.swap(i, i + 1);
                     pos[upper] = i + 1;
                     pos[lower] = i;
                     changed = true;

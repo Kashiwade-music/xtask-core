@@ -93,7 +93,7 @@ impl Network {
 /// 同じ (from, to) の辺を一本にまとめる。weight は和、minlen は最大（手順 1）。
 fn simplify(edges: &[Constraint]) -> Vec<Constraint> {
     let mut sorted = edges.to_vec();
-    sorted.sort_by(|a, b| (a.from, a.to).cmp(&(b.from, b.to)));
+    sorted.sort_by_key(|a| (a.from, a.to));
     let mut merged: Vec<Constraint> = Vec::with_capacity(sorted.len());
     for edge in sorted {
         match merged.last_mut() {
