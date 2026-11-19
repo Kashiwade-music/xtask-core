@@ -8,7 +8,7 @@ use xtask_workspace::Workspace;
 /// A style violation with a stable policy rule ID and a one-based source location.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StyleDiagnostic {
-    pub rule: xtask_workspace::StyleRule,
+    pub rule: xtask_policy::StyleRule,
     pub path: PathBuf,
     pub line: usize,
     pub column: usize,

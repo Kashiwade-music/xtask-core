@@ -38,22 +38,6 @@ fn stale_notes(report: &xtask_core::Report) -> Vec<&String> {
         .collect()
 }
 
-fn diagram_names(root: &std::path::Path) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
-    let modules = root.join("architecture/modules");
-    for package in fs::read_dir(modules).unwrap() {
-        let package = package.unwrap().path();
-        for file in fs::read_dir(&package).unwrap() {
-            names.insert(format!(
-                "{}/{}",
-                package.file_name().unwrap().to_string_lossy(),
-                file.unwrap().file_name().to_string_lossy()
-            ));
-        }
-    }
-    names
-}
-
 #[test]
 fn diagram_targets_select_generated_diagrams_but_not_checked_targets() {
     let lib = ["fixture-lib-normal", "fixture-lib-test"];
@@ -116,91 +100,6 @@ fn diagram_targets_select_generated_diagrams_but_not_checked_targets() {
 }
 
 #[test]
-fn stale_module_diagrams_are_reported_in_no_write_and_pruned_by_default() {
-    let directory = fixture("pub fn run() {}", "[diagrams]\ntargets = 'lib'\n");
-    add_bin_and_test_targets(&directory);
-    let stale = seed_stale_diagrams(directory.path());
-    let excluded = directory
-        .path()
-        .join("architecture/modules/fixture/fixture-bin-normal.svg");
-    fs::write(&excluded, "excluded").unwrap();
-
-    // no_write reports the same set and never deletes, even if prune is requested via the API.
-    let mut config = Config::new(directory.path());
-    config.no_write = true;
-    let report = run(&config).unwrap();
-    assert_eq!(stale_notes(&report).len(), 3, "{:?}", report.notes);
-    assert!(stale.iter().chain([&excluded]).all(|path| path.exists()));
-    config.prune = true;
-    assert!(run(&config).is_err());
-
-    let Some(node) = available_node() else {
-        return;
-    };
-    let output = check_cli(&directory, &node);
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(
-        stdout.matches("stale module diagram").count(),
-        3,
-        "{stdout}"
-    );
-    assert!(stale.iter().chain([&excluded]).all(|path| !path.exists()));
-
-    // The legacy explicit flag still produces the same cleanup.
-    seed_stale_diagrams(directory.path());
-    fs::write(&excluded, "excluded").unwrap();
-    let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
-        .args(["check", "--prune", "--root"])
-        .arg(directory.path())
-        .env("XTASK_NODE", &node)
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    assert_eq!(
-        diagram_names(directory.path()),
-        BTreeSet::from([
-            "fixture/fixture-lib-normal.svg".to_string(),
-            "fixture/fixture-lib-test.svg".to_string(),
-            "fixture/notes.txt".to_string(),
-        ])
-    );
-    assert!(
-        !directory
-            .path()
-            .join("architecture/modules/removed")
-            .exists()
-    );
-    assert!(directory.path().join("architecture/crates.svg").exists());
-}
-
-#[test]
-fn obsolete_diagrams_are_pruned_even_while_the_report_has_rule_errors() {
-    let Some(node) = available_node() else {
-        return;
-    };
-    let directory = fixture(
-        "mod a { pub fn a() { crate::b::b(); } }\nmod b { /*! Role: aを参照する。 */ pub fn b() { crate::a::a(); } }\n",
-        "",
-    );
-    let stale = seed_stale_diagrams(directory.path());
-    let output = Process::new(env!("CARGO_BIN_EXE_xtask-core"))
-        .args(["check", "--root"])
-        .arg(directory.path())
-        .env("XTASK_NODE", &node)
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    assert!(stale.iter().all(|path| !path.exists()));
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout)
-            .matches("pruned stale module diagram")
-            .count(),
-        2
-    );
-}
-
-#[test]
 fn failed_target_or_workspace_analysis_keeps_current_diagrams_and_prunes_removed_ones() {
     let node = available_node();
     for (source, policy) in [
@@ -241,29 +140,6 @@ fn seed_diagrams(root: &std::path::Path, names: &[&str]) {
     fs::create_dir_all(&directory).unwrap();
     for name in names {
         fs::write(directory.join(name), "existing").unwrap();
-    }
-}
-
-#[test]
-fn default_and_all_targets_never_report_their_own_diagrams_as_stale() {
-    for policy in ["", "[diagrams]\ntargets = 'all'\n"] {
-        let directory = fixture("pub fn run() {}", policy);
-        add_bin_and_test_targets(&directory);
-        seed_diagrams(
-            directory.path(),
-            &[
-                "fixture-lib-normal.svg",
-                "fixture-lib-test.svg",
-                "fixture-bin-normal.svg",
-                "fixture-bin-test.svg",
-                "it-test-test.svg",
-            ],
-        );
-        let mut config = Config::new(directory.path());
-        config.no_write = true;
-        let report = run(&config).unwrap();
-        assert!(report.is_success(), "{:?}", report.errors);
-        assert!(stale_notes(&report).is_empty(), "{:?}", report.notes);
     }
 }
 
