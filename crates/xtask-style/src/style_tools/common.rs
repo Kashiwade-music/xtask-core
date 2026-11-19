@@ -1,29 +1,21 @@
-//! Role: style外部ツールの実行設定と診断集約に共通する処理を提供する。
+//! Role: style外部ツールの実行設定と失敗の報告に共通する処理を提供する。
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use xtask_workspace::{AnalysisSettings, StylePolicy};
+use xtask_policy::{AnalysisSettings, Features, StyleSettings};
 
-use crate::model::StyleDiagnostic;
-
-#[derive(Default)]
-pub(crate) struct ToolReport {
-    pub diagnostics: Vec<StyleDiagnostic>,
-    pub errors: Vec<String>,
-    pub notes: Vec<String>,
-}
-
-pub(super) fn cargo(policy: &StylePolicy, root: &Path) -> Command {
+/// A cargo command for the style checks, with the toolchain the policy selects.
+pub(super) fn cargo(style: &StyleSettings, root: &Path) -> Command {
     // `cargo +toolchain` is understood by the rustup proxy, not a toolchain's
     // concrete cargo binary supplied by Cargo through CARGO.
-    let executable = if policy.toolchain.is_some() {
+    let executable = if style.toolchain().is_some() {
         std::ffi::OsString::from("cargo")
     } else {
         std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into())
     };
     let mut command = Command::new(executable);
-    if let Some(toolchain) = &policy.toolchain {
+    if let Some(toolchain) = style.toolchain() {
         command.arg(format!("+{toolchain}"));
         // Explicitly selecting a toolchain must also select its compiler and
         // formatter, even when the caller configured absolute executable paths.
@@ -37,8 +29,8 @@ pub(super) fn cargo(policy: &StylePolicy, root: &Path) -> Command {
 }
 
 /// Run the formatter that `cargo fmt` would select for the same policy.
-pub(super) fn rustfmt(policy: &StylePolicy, root: &Path) -> Command {
-    let mut command = match &policy.toolchain {
+pub(super) fn rustfmt(style: &StyleSettings, root: &Path) -> Command {
+    let mut command = match style.toolchain() {
         Some(toolchain) => {
             let mut command = Command::new("rustfmt");
             command.arg(format!("+{toolchain}"));
@@ -50,27 +42,36 @@ pub(super) fn rustfmt(policy: &StylePolicy, root: &Path) -> Command {
     command
 }
 
-pub(super) fn feature_args(command: &mut Command, settings: &AnalysisSettings) {
-    if let Some(target) = &settings.target {
+/// The Cargo feature arguments of the analysis selection.
+pub(super) fn feature_args(command: &mut Command, analysis: &AnalysisSettings) {
+    if let Some(target) = analysis.target() {
         command.args(["--target", target]);
     }
-    if settings.all_features {
-        command.arg("--all-features");
-    }
-    if !settings.default_features {
-        command.arg("--no-default-features");
-    }
-    if !settings.features.is_empty() {
-        command.arg("--features").arg(settings.features.join(","));
+    match analysis.features() {
+        Features::All => {
+            command.arg("--all-features");
+        }
+        Features::Selected {
+            features,
+            default_features,
+        } => {
+            if !default_features {
+                command.arg("--no-default-features");
+            }
+            if !features.is_empty() {
+                let list: Vec<&str> = features.iter().map(String::as_str).collect();
+                command.arg("--features").arg(list.join(","));
+            }
+        }
     }
 }
 
 pub(super) fn cfg_environment(
     command: &mut Command,
     root: &Path,
-    settings: &AnalysisSettings,
+    analysis: &AnalysisSettings,
 ) -> Result<(), String> {
-    if settings.cfg.is_empty() {
+    if analysis.cfg().is_empty() {
         return Ok(());
     }
     // Cargo gives encoded flags precedence over RUSTFLAGS. Preserve the active
@@ -98,7 +99,7 @@ pub(super) fn cfg_environment(
     } else {
         inherited.split('\u{1f}').map(str::to_owned).collect()
     };
-    for cfg in &settings.cfg {
+    for cfg in analysis.cfg() {
         flags.push("--cfg".into());
         flags.push(cfg.clone());
     }
