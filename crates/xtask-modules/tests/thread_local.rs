@@ -650,3 +650,87 @@ mod declarations {
         "{error}"
     );
 }
+
+#[test]
+fn local_thread_local_shadows_glob() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod a { //! Role: A.
+    pub static FOO: u8 = 0; }
+mod g { //! Role: G.
+    pub use crate::a::*; }
+mod b { //! Role: B.
+    use crate::g::*;
+    thread_local!{ static FOO: u8 = 1; }
+    fn f() { FOO.with(|_| ()); } }
+"#,
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(
+        result
+            .edges
+            .iter()
+            .any(|edge| edge.from == "crate::b" && edge.to == "crate::g")
+    );
+    assert!(
+        !result
+            .edges
+            .iter()
+            .any(|edge| edge.from == "crate::b" && edge.to == "crate::a")
+    );
+}
+
+#[test]
+fn trusted_glob_allows_thread_local() {
+    let directory = write_fixture(&[(
+        "lib.rs",
+        "//! Role: Root.\nmod b { //! Role: B.\n use framework::prelude::*;\n thread_local!{ static C: u8 = 0; } }\n",
+    )]);
+    let mut options = Options::default();
+    options.trusted_macros.insert("thread_local".into());
+    options.trusted_globs.insert("framework::prelude".into());
+    let result = options.analyze(&directory.path().join("lib.rs")).unwrap();
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+}
+
+#[test]
+fn untrusted_glob_makes_thread_local_uncertain() {
+    let directory = write_fixture(&[(
+        "lib.rs",
+        "//! Role: Root.\nmod b { //! Role: B.\n use framework::prelude::*;\n thread_local!{ static C: u8 = 0; } }\n",
+    )]);
+    let mut options = Options::default();
+    options.trusted_macros.insert("thread_local".into());
+    let result = options.analyze(&directory.path().join("lib.rs")).unwrap();
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d == "crate::b: macro provider cannot be established: thread_local"),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+#[test]
+fn thread_local_type_reference() {
+    let result = graph(
+        r#"
+//! Role: Test root.
+mod cache { //! Role: Cache.
+    pub struct C; }
+std::thread_local! {
+    static CACHE: std::cell::RefCell<crate::cache::C> = std::cell::RefCell::new(crate::cache::C);
+}
+"#,
+    );
+    assert!(
+        result
+            .edges
+            .iter()
+            .any(|edge| edge.from == "crate" && edge.to == "crate::cache"),
+        "{:?}",
+        result.edges
+    );
+}
