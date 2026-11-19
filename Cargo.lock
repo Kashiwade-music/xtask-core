@@ -336,6 +336,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "xtask-diagram"
+version = "0.1.0"
+dependencies = [
+ "xtask-archive",
+ "xtask-layout",
+ "xtask-modules",
+ "xtask-workspace",
+]
+
+[[package]]
 name = "xtask-graph"
 version = "0.1.0"
 dependencies = [

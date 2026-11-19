@@ -1,0 +1,15 @@
+[package]
+name = "xtask-diagram"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+xtask-archive.workspace = true
+xtask-layout.workspace = true
+xtask-modules.workspace = true
+xtask-workspace.workspace = true
+
+[lints]
+workspace = true
