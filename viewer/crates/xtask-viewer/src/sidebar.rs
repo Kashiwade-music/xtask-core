@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use kivact::interaction::TreeNode;
 use kivact::prelude::{
-    Element, IntoView, column, effect, memo, scroll, signal, style, text_input, tree,
+    Element, Handled, IntoView, Key, KeyEvent, column, effect, memo, scroll, signal, style,
+    text_input, tree,
 };
 use xtask_archive::{Content, Diagram, DiagramKind, Mode, Scene};
 
@@ -57,7 +58,15 @@ pub fn sidebar(state: AppState) -> impl IntoView {
         expanded.set(keys);
     });
     column((
-        text_input("Search", state.search).placeholder("Filter crates and modules"),
+        text_input("Search", state.search)
+            .placeholder("Filter crates and modules")
+            .on_key(|event: KeyEvent| {
+                if event.key() == Key::Backspace {
+                    Handled::Yes
+                } else {
+                    Handled::No
+                }
+            }),
         scroll(
             tree("Crates and modules", nodes, selected)
                 .expanded(expanded)

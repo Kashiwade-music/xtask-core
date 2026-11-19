@@ -45,6 +45,7 @@ pub fn diagram_view(state: AppState) -> impl IntoView {
         overlay,
         show_some(tip, move |line| {
             overlay_at(state.pointer, Placement::Below, text(move || line.get()))
+                .hit_testable(false)
         }),
     ))
     .style(style().grow(1).min_height(0).position(Position::Relative))
@@ -209,13 +210,18 @@ fn pointer(state: AppState, event: &PointerEvent) -> Handled {
     match event.phase() {
         PointerPhase::Down(press) => press_down(state, event, press),
         PointerPhase::Move => move_to(state, event),
-        PointerPhase::Up(_) => release(state),
+        PointerPhase::Up(press) if press.button == MouseButton::Primary => release(state),
+        PointerPhase::Up(_) => {}
         PointerPhase::Leave => state.hover.set(None),
         PointerPhase::Cancel => {
             state.gesture.set(Gesture::Idle);
             state.hover.set(None);
         }
-        PointerPhase::Enter => {}
+        PointerPhase::Enter => {
+            if state.gesture.get() == Gesture::Idle {
+                move_to(state, event);
+            }
+        }
     }
     Handled::No
 }

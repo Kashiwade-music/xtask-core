@@ -1,5 +1,7 @@
 //! Role: 図のファイルの読込み（純粋な読込み、結果を状態に写す規則、要求の受理、開く・監視）。
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
@@ -7,7 +9,7 @@ use std::time::Duration;
 use kivact::prelude::{blocking, spawn};
 use xtask_archive::{Content, DiagramKind, MAX_FILE_LEN};
 
-use crate::state::{AppState, Camera, Document, Loaded, Nav, Reason, Request, Stamp};
+use crate::state::{AppState, Camera, Document, Gesture, Loaded, Nav, Reason, Request, Stamp};
 
 /// 読込みの結果。`blocking` の戻り値として UI の thread の外から返すので Send。
 pub struct LoadResult {
@@ -33,10 +35,22 @@ fn stamp_of(path: &Path) -> std::io::Result<Stamp> {
     })
 }
 
-/// 読込みの本体。大きさの確認は呼出し側が済ませている。
+/// ファイルを、上限を一つ超えるまで読んで大きさを確かめる。metadata の長さは使わない（読む間に変わりうる）。
+fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .and_then(|file| file.take(MAX_FILE_LEN + 1).read_to_end(&mut bytes))
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    if bytes.len() as u64 > MAX_FILE_LEN {
+        return Err(format!("{}: file is too large", path.display()));
+    }
+    Ok(bytes)
+}
+
+/// 読込みの本体。大きさは `read_bounded` が確かめる。
 fn read_archive(path: &Path) -> Result<Loaded, String> {
     let describe = |error: &dyn std::fmt::Display| format!("{}: {error}", path.display());
-    let bytes = std::fs::read(path).map_err(|error| describe(&error))?;
+    let bytes = read_bounded(path)?;
     let archive = xtask_archive::decode(&bytes).map_err(|error| describe(&error))?;
     let pictures = archive
         .diagrams
@@ -65,9 +79,6 @@ pub fn load(path: &Path) -> LoadResult {
     let stamp = stamp_of(path);
     let loaded = match &stamp {
         Err(error) => Err(format!("{}: {error}", path.display())),
-        Ok(stamp) if stamp.len > MAX_FILE_LEN => {
-            Err(format!("{}: file is too large", path.display()))
-        }
         Ok(_) => read_archive(path),
     };
     LoadResult {
@@ -186,6 +197,7 @@ pub fn open(state: AppState, path: PathBuf, reason: Reason) {
             state.camera.set(Camera::Fit);
         }
         state.hover.set(None);
+        state.gesture.set(Gesture::Idle);
         state.note.set(applied.note);
     });
 }
@@ -197,6 +209,17 @@ pub fn watch(state: AppState) {
     });
 }
 
+/// 監視する文書の path と、最後に読もうとした印。文書が空なら None。
+fn watched(document: &Document) -> Option<(PathBuf, Option<Stamp>)> {
+    match document {
+        Document::Empty => None,
+        Document::Loaded { loaded, attempted } => Some((loaded.path.clone(), *attempted)),
+        Document::Failed {
+            path, attempted, ..
+        } => Some((path.clone(), *attempted)),
+    }
+}
+
 async fn watch_loop(state: AppState) {
     let mut failures: u32 = 0;
     loop {
@@ -204,18 +227,18 @@ async fn watch_loop(state: AppState) {
         if matches!(state.request.get_untracked(), Request::Running { .. }) {
             continue;
         }
-        let (path, attempted) = match state.document.get_untracked() {
-            Document::Empty => continue,
-            Document::Loaded { loaded, attempted } => (loaded.path.clone(), attempted),
-            Document::Failed {
-                path, attempted, ..
-            } => (path, attempted),
+        let Some((path, attempted)) = watched(&state.document.get_untracked()) else {
+            continue;
         };
         let probe = path.clone();
         match blocking(move || stamp_of(&probe)).await {
             Ok(stamp) => {
                 failures = 0;
-                if Some(stamp) != attempted {
+                // 印を取る間に要求や文書が替わっていたら、この回は何もしない。
+                let unchanged =
+                    watched(&state.document.get_untracked()) == Some((path.clone(), attempted));
+                let idle = matches!(state.request.get_untracked(), Request::Idle);
+                if Some(stamp) != attempted && idle && unchanged {
                     open(state, path, Reason::Reload);
                 }
             }

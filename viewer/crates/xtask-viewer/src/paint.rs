@@ -48,6 +48,7 @@ pub fn highlight(draw: &mut Draw, picture: &Picture, highlight: &Highlight) {
         let stroke = edge_stroke(edge.dotted, palette::ACCENT_WIDTH);
         draw.stroke_path(&edge_path(&edge.path), &stroke, color(palette::ACCENT));
         for bridge in picture.bridges.iter().filter(|bridge| bridge.edge == index) {
+            bridge_halo(draw, bridge);
             draw.stroke_path(&arc(bridge), &stroke, color(palette::ACCENT));
         }
     }
@@ -95,15 +96,20 @@ fn bridges(draw: &mut Draw, picture: &Picture) {
         let Some(edge) = picture.edges.get(bridge.edge as usize) else {
             continue;
         };
-        let halo = Stroke {
-            cap: LineCap::Round,
-            ..Stroke::new(palette::EDGE_WIDTH + 3.0)
-        };
-        draw.stroke_path(&span(bridge), &halo, color(palette::BACKGROUND));
-        draw.stroke_path(&arc(bridge), &halo, color(palette::BACKGROUND));
+        bridge_halo(draw, bridge);
         let stroke = edge_stroke(edge.dotted, palette::EDGE_WIDTH);
         draw.stroke_path(&arc(bridge), &stroke, color(palette::STROKE));
     }
+}
+
+/// 跳びの白い halo。水平の範囲と半円の両方を、背景の色で太く描いて下の線を隠す。
+fn bridge_halo(draw: &mut Draw, bridge: &Bridge) {
+    let halo = Stroke {
+        cap: LineCap::Round,
+        ..Stroke::new(palette::EDGE_WIDTH + 3.0)
+    };
+    draw.stroke_path(&span(bridge), &halo, color(palette::BACKGROUND));
+    draw.stroke_path(&arc(bridge), &halo, color(palette::BACKGROUND));
 }
 
 fn nodes(draw: &mut Draw, picture: &Picture) {
