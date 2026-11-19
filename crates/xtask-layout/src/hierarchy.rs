@@ -1,4 +1,4 @@
-//! Role: region の木を下から配置し、region をまたぐ辺をつなぐ（付属書 L の 9 章）。
+//! Role: region の木を下から配置し、region をまたぐ辺をつなぐ。
 use std::collections::BTreeMap;
 
 use crate::level::{

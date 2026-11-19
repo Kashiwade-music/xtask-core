@@ -1,4 +1,4 @@
-//! Role: 通路の track を割り当て、辺の折れ線を組み立てる（付属書 L の 8 章）。
+//! Role: 通路の track を割り当て、辺の折れ線を組み立てる。
 use crate::acyclic;
 use crate::level::{Chains, Frame, ItemKind, LevelInput, LevelOutput, Order, Piece, Step};
 use crate::model::{

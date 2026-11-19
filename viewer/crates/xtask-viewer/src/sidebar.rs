@@ -31,7 +31,7 @@ pub enum Action {
     Reveal(usize, u32),
 }
 
-/// 木と検索の欄。単クリックは選択だけで、Enter かダブルクリックで開く（DEC-21）。
+/// 木と検索の欄。単クリックは選択だけで、Enter かダブルクリックで開く。
 pub fn sidebar(state: AppState) -> impl IntoView {
     let selected = signal(None::<TreeKey>);
     let expanded = signal(Vec::<TreeKey>::new());

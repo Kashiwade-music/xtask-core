@@ -26,7 +26,7 @@ pub fn layout(graph: &Graph) -> Result<Layout, LayoutError> {
     Ok(layout)
 }
 
-/// 出力の不変条件（付属書 L 10.2 節）を確かめる。
+/// 出力の不変条件を確かめる。
 pub fn verify(graph: &Graph, layout: &Layout) -> Result<(), String> {
     check::output(graph, layout)
 }

@@ -1,4 +1,4 @@
-//! Role: 段の node に層を割り当てる（付属書 L の 3 章）。
+//! Role: 段の node に層を割り当てる。
 use std::collections::BTreeMap;
 
 use crate::acyclic;

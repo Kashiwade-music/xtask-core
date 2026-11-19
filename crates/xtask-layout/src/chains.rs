@@ -1,4 +1,4 @@
-//! Role: 長い辺にダミーを入れ、U ターンと空の層を整える（付属書 L の 4 章）。
+//! Role: 長い辺にダミーを入れ、U ターンと空の層を整える。
 use crate::level::{
     Chains, Frame, Item, ItemId, ItemKind, Layers, LevelInput, Link, Segment, Step,
 };

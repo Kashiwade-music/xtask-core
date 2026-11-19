@@ -1,10 +1,10 @@
-//! Role: 入力の検証と、配置結果の不変条件を確かめる（付属書 L の 10 章）。
+//! Role: 入力の検証と、配置結果の不変条件を確かめる。
 use crate::model::{
     Edge, Graph, Layering, Layout, LayoutError, MAX_EDGES, MAX_NODES, MAX_REGIONS, MAX_SIZE, Point,
     REGION_PAD, Rect, Region, Size,
 };
 
-/// 要求を検証する（付属書 L 10.1 節）。LayoutError の variant の並びの順に調べる。
+/// 要求を検証する。LayoutError の variant の並びの順に調べる。
 pub(crate) fn input(graph: &Graph) -> Result<(), LayoutError> {
     check_counts(graph)?;
     check_node_regions(graph)?;
@@ -115,7 +115,7 @@ fn check_layering(graph: &Graph) -> Result<(), LayoutError> {
     }
 }
 
-/// 配置の結果が不変条件を満たすかを確かめる（付属書 L 10.2 節）。
+/// 配置の結果が不変条件を満たすかを確かめる。
 pub(crate) fn output(graph: &Graph, layout: &Layout) -> Result<(), String> {
     input(graph).map_err(|error| error.to_string())?;
     check_lengths(graph, layout)?;

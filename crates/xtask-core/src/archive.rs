@@ -122,7 +122,7 @@ fn persist(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    //! Role: diagram targets の選択が、target の種類ごとに付属書どおりの図を選ぶことを確かめる。
+    //! Role: diagram targets の選択が、target の種類ごとに選ぶべき図を選ぶことを確かめる。
     use xtask_policy::DiagramTargets::{All, Lib, LibBin};
     use xtask_workspace::TargetKind::{
         Bench, Bin, Cdylib, CustomBuild, Example, Lib as LibKind, ProcMacro, Rlib, Test,

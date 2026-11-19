@@ -107,7 +107,7 @@ pub(crate) struct Step {
 }
 
 /// ダミーを入れた後の段（4 章）。`build` だけが作り、その後は変えない。
-/// `layer_count` は `layer` の最大 + 1 の派生の値（設計書 6.1 節の 3 の「許すもの」）。
+/// `layer_count` は `layer` の最大 + 1 の派生の値（build だけが作り、その後は変えない）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Chains {
     /// 入力の item（同じ index）の後にダミーが続く。大きさは port の数を反映済み。

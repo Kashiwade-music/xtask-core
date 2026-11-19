@@ -13,7 +13,7 @@ pub struct Metrics {
     pub length: f64,
 }
 
-/// 同じ点・同じ直線とみなす差（付属書 L 10.3 節と 8.3 節）。
+/// 同じ点・同じ直線とみなす差。
 const TOLERANCE: f64 = 1e-6;
 
 type Point = (f64, f64);
@@ -45,7 +45,7 @@ pub(crate) fn compute(width: f64, height: f64, routes: &[Vec<Point>]) -> Metrics
     }
 }
 
-/// 同じ点を一つにし、同じ直線の上の中の点を消す（付属書 L 8.3 節の 3）。
+/// 同じ点を一つにし、同じ直線の上の中の点を消す。
 fn simplify(route: &[Point]) -> Vec<Point> {
     let mut kept: Vec<Point> = Vec::new();
     for &point in route {

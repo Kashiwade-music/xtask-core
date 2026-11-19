@@ -1,4 +1,4 @@
-//! Role: 層ごとの縦の座標を network simplex で決める（付属書 L の 7 章）。
+//! Role: 層ごとの縦の座標を network simplex で決める。
 use crate::level::{Chains, Item, ItemKind, Link, Order};
 use crate::model::{LayoutError, MIXED_GAP, NODE_GAP, SMALL_GAP};
 use crate::simplex::{self, Constraint, Problem};

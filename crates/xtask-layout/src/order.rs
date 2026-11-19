@@ -1,4 +1,4 @@
-//! Role: 層ごとの並びと port の順を決め、交差を数える（付属書 L の 5 章）。
+//! Role: 層ごとの並びと port の順を決め、交差を数える。
 use crate::level::{BoxItem, Chains, ItemId, ItemKind, Link, Order};
 use crate::model::{LayoutError, MAX_SWEEPS, TURN_HEIGHT};
 
@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     fn turn_ports_are_ordered() {
-        // backward_makes_turns（付属書 L 4.5 節）の段を手で作る。
+        // chains の試験 backward_makes_turns と同じ段を手で作る。
         // 0 a（層 2）、1 b（層 1）、2 TurnEast（層 3）、3 d(a)（層 2）、
         // 4 d(1)（層 1）、5 TurnWest（層 0）。
         let dummy = |edge: usize| Item {

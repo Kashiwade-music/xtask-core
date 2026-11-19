@@ -59,7 +59,7 @@ fn json_files(dir: &Path) -> Vec<PathBuf> {
     paths
 }
 
-/// `input` の JSON を配置の要求にする（付属書 L 11.1 節）。
+/// `input` の JSON を配置の要求にする。
 fn to_graph(input: &Value) -> Graph {
     let node_values = array(input, "nodes");
     let node_index: BTreeMap<&str, usize> = node_values

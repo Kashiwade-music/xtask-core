@@ -203,7 +203,7 @@ fn render(rows: &[Row]) -> String {
     .expect(WRITE);
     writeln!(
         out,
-        "| 比（本実装 ÷ ELK）K1 / K2 / K3 | | | | K1 {} | K2 {} | K3 {} | |",
+        "| 比（本実装 ÷ ELK）交差 / 折れ / 面積 | | | | 交差 {} | 折れ {} | 面積 {} | |",
         ratio(all.ours_crossings as f64, all.elk_crossings as f64),
         ratio(all.ours_bends as f64, all.elk_bends as f64),
         ratio(all.ours_area, all.elk_area),
@@ -211,7 +211,7 @@ fn render(rows: &[Row]) -> String {
     .expect(WRITE);
     writeln!(
         out,
-        "| kivact {} 件の時間の和（K4） | | | | | | | {:.3} s |",
+        "| kivact {} 件の時間の和 | | | | | | | {:.3} s |",
         kivact_count,
         kivact.millis / 1000.0
     )
