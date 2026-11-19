@@ -1,4 +1,4 @@
-//! Role: 平らな段の要素・区間・中間結果の型と、段の配置の順序を定義する。
+//! Role: 平らな段の要素・区間・中間結果の型を定義する。
 use crate::model::{Point, Rect, Size};
 
 /// 段の中の要素の index。
@@ -145,13 +145,4 @@ pub(crate) struct LevelOutput {
 pub(crate) struct Piece {
     pub points: Vec<Point>,
     pub label: Option<Rect>,
-}
-
-/// 段を配置する。layering → chains → order → position → route の順。
-pub(crate) fn run_level(input: &LevelInput) -> Result<LevelOutput, crate::LayoutError> {
-    let layers = crate::layering::assign(input)?;
-    let chains = crate::chains::build(input, &layers)?;
-    let order = crate::order::arrange(&chains)?;
-    let y = crate::position::vertical(&chains, &order)?;
-    crate::route::finish(input, &chains, &order, &y)
 }
