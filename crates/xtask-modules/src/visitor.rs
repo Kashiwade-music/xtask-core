@@ -6,13 +6,16 @@ use crate::{
         Namespace, Symbols, Tables, Target, apply_import, declaration, imports, resolve_path,
     },
 };
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, path::Path};
 use syn::{
     Item,
+    spanned::Spanned,
     visit::{self, Visit},
 };
 pub(crate) struct References<'a> {
     pub(crate) module: &'a str,
+    /// The file of the module, which its cfg errors are located in.
+    pub(crate) file: &'a Path,
     pub(crate) tables: &'a Tables,
     /// Textual-scope `macro_rules!` names per module.
     pub(crate) textual: &'a Tables,
@@ -26,36 +29,52 @@ pub(crate) struct References<'a> {
 }
 
 impl References<'_> {
-    /// Evaluates the cfg of an expression, statement, or associated item, and reports
-    /// its invalid predicate. Module-level items were already evaluated by the loader.
-    fn cfg_enabled(&mut self, attrs: &[syn::Attribute]) -> bool {
+    /// Evaluates the attributes of an expression, statement, or associated item once: the cfg
+    /// predicates decide whether the node is visited, and an enabled node's expansions are reported.
+    /// Module items are not passed here; the loader evaluated them.
+    pub(crate) fn enabled(&mut self, attrs: &[syn::Attribute]) -> bool {
         // Most expression and statement nodes have no attributes. They cannot
         // disable code or require expansion, so avoid cloning the module and
         // local symbol tables just to compute unused intrinsic derive names.
         if attrs.is_empty() {
             return true;
         }
-        match cfg::enabled(attrs, self.env) {
-            Ok(enabled) => enabled,
+        let metas = match cfg::effective(attrs, self.env) {
+            Ok(metas) => metas,
             Err(error) => {
-                self.diagnostics.insert(format!("{}: {error}", self.module));
+                self.cfg_error(attrs, &error);
+                return false;
+            }
+        };
+        match cfg::enabled_metas(&metas, self.env) {
+            Ok(true) => {
+                self.expansions(&metas);
+                true
+            }
+            Ok(false) => false,
+            Err(error) => {
+                self.cfg_error(attrs, &error);
                 false
             }
         }
     }
-    pub(crate) fn enabled(&mut self, attrs: &[syn::Attribute]) -> bool {
-        let enabled = self.cfg_enabled(attrs);
-        if enabled {
-            self.expansions(attrs);
-        }
-        enabled
+    /// Reports an invalid cfg, located at its attribute, and so disables the node.
+    fn cfg_error(&mut self, attrs: &[syn::Attribute], error: &str) {
+        let line = attrs
+            .iter()
+            .find(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
+            .or(attrs.first())
+            .map_or(1, |attr| attr.span().start().line);
+        self.diagnostics
+            .insert(loader::located(self.file, line, error));
     }
-    /// Reports the attribute expansions that this analysis does not model.
-    pub(crate) fn expansions(&mut self, attrs: &[syn::Attribute]) {
-        if attrs.is_empty() {
+    /// Reports the attribute expansions that this analysis does not model. The attributes
+    /// are the expanded ones.
+    pub(crate) fn expansions(&mut self, metas: &[syn::Meta]) {
+        if metas.is_empty() {
             return;
         }
-        match cfg::expansion_diagnostics(attrs, self.env, &self.intrinsic_derives()) {
+        match cfg::expansion_diagnostics(metas, self.env, &self.intrinsic_derives()) {
             Ok(diagnostics) => {
                 for diagnostic in diagnostics {
                     self.diagnostics
@@ -322,9 +341,8 @@ impl<'ast> Visit<'ast> for References<'_> {
         }
     }
     fn visit_item(&mut self, item: &'ast Item) {
-        // The cfg of a module item was evaluated by the loader, and that of a block item
-        // by visit_block, so only the expansions remain.
-        self.expansions(loader::attrs(item));
+        // The attributes of the item were evaluated before the visit: by the loader for a
+        // module item, and by visit_block for a block item.
         // Child modules are visited separately in their own resolution environment.
         if let Item::Mod(module) = item {
             if !self.scopes.is_empty() {
@@ -442,12 +460,12 @@ impl<'ast> Visit<'ast> for References<'_> {
     }
     fn visit_block(&mut self, block: &'ast syn::Block) {
         self.scopes.push(Symbols::new());
-        // Each block item's cfg is evaluated once here; a disabled item is skipped entirely.
+        // Each block item's attributes are evaluated once here; a disabled item is skipped entirely.
         let active = block
             .stmts
             .iter()
             .map(|statement| match statement {
-                syn::Stmt::Item(item) => self.cfg_enabled(loader::attrs(item)),
+                syn::Stmt::Item(item) => self.enabled(loader::attrs(item)),
                 _ => true,
             })
             .collect::<Vec<_>>();
@@ -854,7 +872,7 @@ pub(crate) fn opaque_modules(
 ) -> BTreeSet<String> {
     let mut opaque = BTreeSet::new();
     for source in sources {
-        for item in source.items() {
+        for (item, _) in source.items() {
             let Item::Macro(item) = item else { continue };
             if item.mac.path.is_ident("macro_rules")
                 || !env

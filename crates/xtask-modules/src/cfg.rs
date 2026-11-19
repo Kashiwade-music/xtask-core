@@ -18,19 +18,32 @@ impl syn::parse::Parse for Predicate {
     }
 }
 
+/// Whether the attributes are enabled. Module items are evaluated by the loader on their
+/// expanded attributes (`enabled_metas`); this is for the attributes of other nodes.
 pub(crate) fn enabled(attrs: &[Attribute], env: Env) -> Result<bool, String> {
-    for attr in effective(attrs, env)? {
-        if attr.path().is_ident("cfg") {
-            let Meta::List(list) = attr else {
+    enabled_metas(&effective(attrs, env)?, env)
+}
+
+/// Whether the cfg predicates of expanded attributes hold.
+pub(crate) fn enabled_metas(metas: &[Meta], env: Env) -> Result<bool, String> {
+    for meta in metas {
+        if meta.path().is_ident("cfg") {
+            let Meta::List(list) = meta else {
                 return Err("invalid cfg attribute".into());
             };
-            let predicate = syn::parse2::<Predicate>(list.tokens).map_err(|e| e.to_string())?;
+            let predicate =
+                syn::parse2::<Predicate>(list.tokens.clone()).map_err(|e| e.to_string())?;
             if !evaluate(&predicate, env)? {
                 return Ok(false);
             }
         }
     }
     Ok(true)
+}
+
+/// Whether an expanded attribute named `name` is present.
+pub(crate) fn contains(metas: &[Meta], name: &str) -> bool {
+    metas.iter().any(|meta| meta.path().is_ident(name))
 }
 
 pub(crate) fn effective(attrs: &[Attribute], env: Env) -> Result<Vec<Meta>, String> {
@@ -118,13 +131,14 @@ fn evaluate_meta(meta: &Meta, env: Env) -> Result<bool, String> {
     }
 }
 
+/// The expansions that the analysis does not model, among expanded attributes.
 pub(crate) fn expansion_diagnostics(
-    attrs: &[Attribute],
+    metas: &[Meta],
     env: Env,
     intrinsic_derives: &std::collections::BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
     let mut diagnostics = Vec::new();
-    for meta in effective(attrs, env)? {
+    for meta in metas {
         let name = meta
             .path()
             .segments

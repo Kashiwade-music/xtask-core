@@ -13,17 +13,17 @@ use syn::{
 
 struct Statics(Vec<syn::ItemStatic>);
 
-fn imports_unknown_thread_local(source: &Source, env: Env) -> Result<bool, String> {
-    for item in source.items() {
-        let Item::ExternCrate(item) = item else {
+fn imports_unknown_thread_local(source: &Source) -> bool {
+    for (item, attributes) in source.items() {
+        if !matches!(item, Item::ExternCrate(_)) {
             continue;
-        };
-        for attribute in cfg::effective(&item.attrs, env)? {
+        }
+        for attribute in attributes {
             if !attribute.path().is_ident("macro_use") {
                 continue;
             }
             match attribute {
-                Meta::Path(_) | Meta::NameValue(_) => return Ok(true),
+                Meta::Path(_) | Meta::NameValue(_) => return true,
                 Meta::List(list) => {
                     let names =
                         list.parse_args_with(Punctuated::<syn::Ident, Token![,]>::parse_terminated);
@@ -32,13 +32,13 @@ fn imports_unknown_thread_local(source: &Source, env: Env) -> Result<bool, Strin
                             names.iter().any(|name| name.unraw() == "thread_local")
                         })
                     {
-                        return Ok(true);
+                        return true;
                     }
                 }
             }
         }
     }
-    Ok(false)
+    false
 }
 
 fn is_standard_crate(name: &str) -> bool {
@@ -68,7 +68,7 @@ fn uncertain_binding(
     if !visited.insert(source.module.id.clone()) {
         return false;
     }
-    for item in source.items() {
+    for (item, _) in source.items() {
         let Item::Use(item) = item else { continue };
         let mut bindings = Vec::new();
         imports(
@@ -159,7 +159,7 @@ pub(crate) fn register(
     let mut declarations = Vec::new();
     let mut unknown_macro_scopes = BTreeSet::new();
     for source in sources {
-        if imports_unknown_thread_local(source, env)? {
+        if imports_unknown_thread_local(source) {
             unknown_macro_scopes.insert(source.module.id.clone());
         }
     }
@@ -167,7 +167,7 @@ pub(crate) fn register(
         let unknown_macro_use = unknown_macro_scopes.iter().any(|scope| {
             source.module.id == *scope || source.module.id.starts_with(&format!("{scope}::"))
         });
-        for item in source.items() {
+        for (item, _) in source.items() {
             let Item::Macro(item) = item else { continue };
             let targets =
                 local_macro_targets(&source.module.id, &item.mac.path, tables, textual, None);
