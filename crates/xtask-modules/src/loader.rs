@@ -245,12 +245,13 @@ impl Loader<'_> {
             if !self.enabled(&site.file_path, line, attrs(item)) {
                 continue;
             }
-            if let Item::Mod(module) = item {
-                if !self.child(site, index, module, id, owner, stack)? {
-                    continue;
-                }
+            let loaded = match item {
+                Item::Mod(module) => self.child(site, index, module, id, owner, stack)?,
+                _ => true,
+            };
+            if loaded {
+                active.push(index);
             }
-            active.push(index);
         }
         Ok(active)
     }
