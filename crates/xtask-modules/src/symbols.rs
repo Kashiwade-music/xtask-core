@@ -193,13 +193,19 @@ pub(crate) fn resolve_path(
             match target {
                 Target::Module(owner) => {
                     if let Some(found) = tables.get(&owner).and_then(|s| s.get(&path[offset])) {
+                        // A segment that more segments follow names a type or a
+                        // module: a function or constant of the same name, such as
+                        // a re-exported `fn button` beside `mod button`, has no
+                        // path below it.
+                        let wanted = if offset + 1 == path.len() {
+                            namespace
+                        } else {
+                            Some(Namespace::Type)
+                        };
                         next.extend(
                             found
                                 .iter()
-                                .filter(|t| {
-                                    offset + 1 != path.len()
-                                        || namespace.is_none_or(|ns| t.matches(ns))
-                                })
+                                .filter(|t| wanted.is_none_or(|ns| t.matches(ns)))
                                 .cloned(),
                         );
                     }

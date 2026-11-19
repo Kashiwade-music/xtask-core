@@ -255,6 +255,31 @@ fn namespaces_distinguish_function_and_struct_imports() {
 }
 
 #[test]
+fn a_function_named_like_a_module_is_not_a_path_prefix() {
+    // `fn button` is re-exported beside `mod button`; a path through
+    // `crate::button::` names the module, never the function's module.
+    let result = graph(
+        &[(
+            "lib.rs",
+            r#"
+        mod button { pub mod look { pub struct Tokens; pub fn tokens() {} } pub mod view { pub fn button() {} } }
+        pub use button::view::button;
+        mod other { use crate::button::look::tokens; fn f() { let _ = crate::button::look::Tokens; tokens(); } }
+    "#,
+        )],
+        AnalysisOptions::default(),
+    );
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(
+        edges(&result),
+        BTreeSet::from([
+            ("crate", "crate::button::view"),
+            ("crate::other", "crate::button::look")
+        ])
+    );
+}
+
+#[test]
 fn absolute_external_use_does_not_bind_same_named_local_module() {
     let result = graph(
         &[(
