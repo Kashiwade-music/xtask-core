@@ -164,6 +164,12 @@ pub struct AppState {
     pub gesture: Var<Gesture>,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     /// setup の中で呼ぶ。
     pub fn new() -> Self {
