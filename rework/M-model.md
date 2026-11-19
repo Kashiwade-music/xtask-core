@@ -470,3 +470,34 @@ cargo check -p xtask-modules --all-targets
 cargo test -p xtask-modules
 cargo clippy -p xtask-modules --all-targets -- -D warnings
 ```
+
+---
+
+### M3d：属性の評価の残り（W5）
+
+M3a の fix lane の報告（W2）で残った、属性の評価の担当と誤りの扱いを直す。
+
+#### 所有
+
+`crates/xtask-modules/src/thread_local_items.rs`、`src/visitor.rs`（impl・trait の item の属性を評価する部分）、`tests/thread_local.rs`、`tests/analysis.rs`
+
+#### 手順
+
+1. **thread_local の中の static の属性。** loader は macro の本体を読まないので、`thread_local!` の中の static の属性（`cfg` など）は `thread_local_items.rs` が評価する。これを、その属性の唯一の担当とする（M3a の手順 4 の例外）。
+   - cfg の誤りは `?` で解析全体を止めず、`{file}:{line}: ` の付いた診断を一つ出し、その static を無効とみなす（M3a の手順 5 の規則と同じ）。他の static と解析は続ける。
+2. **impl・trait の item の属性。** loader は impl・trait の中に下りないので、impl・trait の item（fn、const、type）の属性は visitor が評価する。一つの item の属性を一回だけ評価する（M3b の手順 7）。二回評価している所があれば、一回の評価の結果を使い回す形に直す。
+3. 読込みの io の誤りと root の正規化の誤りは、行が無いので `{file}: ` だけでよい（M3a の手順 6 の範囲外）。不正な `cfg_attr` を持つ `extern crate` を、設定全体の誤りではなく item の診断にした変更（M3a の fix lane）は、M3a の手順 5 のとおりで正しい。
+
+#### 試験
+
+- `invalid_cfg_on_thread_local_static_is_one_diagnostic`：`mod a { thread_local!{ #[cfg(a::b)] pub static A: u8 = 0; pub static B: u8 = 1; } } mod c { use crate::a::B; }` を、`trusted_macros` に `thread_local` を入れて解析すると、`Ok` で、診断がちょうど 1 件（cfg の誤り、`lib.rs:` を含む）。c の import は解決する。
+- `invalid_cfg_on_impl_fn_is_one_diagnostic`：`struct S; impl S { #[cfg(a::b)] fn f() {} }` で、cfg の誤りの診断がちょうど 1 件。
+
+#### 確認
+
+```bash
+cargo check -p xtask-modules --all-targets
+cargo test -p xtask-modules
+cargo clippy -p xtask-modules --all-targets -- -D warnings
+```
+

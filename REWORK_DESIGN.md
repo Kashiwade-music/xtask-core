@@ -59,7 +59,7 @@ KPI は自動の gate ではないが、**完了の条件**である。目標に
 
 | ID | 指標 | 目標 | 測り方 |
 |---|---|---|---|
-| K1 | 交差数の比 | 1.3 以下 | `baseline_report` の合計の行。全 146 件の、本実装の交差数の和 ÷ ELK の交差数の和。ELK の和が 0 なら本実装も 0 |
+| K1 | 交差数の比 | 1.55 以下（回帰の防止。DEC-22） | `baseline_report` の合計の行。全 146 件の、本実装の交差数の和 ÷ ELK の交差数の和。ELK の和が 0 なら本実装も 0 |
 | K2 | 折れの数の比 | 1.3 以下 | K1 と同じく、折れの数の和の比 |
 | K3 | 面積の比 | 1.5 以下 | K1 と同じく、`width × height` の和の比 |
 | K4 | 配置の時間 | 3.0 秒以下 | `kivact` の 121 件について、release、1 thread で、一度ずつ配置した時間の和。測る前に全件を一度配置する（暖機） |
@@ -485,6 +485,8 @@ pub fn metrics(width: f64, height: f64, routes: &[Vec<(f64, f64)>]) -> Metrics;
 | DEC-19 | `thread_local!` を std のものと認める規則は、旧い実装の規則（Macro の名前空間で `std::thread_local` に解決される別名・再公開を含む。提供元が不確かなら static を作らない）を変えない。名前解決を二回にし、一回目の表で判定してから static を宣言に足し、二回目を空の表から行う | 既存の `tests/thread_local.rs` がこの規則を固定している。static は Value の名前空間なので、判定に使う Macro の名前空間は二回で変わらず、各回の解決は単調に保てる（DEC-18） |
 | DEC-20 | style の options-default の probe は、selector ごとの crate のままにする（一括化しない） | 一つの crate にまとめると、名前の解決の誤りで他の selector の型検査の診断が出なくなる |
 | DEC-21 | viewer の木は、単クリックで選び、Enter かダブルクリックで開く | 固定の Kivact の tree の振舞い（`on_activate`）に合わせる。選択を遷移につなぐ effect を作らない |
+| DEC-22 | K1 の目標を 1.3 から 1.55 以下（回帰の防止）に改め、1.3 は後続（12 章）の階層をまたぐ交差の削減で目指す | W3 の測定で K1 は 1.50。交差は通路の配線ではなく並びの段で生じ（並びの段の交差 157,644、最終 157,312）、うち約 3 割は階層を下から配置すること（DEC-5）による（region を外して平らに配置すると、大きい 3 件で 39,814 → 30,763）。設計者が試した手直し（往復の回数を増やす：0.7% 減、三つの初めの並び：3% 減で並びの時間が 3 倍、境界の port の順を外側に合わせて二回配置する：かえって 2% 増）は、どれも 1.3 に届かない。届かせるには ELK の INCLUDE_CHILDREN のような階層をまたぐ並びが要り、本改修の範囲を超える。K2（1.13）と K3（0.54）は目標の中 |
+| DEC-23 | network simplex は、根の辺を足さず連結成分ごとに解き、交換では変わる部分だけを直す（L9） | W3 の測定で配置の時間の 99% が縦の座標の simplex だった。設計者の実装（`rework/reference/simplex.rs.txt`）で、Kivact の 121 件の時間の和が 19.6 秒から 2.5 秒になり、基準の全件で不変条件と決定性を満たした |
 
 ---
 
@@ -496,7 +498,7 @@ pub fn metrics(width: f64, height: f64, routes: &[Vec<(f64, f64)>]) -> Metrics;
 | W2 | 配置の各段階と検証、module の解析、viewer の骨組みと描画の計算 | L2→L6、L3、L4、L5、M3a→M3b→M3c、V1 |
 | W3 | 配置の階層、基準の比較、style、viewer の画面 | L7、L8、C1、V2a、V2b→V2d、V2c |
 | W4 | 図の組立て、viewer の GUI 試験、README | A2、V3、C3 |
-| W5 | xtask-core の組み直しと旧い経路の削除 | C2a→C2b→C2c |
+| W5 | xtask-core の組み直しと旧い経路の削除、配置の時間の改善、属性の評価の残り | C2a→C2b→C2c、L9、M3d |
 | CP | 全体の試験、KPI、受入れ条件の点検 | Orchestrator |
 
 - 同じ wave の中で、他の lane の未完成の関数（`todo!()`）を**実行する**試験は無い（compile だけは通る）。
@@ -530,5 +532,6 @@ Kivact の `dev/xtask` の修正は、本改修の範囲外にする（Kivact �
 - X-B6：required-features の `dep/feat` の判定。
 - D-B9 の残り：定数を名指す pattern、guard の `if let` の束縛。
 - D-B10：可視性の模型化（名前付きの `use` の名前空間の精密化を含む）。
+- 階層をまたぐ交差の削減（K1 を 1.3 以下にする。DEC-22）。候補：region の境界の port を辺ごとではなく端の node ごとにまとめる（ELK の mergeHierarchyEdges）、親と子の段を交互に掃引する。
 - style の probe の一括化（`cargo check --keep-going` で複数の probe の crate を一度に検査する）。
 - viewer の macOS 対応（Kivact が未対応）。

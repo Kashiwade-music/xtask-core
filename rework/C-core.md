@@ -25,7 +25,7 @@
        pub root: &'a Path,                       // xtask_source::normalize 済み
        pub workspace: &'a xtask_workspace::Workspace,
        pub analysis: &'a xtask_policy::AnalysisSettings,
-       /// 選んだ構成の feature（`Workspace::features` の結果）。Err なら compiler の検査はその文を errors に入れて行わない。
+       /// 選んだ構成の feature（`Workspace::features` の結果）。Err なら options-default の probe だけが、その文を errors に一つ入れて行わない（手順 7）。clippy と rustfmt は今までどおり動かす。
        pub features: &'a Result<BTreeMap<String, BTreeSet<String>>, String>,
        pub style: &'a xtask_policy::StyleSettings,
        pub files: &'a [PathBuf],                 // 検査する .rs（正規化・重複除去済み）
@@ -44,13 +44,13 @@
 
    ```rust
    pub(crate) struct SourceReport { diagnostics: Vec<StyleDiagnostic>, errors: Vec<String>, items: BTreeMap<PathBuf, Vec<ItemSpan>> }
-   /// file の中の item の行の範囲（1 から、両端を含む）と、module の中の名前。start_line の昇順。
-   pub(crate) struct ItemSpan { start_line: usize, end_line: usize, item: String }
+   /// file の中の item の位置の範囲と、module の中の名前。行は 1 から、列は 0 から（proc-macro2 の `LineColumn`）、両端を含む。(start_line, start_column) の昇順。
+   pub(crate) struct ItemSpan { start_line: usize, start_column: usize, end_line: usize, end_column: usize, item: String }
    ```
 
    - 各ファイルを一回だけ読み、一回だけ parse する。読込みと parse の誤りはそのファイルの `errors` に入れて、次のファイルに進む（一つの壊れたファイルで全体を止めない）。
    - parse した AST から、構文の診断と `ItemSpan` の列を同時に作り、AST はそのファイルを終えたら捨てる（全ファイルの AST を持ち続けない）。
-   - 旧い `style.rs` の `source_items`（診断のあるファイルを読み直して parse する関数）を消し、`items` の索引で行から item の名前を引く。
+   - 旧い `style.rs` の `source_items`（診断のあるファイルを読み直して parse する関数）を消し、`items` の索引で、診断の (行, 列) を含む最も内側の item の名前を引く（同じ行に二つの item があっても区別する。既存の試験 `item_exception_does_not_expand_to_a_sibling_on_the_same_line` が求める）。
    - `style_source::check` は、`check` の中の `std::thread::scope` の一つの thread で走らせる（手順 9）。その thread が終わると proc-macro2 の span の記録も解放される（付属書 M の M2 の手順 5）。
 4. **visitor の状態（設計書 6.1 節の 4）。** `Checker` の `inline`、`in_block`、`module_items` の save/restore をやめる。
    - 範囲の情報を `#[derive(Clone, Copy)] struct Scope<'a> { module: ModuleScope, items: &'a [Item], in_body: bool }`（`enum ModuleScope { File, Inline }`）にまとめ、`Checker` は `scope: Scope<'a>` を持つ。`Checker` の `scope` は作った後に書き換えない。

@@ -698,6 +698,12 @@ pub(crate) fn solve(problem: &Problem) -> Result<Vec<i64>, LayoutError>
 
 最初に入力を調べる：端が `node_count` 以上、`weight < 0`、Kahn 法（手順 3）で全 node を取り出せない（閉路）のどれかなら `Err(LayoutError::Internal(..))`。手順 7 で入る辺の候補が一つも無いときも `Err(LayoutError::Internal("no entering edge"))`（正しい実装では起きない）。
 
+> **W3 の測定の後の改訂（L9 が置き換える）。** 下の手順 2（全 node への根の辺）と手順 7 の「交換のたびに全部を作り直す」は、K4 の測定で配置の時間の 99% を占めた（約 20 秒のうち 19.8 秒）。L9 は、`simplex.rs` を `rework/reference/simplex.rs.txt`（設計者が書き、Rust 1.85 で試験と基準の全件を通したもの）で置き換える。違いは次の 3 点で、他の手順（単純化、Kahn の初めの rank、締まった木、cut value の式、tie-break）は同じ：
+> - 根の辺を足さず、連結成分ごとに解く（成分は最小の node の昇順、成分の中の木の根は最小の node）。各成分の最小の rank を 0 にする。
+> - 交換では、変わる部分だけを直す（graphviz の `ns.c` と同じ方式）：入る辺の slack の分だけ下側の部分木の rank をずらし、入る辺の両端から共通の祖先までの木の辺の cut value を直し、その祖先の部分木だけの parent・low・lim を振り直す。
+> - 出る辺は、木の辺の並びを前回の位置から巡り、見つけた負の cut value の最初の 30 個のうち最も負のもの。入る辺は、出る辺の下側の部分木だけをたどって探す。
+> 測定（Kivact の 121 件、release）：配置の時間の和 19.6 秒 → 2.5 秒。基準の全件で不変条件と決定性を満たす。
+
 手順（Gansner ほか 1993 の方法。dagre の `network-simplex.js` と同じ構造。コードは写さず、この手順から書く）：
 
 1. **単純化。** 同じ `(from, to)` の辺を一本にまとめ、`weight` は和、`minlen` は最大を取る。まとめた辺は `(from, to)` の昇順に並べる。
@@ -1059,3 +1065,23 @@ fn layout_is_deterministic()       // 全件で 2 回の結果が等しい
 2. 同じ内容を `target/layout-baseline-report.md` に書く。
 
 時間は `std::time::Instant` で `layout` だけを測る。1 thread で、まず全件を一度配置し（暖機、測らない）、その後に各件を一度ずつ配置して測る。
+
+---
+
+## 12. 配置の時間の改善（L9、W5）
+
+W3 の tier b の KPI の差戻し 17（K4 が 19.6 秒）への対応。設計者が測定し、時間の 99% が `position` の network simplex であることを確かめた。
+
+- **所有**：`crates/xtask-layout/src/simplex.rs`、`src/route.rs` の `push_simplified` と `collinear`、`src/hierarchy.rs` の同名の関数、`rework/reference/simplex.rs.txt`
+- **手順**：
+  1. `crates/xtask-layout/src/simplex.rs` を消し、`git mv rework/reference/simplex.rs.txt crates/xtask-layout/src/simplex.rs` で置き換える。中身は一字一句変えない（6.1 節の改訂のとおり。`rework/reference/` は空になるので消える）。
+  2. `hierarchy.rs` の `push_simplified` と `collinear` は `route.rs` の同名の関数の複製なので消す。`route.rs` の二つを `pub(crate)` にし、`hierarchy.rs` はそれを `use` する（W3 の L7 の報告）。
+- **試験**：新しい試験は足さない。`simplex::tests` の 7 件はそのまま通る（置き換えるファイルに含まれる）。
+- **確認**：
+  ```bash
+  cargo check -p xtask-layout --all-targets
+  cargo test -p xtask-layout --lib
+  cargo clippy -p xtask-layout --all-targets -- -D warnings
+  ```
+  基準の全件の試験と比較表（K1〜K4）は、W5 の tier b で Orchestrator が実行する。
+

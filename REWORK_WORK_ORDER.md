@@ -219,7 +219,7 @@ unit の状態は次の四つで、`rework/PROGRESS.md` の表に書く。
 | W2 | W1 のもの、`cargo check -p xtask-modules --all-targets`、`cargo test -p xtask-modules`、`cargo clippy -p xtask-archive -p xtask-policy -p xtask-modules --all-targets -- -D warnings`、`(cd <MAIN>/viewer && cargo check --workspace --all-targets && cargo test -p xtask-render)` |
 | W3 | W2 のもの、`cargo test -p xtask-layout --lib`、`cargo clippy -p xtask-layout --all-targets -- -D warnings`、`cargo test -p xtask-layout --release --test baseline`、`cargo run -p xtask-layout --release --example baseline_report`（K1〜K4 を `rework/PROGRESS.md` に記録。未達なら差戻しにして進める）、`cargo check -p xtask-style --all-targets`、`cargo test -p xtask-style --lib`、`(cd <MAIN>/viewer && cargo check --workspace --all-targets && cargo test -p xtask-viewer --lib)` |
 | W4 | W3 のもの（基準の試験と比較表を除く）、`cargo check -p xtask-diagram --all-targets`、`cargo test -p xtask-diagram`。viewer の GUI の試験は V3 の報告の結果を記録するだけで、再実行しない |
-| W5 | `cargo check --workspace --all-targets`、`cargo test -p xtask-core --lib`、`cargo test -p xtask-core --test integration` |
+| W5 | `cargo check --workspace --all-targets`、`cargo test -p xtask-core --lib`、`cargo test -p xtask-core --test integration`、`cargo test -p xtask-layout --lib`、`cargo test -p xtask-modules`、`cargo clippy -p xtask-layout -p xtask-modules --all-targets -- -D warnings`、`cargo test -p xtask-layout --release --test baseline`、`cargo run -p xtask-layout --release --example baseline_report`（K1〜K4 を記録） |
 
 ### 2.3 tier c（CP、Orchestrator）
 
@@ -336,6 +336,8 @@ for i in 1 2 3; do /usr/bin/time -f %e cargo run -p xtask-core -- check > /dev/n
 | lane | unit | 付属書 | 追加の指示 |
 |---|---|---|---|
 | 1 | C2a → C2b → C2c | C の C2a、C2b、C2c | 確認の統合の試験は、付属書が挙げた試験だけを実行する |
+| 2 | L9 | L 12 章 | `simplex.rs` は `rework/reference/simplex.rs.txt` を `git mv` で置き換え、一字一句変えない |
+| 3 | M3d | M の M3d | — |
 
 ### CP（W5 の後）
 
@@ -373,3 +375,5 @@ for i in 1 2 3; do /usr/bin/time -f %e cargo run -p xtask-core -- check > /dev/n
 | C2a | W5 | 1 | C | すべて |
 | C2b | W5 | 1（C2a の後） | C | C2a |
 | C2c | W5 | 1（C2b の後） | C | C2b |
+| L9 | W5 | 2 | L | L1〜L8 |
+| M3d | W5 | 3 | M | M3c |
