@@ -71,14 +71,18 @@ fn optimize(input: &LevelInput) -> Result<Layers, LayoutError> {
 /// 数の少ない層へ移す。移すのは、今の層より数が少ないときだけ。
 fn balance(mut rank: Vec<i64>, problem: &Problem) -> Vec<i64> {
     let (inbound, outbound) = adjacency(problem);
+    let mut counts = layer_counts(&rank);
     for node in 0..rank.len() {
         if weight_sum(&inbound[node]) != weight_sum(&outbound[node]) {
             continue;
         }
         let (low, high) = reach(node, &rank, &inbound, &outbound);
-        let target = least_crowded(&rank, low, high);
-        if crowd(&rank, target) < crowd(&rank, rank[node]) {
-            rank[node] = target;
+        let target = least_crowded(&counts, low, high) as usize;
+        let current = rank[node] as usize;
+        if counts[target] < counts[current] {
+            counts[current] -= 1;
+            counts[target] += 1;
+            rank[node] = target as i64;
         }
     }
     rank
@@ -119,23 +123,28 @@ fn reach(
     (low, high)
 }
 
+/// 層ごとの node の数。長さは最大の rank + 1。
+fn layer_counts(rank: &[i64]) -> Vec<usize> {
+    let top = rank.iter().copied().max().unwrap_or(0);
+    let mut counts = vec![0; top as usize + 1];
+    for &value in rank {
+        counts[value as usize] += 1;
+    }
+    counts
+}
+
 /// 範囲の中で node の数が最も少ない層（同数なら小さい層）。
-fn least_crowded(rank: &[i64], low: i64, high: i64) -> i64 {
+fn least_crowded(counts: &[usize], low: i64, high: i64) -> i64 {
     let mut best = low;
-    let mut best_count = crowd(rank, low);
+    let mut best_count = counts[low as usize];
     for layer in low + 1..=high {
-        let count = crowd(rank, layer);
+        let count = counts[layer as usize];
         if count < best_count {
             best = layer;
             best_count = count;
         }
     }
     best
-}
-
-/// 層にある node の数。
-fn crowd(rank: &[i64], layer: i64) -> usize {
-    rank.iter().filter(|&&value| value == layer).count()
 }
 
 #[cfg(test)]

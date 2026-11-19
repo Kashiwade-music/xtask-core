@@ -8,7 +8,7 @@ use crate::model::{LayoutError, PORT_MARGIN, PORT_PITCH, Size, TURN_HEIGHT};
 pub(crate) fn build(input: &LevelInput, layers: &Layers) -> Result<Chains, LayoutError> {
     let span = span(input, layers);
     let draft = place(input, layers, &span)?;
-    let kept = kept_layers(&draft, &span);
+    let kept = kept_layers(&draft, &span, &input.frame);
     let count = kept.iter().filter(|&&keep| keep).count();
     let draft = compact(draft, &kept);
     finish(input, draft, count)
@@ -19,7 +19,6 @@ struct Span {
     shift: i64,
     /// 層の数。region では Exit の層 + 1。
     count: i64,
-    region: bool,
 }
 
 fn span(input: &LevelInput, layers: &Layers) -> Span {
@@ -42,7 +41,6 @@ fn span(input: &LevelInput, layers: &Layers) -> Span {
             Span {
                 shift,
                 count: need_max + shift + 1,
-                region: false,
             }
         }
         Frame::Region { .. } => {
@@ -51,7 +49,6 @@ fn span(input: &LevelInput, layers: &Layers) -> Span {
             Span {
                 shift,
                 count: exit + 1,
-                region: true,
             }
         }
     }
@@ -177,7 +174,7 @@ fn place(input: &LevelInput, layers: &Layers, span: &Span) -> Result<Draft, Layo
 
 /// 残す層（4.3 節）。非ダミーを含む層と、region の両端の層を残す。
 /// それ以外（空の層、ダミーだけの層）は消す。
-fn kept_layers(draft: &Draft, span: &Span) -> Vec<bool> {
+fn kept_layers(draft: &Draft, span: &Span, frame: &Frame) -> Vec<bool> {
     let count = span.count as usize;
     let mut kept = vec![false; count];
     for (item, &layer) in draft.items.iter().zip(&draft.layer) {
@@ -185,7 +182,7 @@ fn kept_layers(draft: &Draft, span: &Span) -> Vec<bool> {
             kept[layer as usize] = true;
         }
     }
-    if span.region {
+    if matches!(frame, Frame::Region { .. }) {
         kept[0] = true;
         kept[count - 1] = true;
     }

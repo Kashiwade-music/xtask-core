@@ -27,12 +27,8 @@ impl Adjacency {
         let mut out_links = vec![Vec::new(); chains.items.len()];
         let mut in_links = vec![Vec::new(); chains.items.len()];
         for (index, link) in chains.links.iter().enumerate() {
-            if let Some(list) = out_links.get_mut(link.left) {
-                list.push(index);
-            }
-            if let Some(list) = in_links.get_mut(link.right) {
-                list.push(index);
-            }
+            out_links[link.left].push(index);
+            in_links[link.right].push(index);
         }
         Self {
             out_links,
@@ -55,9 +51,7 @@ pub(crate) fn crossings(chains: &Chains, layers: &[Vec<ItemId>]) -> usize {
     let pos = positions(chains.items.len(), layers);
     let mut groups: Vec<Vec<(Key, Key)>> = vec![Vec::new(); layers.len()];
     for link in &chains.links {
-        let Some(&layer) = chains.layer.get(link.left) else {
-            continue;
-        };
+        let layer = chains.layer[link.left];
         let left = (
             pos[link.left],
             port_rank(chains, link.left, Side::Right, link.edge),
@@ -66,9 +60,7 @@ pub(crate) fn crossings(chains: &Chains, layers: &[Vec<ItemId>]) -> usize {
             pos[link.right],
             port_rank(chains, link.right, Side::Left, link.edge),
         );
-        if let Some(group) = groups.get_mut(layer) {
-            group.push((left, right));
-        }
+        groups[layer].push((left, right));
     }
     groups
         .iter_mut()
@@ -84,9 +76,7 @@ pub(crate) fn crossings(chains: &Chains, layers: &[Vec<ItemId>]) -> usize {
 fn initial_layers(chains: &Chains) -> Vec<Vec<ItemId>> {
     let mut layers = vec![Vec::new(); chains.layer_count];
     for (item, &layer) in chains.layer.iter().enumerate() {
-        if let Some(members) = layers.get_mut(layer) {
-            members.push(item);
-        }
+        layers[layer].push(item);
     }
     layers
 }
@@ -102,9 +92,7 @@ fn positions(item_count: usize, layers: &[Vec<ItemId>]) -> Vec<usize> {
 
 fn set_positions(pos: &mut [usize], layer: &[ItemId]) {
     for (rank, &item) in layer.iter().enumerate() {
-        if let Some(slot) = pos.get_mut(item) {
-            *slot = rank;
-        }
+        pos[item] = rank;
     }
 }
 
@@ -341,19 +329,6 @@ fn right_end_value(chains: &Chains, pos: &[usize], link: &Link) -> f64 {
     port_value(chains, pos, link.right, Side::Left, link.edge)
 }
 
-/// link ごとに、その link が最初に現れる path の番号と step の番号。
-fn path_order(chains: &Chains) -> Vec<Option<(usize, usize)>> {
-    let mut order = vec![None; chains.links.len()];
-    for (path_index, path) in chains.paths.iter().enumerate() {
-        for (step_index, step) in path.iter().enumerate() {
-            if let Some(slot) = order.get_mut(step.link).filter(|slot| slot.is_none()) {
-                *slot = Some((path_index, step_index));
-            }
-        }
-    }
-    order
-}
-
 /// 最良の並びで、link ごとの east（左の item の右辺）と west（右の item の左辺）を決める（5.7 節）。
 fn assign_ports(
     chains: &Chains,
@@ -362,7 +337,6 @@ fn assign_ports(
 ) -> Result<(Vec<i64>, Vec<i64>), LayoutError> {
     let mut east: Vec<i64> = vec![0; chains.links.len()];
     let mut west: Vec<i64> = vec![0; chains.links.len()];
-    let order = path_order(chains);
     for (item, entry) in chains.items.iter().enumerate() {
         let out = &adjacency.out_links[item];
         let inward = &adjacency.in_links[item];
@@ -371,12 +345,8 @@ fn assign_ports(
                 box_ports(chains, port, out, Side::Right, &mut east)?;
                 box_ports(chains, port, inward, Side::Left, &mut west)?;
             }
-            ItemKind::TurnEast(_) => {
-                turn_ports(chains, pos, &order, inward, |link| link.left, &mut west)?
-            }
-            ItemKind::TurnWest(_) => {
-                turn_ports(chains, pos, &order, out, |link| link.right, &mut east)?
-            }
+            ItemKind::TurnEast(_) => turn_ports(chains, pos, inward, |link| link.left, &mut west)?,
+            ItemKind::TurnWest(_) => turn_ports(chains, pos, out, |link| link.right, &mut east)?,
             _ => {
                 spread(
                     chains,
@@ -415,17 +385,16 @@ fn box_ports(
 }
 
 /// U ターンの二つの port。相手の位置が小さいほうを 0、大きいほうを `TURN_HEIGHT` にする。
-/// 同じ位置なら path で先に来る link を 0 にする。
+/// 同じ位置なら link の index が小さいほう（path で先に来る link）を 0 にする。
 fn turn_ports(
     chains: &Chains,
     pos: &[usize],
-    order: &[Option<(usize, usize)>],
     links: &[usize],
     partner: fn(&Link) -> ItemId,
     ports: &mut [i64],
 ) -> Result<(), LayoutError> {
     let mut sorted = links.to_vec();
-    sorted.sort_by_key(|&index| (pos[partner(&chains.links[index])], order[index]));
+    sorted.sort_by_key(|&index| (pos[partner(&chains.links[index])], index));
     match sorted.as_slice() {
         [first, second] => {
             ports[*first] = 0;

@@ -9,7 +9,6 @@ pub(crate) fn vertical(chains: &Chains, order: &Order) -> Result<Vec<i64>, Layou
     if item_count == 0 {
         return Ok(Vec::new());
     }
-    check_references(chains, order)?;
     let mut edges = gap_edges(chains, order);
     edges.extend(link_edges(chains, order));
     let problem = Problem {
@@ -20,31 +19,6 @@ pub(crate) fn vertical(chains: &Chains, order: &Order) -> Result<Vec<i64>, Layou
     let items = &rank[..item_count];
     let least = items.iter().copied().min().unwrap_or(0);
     Ok(items.iter().map(|y| y - least).collect())
-}
-
-/// 層・port・link の参照が範囲内にあることを確かめる（外れていれば内部の矛盾）。
-fn check_references(chains: &Chains, order: &Order) -> Result<(), LayoutError> {
-    let item_count = chains.items.len();
-    if order.east.len() != chains.links.len() || order.west.len() != chains.links.len() {
-        return Err(LayoutError::Internal(
-            "port count differs from the link count".to_string(),
-        ));
-    }
-    if order.layers.iter().flatten().any(|&id| id >= item_count) {
-        return Err(LayoutError::Internal(
-            "layer refers to a missing item".to_string(),
-        ));
-    }
-    if chains
-        .links
-        .iter()
-        .any(|link| link.left >= item_count || link.right >= item_count)
-    {
-        return Err(LayoutError::Internal(
-            "link refers to a missing item".to_string(),
-        ));
-    }
-    Ok(())
 }
 
 /// 同じ層で上から隣り合う item の間隔（手順 2）。
