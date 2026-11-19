@@ -70,3 +70,14 @@
 - `W2 M3c merged 9bf361f: tier b 失敗`（xtask-modules の試験：lib 3、analysis 61 成功・1 失敗（OPEN.md の 14）、roles 17、thread_local 23 が成功。clippy と cargo check は成功。W2 のウェーブは未完了）
 
 - `W2 merged 11ad3d8: tier b 成功（W2 のウェーブ完了）`（root：check、xtask-archive 12、xtask-policy 24、xtask-source 14、xtask-workspace 12、xtask-modules（lib 3、analysis 62、roles 17、thread_local 23）、xtask-layout 42、clippy の三 crate が成功。viewer：check と xtask-render 8 が成功）
+
+- `W3 merged 656b016、fix merged c4edc91: tier b 成功（KPI の未達は差戻し 17）`（root：check、xtask-archive 12、xtask-policy 24、xtask-source 14、xtask-workspace 12、xtask-modules（lib 3、analysis 62、roles 17、thread_local 23）、xtask-layout lib 48、xtask-style lib 20、clippy の四 crate、基準の試験 2 件（release）が成功。viewer：check、xtask-render 8、xtask-viewer lib 20 が成功。C1 の差戻し 15・16 は W3 の tier b を止めない（W5 の C2 だけに依存する））
+
+### K1〜K4（W3、commit c4edc91、`baseline_report`）
+
+| 指標 | 目標 | 実測 | 判定 |
+|---|---|---|---|
+| K1 交差数の比 | 1.3 以下 | 1.50 | 未達（差戻し 17a） |
+| K2 折れの数の比 | 1.3 以下 | 1.13 | 達成 |
+| K3 面積の比 | 1.5 以下 | 0.57 | 達成 |
+| K4 配置の時間の和（121 件） | 3.0 秒以下 | 19.643 秒 | 未達（差戻し 17b） |

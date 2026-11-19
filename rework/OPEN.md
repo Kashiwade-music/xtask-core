@@ -57,6 +57,28 @@ M3c（2e50e6b、merge 済み 9bf361f）の報告による。14 は設計者が�
 
 - `known_macro_and_derive_provider_aliases_remain_supported`（`crates/xtask-modules/tests/analysis.rs`、M3c）：`use serde_json::json as data;` の行と、`let _ = data!({"x": crate::a::f()});` の文を除いた（対象の機能：`json!` の特別扱い、DEC-10）。他の入力と assert は変えていない。この行は、設計者の移行表の改訂（b2a98c2）の後に fix lane（8c186b3）で入った。
 
+## 差戻し（W3 の C1 で新規、未解決）
+
+C1（c3bf6a1、merge 済み 656b016）の報告による。STOP は次の二件。W4 の C3・A2・V3 と、W3 のほかの unit は、この差戻しに依存しない。W5 の C2 は C1 に依存するので、この差戻しが解消するまで起動しない。
+
+| # | unit | 場所 | STOP の文（要旨） | 付属書の節 |
+|---|---|---|---|---|
+| 15 | C1 | `crates/xtask-style/src/style_source.rs`：`ItemSpan` | 付属書の `ItemSpan` は `start_line`・`end_line`・`item` だけだが、旧 `style.rs` の試験 `item_exception_does_not_expand_to_a_sibling_on_the_same_line`（移行の表に無い）は、同じ行の列の一致を要する。`start_column`・`end_column` を足して実装し、試験の期待値は変えずに通している。設計者の判断が要る | C-core.md の C1 |
+| 16 | C1 | `crates/xtask-style/src/style.rs`：`check` | features が `Err` のときの扱い。`StyleInput` の doc（手順 2）は「Err なら compiler の検査は行わない」、手順 7 は「probe だけが errors に一つ入れて終わる（今の動作と同じ）」と書いており、二通りに読める。実装は手順 7 に従い、clippy は走らせている。設計者の判断が要る | C-core.md の C1 の手順 2・7 |
+
+C2 への注意（報告による）：検査で外れた診断は `StyleReport.diagnostics` に入り、`errors` には入らない（旧は `errors` にも文字列で入れていた）。C2 で `Report.style` へ渡すときの扱いを決める必要がある。`xtask-core/src/model.rs` に旧い `StyleDiagnostic` が残っている（C2 で `xtask_style` の型に置き換える）。
+
+## 差戻し（W3 の KPI で新規、未解決）
+
+W3 の tier b で測った KPI（作業指示書 2.2 節の「未達なら差戻し」）。基準の試験（`every_baseline_input_lays_out`、`layout_is_deterministic`）は成功。
+
+| # | 種別 | 指標 | 目標 | 実測 | 判定 |
+|---|---|---|---|---|---|
+| 17a | KPI | K1（交差数の比） | 1.3 以下 | 1.50 | 未達 |
+| 17b | KPI | K4（配置の時間の和、kivact 121 件、release、1 thread） | 3.0 秒以下 | 19.643 秒 | 未達 |
+
+K2（折れの数の比）は 1.13、K3（面積の比）は 0.57 で、目標に届いている。K5・K6 は CP で測る。W4 の A2・V3・C3 は、この KPI に依存しないので進める。設計者が、設計を直すか、目標を改めるかを決める。
+
 ## 未解決の注意（設計者の判断が要る）
 
 M3a の fix lane（3f3c058）の報告による。STOP ではないが、付属書の手順と食い違う可能性がある。
