@@ -422,6 +422,7 @@ fn edge_route(
 
 #[cfg(test)]
 mod tests {
+    //! Role: 入れ子の region を含む階層配置の試験。
     use super::layout;
     use crate::model::{Edge, Graph, Layering, Node, Region, Size};
     use crate::verify;

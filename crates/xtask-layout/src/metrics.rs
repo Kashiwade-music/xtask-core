@@ -131,6 +131,7 @@ fn crosses(horizontal: &Line, vertical: &Line) -> bool {
 
 #[cfg(test)]
 mod tests {
+    //! Role: 配置の品質指標（交差の数など）の計算の試験。
     use super::*;
 
     #[test]

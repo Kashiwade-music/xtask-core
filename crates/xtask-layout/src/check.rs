@@ -386,6 +386,7 @@ fn check_labels(graph: &Graph, layout: &Layout) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    //! Role: 配置の結果の検証（重なり・大きさ・入力の上限）の試験。
     use super::*;
     use crate::model::{Edge, Layering, MAX_NODES, Node, Point, Rect, Region, Route, Size};
 

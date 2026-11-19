@@ -297,6 +297,7 @@ fn size_nodes(items: &mut [Item], links: &[Link]) {
 
 #[cfg(test)]
 mod tests {
+    //! Role: 層を跨ぐ辺を dummy の鎖に分ける処理（経路・ラベル・曲がり）の試験。
     use super::*;
     use crate::layering;
     use crate::level::{Frame, Item, ItemKind, RootLayering, Segment};

@@ -101,6 +101,7 @@ impl Remaining {
 
 #[cfg(test)]
 mod tests {
+    //! Role: 循環する辺を逆転させて閉路を除く処理（acyclic 化）の試験。
     use super::*;
 
     #[test]

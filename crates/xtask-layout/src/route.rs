@@ -465,6 +465,7 @@ fn columns(frame: &Frame, chains: &Chains, tracks: &Tracks) -> Result<Columns, L
 
 #[cfg(test)]
 mod tests {
+    //! Role: 辺の経路（直交する折れ線・トラック・region の最小幅）の試験。
     use super::*;
     use crate::level::{Frame, Item, ItemKind, Link, RootLayering, Segment, Step};
     use crate::model::Size;

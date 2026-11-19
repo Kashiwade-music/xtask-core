@@ -245,6 +245,7 @@ fn package_action(loaded: &Loaded, index: u32) -> Option<Action> {
 
 #[cfg(test)]
 mod tests {
+    //! Role: サイドバーの行・検索・操作の試験。
     use super::*;
     use std::path::PathBuf;
     use xtask_archive::{

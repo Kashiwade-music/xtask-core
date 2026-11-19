@@ -460,6 +460,7 @@ fn spread(
 
 #[cfg(test)]
 mod tests {
+    //! Role: 層の中の並び順（交差の削減と port の順）の試験。
     use super::*;
     use crate::level::{Item, ItemKind, Link, Step};
     use crate::model::{Size, TURN_HEIGHT};

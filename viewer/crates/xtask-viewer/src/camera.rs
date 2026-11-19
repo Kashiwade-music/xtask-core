@@ -67,6 +67,7 @@ pub fn center(rect: R, scale: f64, size: (f64, f64)) -> Camera {
 
 #[cfg(test)]
 mod tests {
+    //! Role: カメラ（表示の範囲・拡大・移動）の試験。
     use super::*;
     use xtask_render::Text;
 

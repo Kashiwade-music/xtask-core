@@ -300,6 +300,7 @@ impl Parse for RepeatArgs {
 
 #[cfg(test)]
 mod tests {
+    //! Role: マクロの文法表と format 系マクロの捕捉規則の試験。
     use super::{MacroGrammar, grammar, implicit_captures};
     use std::collections::BTreeSet;
 

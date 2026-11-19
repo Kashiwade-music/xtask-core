@@ -140,6 +140,7 @@ fn crowd(rank: &[i64], layer: i64) -> usize {
 
 #[cfg(test)]
 mod tests {
+    //! Role: 辺の向きから各 node の層（layer）を定める処理の試験。
     use super::*;
     use crate::level::{Item, ItemKind};
     use crate::model::Size;

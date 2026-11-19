@@ -105,6 +105,7 @@ pub fn reveal(state: AppState, diagram: usize, item: u32) {
 
 #[cfg(test)]
 mod tests {
+    //! Role: 図の間の移動（履歴・pin）の試験。
     use super::*;
     use std::collections::BTreeMap;
     use std::path::PathBuf;

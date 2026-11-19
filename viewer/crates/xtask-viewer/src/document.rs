@@ -233,6 +233,7 @@ async fn watch_loop(state: AppState) {
 
 #[cfg(test)]
 mod tests {
+    //! Role: 文書の読み込み・再読込・失敗時の状態遷移の試験。
     use super::*;
     use std::rc::Rc;
     use std::time::{Duration, UNIX_EPOCH};

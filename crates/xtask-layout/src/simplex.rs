@@ -546,6 +546,7 @@ fn normalize(rank: &[i64], node_count: usize) -> Vec<i64> {
 
 #[cfg(test)]
 mod tests {
+    //! Role: ネットワーク単体法による rank の求解の試験。
     use super::*;
 
     fn arc(from: usize, to: usize, minlen: i64, weight: i64) -> Constraint {
