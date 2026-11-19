@@ -1,374 +1,94 @@
-//! Role: Cargo・Rust設定を解決し、共通ルールの検査と図の出力を統括する。
-use std::collections::{BTreeMap, BTreeSet};
-use std::process;
+//! Role: 検査の段階を順に実行し、報告と図のファイルへの書出しを統括する。
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
-use xtask_modules::AnalysisOptions;
-use xtask_workspace::{AnalysisSettings, Policy, Workspace};
+use xtask_style::{StyleInput, StyleReport};
 
-use crate::{Analysis, Config, Report, SkippedTarget, TargetGraph, graphs, parallel};
+use crate::analysis::analyze_targets;
+use crate::archive::write_archive;
+use crate::config::Config;
+use crate::context::{Context, Environment};
+use crate::model::{Report, TargetAnalysis, TargetOutcome};
+use crate::sources::{Sources, collect, line_errors};
+use crate::visibility::visibility;
 
-/// Analyze active Cargo features and Rust target cfg. Unit-test configurations
-/// are separate graphs, so mutually exclusive production/test edges never merge.
-pub fn analyze(config: &Config) -> Result<Analysis, String> {
-    let policy = load_policy(config)?.unwrap_or_default();
-    let max_role_chars = role_limit(config, &policy)?;
-    let settings = config.analysis.as_ref().unwrap_or(&policy.analysis);
-    let workspace = Workspace::load(&config.root)?;
-    analyze_workspace(config, settings, workspace, max_role_chars)
+/// Analyze the active targets and return their module graphs, with the analysis diagnostics.
+/// Nothing is checked beyond the analysis and nothing is written.
+pub fn analyze(config: &Config) -> Result<(Vec<TargetAnalysis>, Report), String> {
+    let context = Context::load(config)?;
+    let environment = Environment::load(&context);
+    Ok(analyze_targets(&context, &environment))
 }
 
-fn load_policy(config: &Config) -> Result<Option<Policy>, String> {
-    if config
-        .policy
-        .try_exists()
-        .map_err(|error| format!("{}: {error}", config.policy.display()))?
-    {
-        Policy::load(&config.policy).map(Some)
-    } else {
-        Ok(None)
-    }
-}
-
-fn role_limit(config: &Config, policy: &Policy) -> Result<usize, String> {
-    let limit = config
-        .max_role_chars
-        .unwrap_or(policy.limits.max_role_chars);
-    if limit == 0 {
-        return Err("max_role_chars must be a positive integer".into());
-    }
-    Ok(limit)
-}
-
-fn analyze_workspace(
-    config: &Config,
-    settings: &AnalysisSettings,
-    workspace: Workspace,
-    max_role_chars: usize,
-) -> Result<Analysis, String> {
-    let resolved = Workspace::resolved_features(
-        &config.root,
-        &settings.features,
-        settings.default_features,
-        settings.all_features,
-        settings.target.as_deref(),
-    )?;
-    let cfg = rustc_cfg(config, settings)?;
-    let mut host_cfg = None;
-    let mut report = Report::default();
-    let mut targets = Vec::new();
-    let mut skipped = Vec::new();
-    let mut jobs = Vec::new();
-    for package in &workspace.packages {
-        let features = resolved.get(&package.name).cloned().ok_or_else(|| {
-            format!(
-                "Cargo feature resolution omitted workspace member `{}`",
-                package.name
-            )
-        })?;
-        for target in &package.targets {
-            if !matches!(target.edition.as_str(), "2018" | "2021" | "2024") {
-                report.errors.push(format!(
-                    "{}::{}: module name resolution supports Rust editions 2018/2021/2024; found {}",
-                    package.name, target.name, target.edition
-                ));
-                continue;
-            }
-            if !target
-                .required_features
-                .iter()
-                .all(|feature| features.contains(feature))
-            {
-                report.notes.push(format!(
-                    "skipped {}::{}: required features are inactive",
-                    package.name, target.name
-                ));
-                skipped.push(SkippedTarget {
-                    package: package.name.clone(),
-                    target: target.name.clone(),
-                    kind: target.kind.join("+"),
-                });
-                continue;
-            }
-            let kind = target.kind.join("+");
-            let standalone_test = target
-                .kind
-                .iter()
-                .any(|kind| kind == "test" || kind == "bench");
-            let unit_test = target.test
-                && target.kind.iter().any(|kind| {
-                    matches!(
-                        kind.as_str(),
-                        "lib"
-                            | "bin"
-                            | "example"
-                            | "proc-macro"
-                            | "rlib"
-                            | "staticlib"
-                            | "cdylib"
-                            | "dylib"
-                    )
-                });
-            let modes: Vec<bool> = if standalone_test {
-                vec![true]
-            } else if unit_test {
-                vec![false, true]
-            } else {
-                vec![false]
-            };
-            for test in modes {
-                let mut active_cfg = cfg.clone();
-                let procedural = target.kind.iter().any(|kind| kind == "proc-macro");
-                if procedural || target.kind.iter().any(|kind| kind == "custom-build") {
-                    // Cargo builds scripts and procedural macros for the host.
-                    if settings.target.is_none() {
-                        active_cfg = cfg.clone();
-                    } else {
-                        if host_cfg.is_none() {
-                            let mut host = settings.clone();
-                            host.target = None;
-                            host_cfg = Some(rustc_cfg(config, &host)?);
-                        }
-                        active_cfg = host_cfg.as_ref().expect("host cfg initialized").clone();
-                    }
-                }
-                if procedural {
-                    active_cfg.insert("proc_macro".into());
-                }
-                if test {
-                    active_cfg.insert("test".into());
-                }
-                let options = AnalysisOptions {
-                    cfg: active_cfg,
-                    features: features.clone(),
-                    trusted_attributes: settings.trusted_attributes.clone(),
-                    trusted_derives: settings.trusted_derives.clone(),
-                    trusted_macros: settings.trusted_macros.clone(),
-                    trusted_globs: settings.trusted_globs.clone(),
-                    max_role_chars,
-                };
-                let context = format!(
-                    "{}::{} ({kind}{})",
-                    package.name,
-                    target.name,
-                    if test { ", cfg(test)" } else { "" }
-                );
-                jobs.push((package, target, kind.clone(), test, options, context));
-            }
-        }
-    }
-    let results = parallel::map(&jobs, |(_, target, _, _, options, _)| {
-        xtask_modules::analyze(&target.src_path, options)
-    })?;
-    for ((package, target, kind, test, _, context), result) in jobs.into_iter().zip(results) {
-        match result {
-            Ok(graph) => {
-                for diagnostic in &graph.diagnostics {
-                    report.errors.push(format!("{context}: {diagnostic}"));
-                }
-                for cycle in &graph.cycles {
-                    report.errors.push(format!(
-                        "{context}: module reference cycle among: {}",
-                        cycle.join(", ")
-                    ));
-                }
-                targets.push(TargetGraph {
-                    package: package.name.clone(),
-                    target: target.name.clone(),
-                    kind: kind.clone(),
-                    test,
-                    graph,
-                });
-            }
-            Err(error) => report.errors.push(format!("{context}: {error}")),
-        }
-    }
-    if !settings.trusted_attributes.is_empty()
-        || !settings.trusted_derives.is_empty()
-        || !settings.trusted_macros.is_empty()
-    {
-        report.notes.push(format!("source-only macro assumptions: attributes {:?}, derives {:?}, macros {:?}; generated code is not analyzed", settings.trusted_attributes, settings.trusted_derives, settings.trusted_macros));
-    }
-    Ok(Analysis {
-        workspace,
-        targets,
-        skipped,
-        report,
-    })
-}
-
-fn rustc_cfg(config: &Config, settings: &AnalysisSettings) -> Result<BTreeSet<String>, String> {
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let mut command = process::Command::new(rustc);
-    command.args(["--print", "cfg"]).current_dir(&config.root);
-    if let Some(target) = &settings.target {
-        command.args(["--target", target]);
-    }
-    let output = command
-        .output()
-        .map_err(|error| format!("could not read rustc cfg: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "rustc --print cfg failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    let text = String::from_utf8(output.stdout)
-        .map_err(|error| format!("rustc cfg is not UTF-8: {error}"))?;
-    let mut cfg: BTreeSet<String> = text.lines().map(str::to_owned).collect();
-    cfg.extend(settings.cfg.iter().cloned());
-    Ok(cfg)
-}
-
-/// Execute every repository check and write crate/module SVGs and an HTML map, unless
-/// `no_write` is set. That mode validates graph structure without invoking Node.
-/// Rule violations and independent output failures are collected in the report.
+/// Run every repository check, and write the architecture diagrams when the configured output
+/// asks for them. Only a failure to read the policy or the workspace is an `Err`; every other
+/// failure is in the returned report.
 pub fn run(config: &Config) -> Result<Report, String> {
-    if config.prune && config.no_write {
-        return Err("prune cannot be combined with no_write".into());
-    }
-    let policy = Policy::load(&config.policy)?;
-    let output = config.output.as_ref().unwrap_or(&policy.output);
-    if output.as_os_str().to_string_lossy().trim().is_empty() {
-        return Err("output must be a nonempty path".into());
-    }
-    let graph_config = Config {
-        output: Some(output.clone()),
-        ..config.clone()
-    };
-    let max_role_chars = role_limit(config, &policy)?;
-    let settings = config.analysis.as_ref().unwrap_or(&policy.analysis);
-    let workspace = Workspace::load(&config.root)?;
-    let mut analysis = match analyze_workspace(config, settings, workspace.clone(), max_role_chars)
-    {
-        Ok(analysis) => analysis,
-        Err(error) => Analysis {
-            workspace,
-            targets: Vec::new(),
-            skipped: Vec::new(),
-            report: Report {
-                errors: vec![format!("module analysis: {error}")],
-                ..Report::default()
-            },
-        },
-    };
-    analysis
-        .report
-        .errors
-        .extend(analysis.workspace.check_visibility(&policy));
-    check_lines(&mut analysis, policy.limits.max_code_lines);
-    crate::style::check(config, settings, &policy.style, &mut analysis);
-    let mut writer = xtask_graph::SvgWriter::default();
-    if let Err(error) = graphs::modules(
-        &graph_config,
-        &analysis.workspace,
-        &analysis.targets,
-        &analysis.skipped,
-        policy.diagrams.targets,
-        &mut analysis.report,
-        &mut writer,
-    ) {
-        analysis
-            .report
-            .errors
-            .push(format!("module diagrams: {error}"));
-    }
-    if let Err(error) = graphs::dependencies(
-        &graph_config,
-        &analysis.workspace,
-        &mut analysis.report,
-        max_role_chars,
-        &mut writer,
-    ) {
-        analysis
-            .report
-            .errors
-            .push(format!("crate diagram: {error}"));
-    }
-    if let Err(error) =
-        crate::arch_map::write(&graph_config, &mut analysis, policy.diagrams.targets)
-    {
-        analysis
-            .report
-            .errors
-            .push(format!("architecture map: {error}"));
-    }
-    analysis.report.notes.push(format!(
-        "analyzed {} workspace crates and {} target/configuration graphs",
-        analysis.workspace.packages.len(),
-        analysis.targets.len()
+    let context = Context::load(config)?;
+    let environment = Environment::load(&context);
+    let (analysis, mut report) = analyze_targets(&context, &environment);
+    let analyzed = analysis
+        .iter()
+        .flat_map(|target| &target.outcomes)
+        .filter(|(_, outcome)| matches!(outcome, TargetOutcome::Analyzed(_)))
+        .count();
+    // The diagram file records the analysis-stage messages, before the checks below add theirs.
+    let notices: Vec<String> = report.errors.iter().chain(&report.notes).cloned().collect();
+    let Sources {
+        files,
+        modules,
+        errors,
+    } = collect(&context, &analysis);
+    report.errors.extend(errors);
+    report.errors.extend(line_errors(
+        &files,
+        context.policy.limits().max_code_lines(),
     ));
-    Ok(analysis.report)
+    report
+        .errors
+        .extend(visibility(&context.workspace, context.policy.visible_to()));
+    if let Some(style) = style_check(&context, &environment, &files, &modules) {
+        report.errors.extend(style.errors);
+        report.notes.extend(style.notes);
+        report.style = style.diagnostics;
+    }
+    match write_archive(&context, &analysis, notices) {
+        Ok(None) => {}
+        Ok(Some((path, count))) => {
+            report
+                .notes
+                .push(format!("wrote {} ({count} diagrams)", path.display()));
+            report.archive = Some(path);
+        }
+        Err(error) => report.errors.push(error),
+    }
+    report.notes.push(format!(
+        "analyzed {} workspace crates and {analyzed} target/configuration graphs",
+        context.workspace.packages.len()
+    ));
+    Ok(report)
 }
 
-fn check_lines(analysis: &mut Analysis, limit: usize) {
-    let mut files = BTreeSet::new();
-    for package in &analysis.workspace.packages {
-        files.extend(package.targets.iter().map(|target| target.src_path.clone()));
-        let Some(directory) = package.manifest_path.parent() else {
-            analysis.report.errors.push(format!(
-                "source discovery: {}: manifest has no parent",
-                package.manifest_path.display()
-            ));
-            continue;
-        };
-        match xtask_source::rust_files(directory) {
-            Ok(discovered) => files.extend(discovered),
-            Err(error) => analysis
-                .report
-                .errors
-                .push(format!("source discovery: {error}")),
-        }
-    }
-    for target in &analysis.targets {
-        files.extend(
-            target
-                .graph
-                .modules
-                .iter()
-                .map(|module| module.file.clone()),
-        );
-    }
-    let mut identities = BTreeMap::new();
-    for file in files {
-        match std::fs::canonicalize(&file) {
-            Ok(identity) => {
-                identities.entry(identity).or_insert(file);
-            }
-            Err(error) => analysis
-                .report
-                .errors
-                .push(format!("source line check: {}: {error}", file.display())),
-        }
-    }
-    let files: Vec<_> = identities.into_values().collect();
-    let results = match parallel::map(&files, |file| {
-        xtask_source::check_files(std::slice::from_ref(file), limit)
-    }) {
-        Ok(results) => results,
-        Err(error) => {
-            analysis
-                .report
-                .errors
-                .push(format!("source line check: {error}"));
-            return;
-        }
-    };
-    for result in results {
-        match result {
-            Ok(violations) => {
-                for violation in violations {
-                    analysis.report.errors.push(format!(
-                        "{}: {} code lines (limit {}); split by responsibility",
-                        violation.path.display(),
-                        violation.count,
-                        violation.limit
-                    ));
-                }
-            }
-            Err(error) => analysis
-                .report
-                .errors
-                .push(format!("source line check: {error}")),
-        }
-    }
+/// The style check, when the policy enables it. It runs even when the analysis environment
+/// failed; that failure then reaches the check as its feature error.
+fn style_check(
+    context: &Context,
+    environment: &Result<Environment, String>,
+    files: &[PathBuf],
+    modules: &BTreeMap<PathBuf, String>,
+) -> Option<StyleReport> {
+    let style = context.policy.style()?;
+    let features = environment
+        .as_ref()
+        .map(|environment| environment.features.clone())
+        .map_err(Clone::clone);
+    Some(xtask_style::check(&StyleInput {
+        root: &context.workspace.root,
+        workspace: &context.workspace,
+        analysis: &context.settings,
+        features: &features,
+        style,
+        files,
+        modules,
+    }))
 }

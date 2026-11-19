@@ -28,14 +28,4 @@ xtask-coreで2回取得し、全図の結果が完全に一致することを確
 
 ## 取得方法
 
-`capture/`に、取得に使ったスクリプトを置いている。
-`XTASK_NODE`に`node-tee.cmd`を指定すると、`tee.cjs`が本物の`runner.cjs`を起動する。
-その間の要求と応答を、`XTASK_CAPTURE_DIR`へJSON Linesで書き出す。
-書き出したファイルを`split.py`で図ごとに分ける。
-
-```sh
-XTASK_NODE=.../node-tee.cmd XTASK_CAPTURE_DIR=.../out cargo xtask diagrams   # Kivact
-python -I split.py .../out dev/layout-baseline/kivact
-```
-
-Node.jsを削除した後は、この基準を再取得できない。上書きしないこと。
+Node.js と elkjs を使って取得した。改修で Node.js を削除したため、再取得の手段は無い。取得に使った script は commit `e7eb600` にある。

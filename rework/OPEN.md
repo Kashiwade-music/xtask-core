@@ -56,6 +56,7 @@ M3c（2e50e6b、merge 済み 9bf361f）の報告による。14 は設計者が�
 作業指示書 0.5 の事前承認の行に当たり、差戻しにせず、ここに一行ずつ書く（試験、除いたもの、対象の機能）。
 
 - `known_macro_and_derive_provider_aliases_remain_supported`（`crates/xtask-modules/tests/analysis.rs`、M3c）：`use serde_json::json as data;` の行と、`let _ = data!({"x": crate::a::f()});` の文を除いた（対象の機能：`json!` の特別扱い、DEC-10）。他の入力と assert は変えていない。この行は、設計者の移行表の改訂（b2a98c2）の後に fix lane（8c186b3）で入った。
+- `policy_analysis_is_used_and_api_analysis_replaces_all_of_it`（`crates/xtask-core/tests/integration.rs`、C2c）：旧い `run` の枝（`available_node()` の下で、`Report.artifacts` の 4 件＝HTML 1・SVG 3 を数えていた）を、図のファイル 1 件の中の図の数 3 件（crate 依存図と module 図 2 件）の assert に替えた。対象の機能：HTML・SVG の出力と `Report.artifacts`（設計書 4.3 節）。他の入力と assert は変えていない。（C2c の実装者が、試験の実行の前に、移行の表の範囲の変更として書いた。）
 
 ## 差戻し（W3 の C1 で新規、未解決）
 

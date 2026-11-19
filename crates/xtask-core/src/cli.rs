@@ -112,11 +112,14 @@ pub fn main(root: &Path) -> ExitCode {
     for error in &report.errors {
         eprintln!("error: {error}");
     }
+    for diagnostic in &report.style {
+        eprintln!("error: {diagnostic}");
+    }
     if report.is_success() {
         println!("ok");
         ExitCode::SUCCESS
     } else {
-        eprintln!("{} error(s)", report.errors.len());
+        eprintln!("{} error(s)", report.errors.len() + report.style.len());
         ExitCode::FAILURE
     }
 }
