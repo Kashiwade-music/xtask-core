@@ -84,3 +84,5 @@
 
 - `W4 merged 72a78ec: tier b 成功（viewer の GUI 試験は V3 の報告を記録。再実行しない）`（root：check（xtask-diagram を含む）、xtask-archive 12、xtask-policy 24、xtask-source 14、xtask-workspace 12、xtask-modules（lib 3、analysis 62、roles 17、thread_local 23）、xtask-layout lib 48、xtask-style lib 20、xtask-diagram 7、clippy の四 crate が成功。viewer：check、xtask-render 8、xtask-viewer lib 20 が成功）
 - W5 は C2 が C1 に依存するため、差戻し 15・16 の解消を待つ。CP は差戻し 15〜17 の解消を待つ。
+
+- `W5 partial merged 34a4460: L9 と C2a を merge（C2a は差戻し 18）`（非 core の check、xtask-layout lib 48 が成功。xtask-core は C2b まで compile できない。M3d は実行中）
