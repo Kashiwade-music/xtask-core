@@ -22,8 +22,10 @@ pub(crate) fn analyze_targets(
 }
 
 fn failed(context: &Context, error: &str) -> (Vec<TargetAnalysis>, Report) {
+    let reason = analysis_failure(context, error);
+    let reason = reason.as_str();
     let mut report = Report::default();
-    report.errors.push(format!("module analysis: {error}"));
+    report.errors.push(reason.to_string());
     let analysis = context
         .workspace
         .packages
@@ -32,16 +34,22 @@ fn failed(context: &Context, error: &str) -> (Vec<TargetAnalysis>, Report) {
             package.targets.iter().map(move |target| {
                 let outcomes = modes(target)
                     .into_iter()
-                    .map(|mode| {
-                        let reason = format!("module analysis: {error}");
-                        (mode, TargetOutcome::Failed(reason))
-                    })
+                    .map(|mode| (mode, TargetOutcome::Failed(reason.to_string())))
                     .collect();
                 target_analysis(package, target, outcomes)
             })
         })
         .collect();
     (analysis, report)
+}
+
+/// The diagnostic for a failed environment. It names the configured analysis target: cargo's
+/// last stderr line often omits it, so the target is the only place the reader can see it.
+fn analysis_failure(context: &Context, error: &str) -> String {
+    match context.settings.target() {
+        Some(target) => format!("module analysis (target {target}): {error}"),
+        None => format!("module analysis: {error}"),
+    }
 }
 
 fn analyzed(context: &Context, environment: &Environment) -> (Vec<TargetAnalysis>, Report) {
