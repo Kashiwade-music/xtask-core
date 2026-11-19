@@ -106,7 +106,7 @@ pub(crate) fn declaration(item: &Item, owner: &str) -> Option<(String, Target)> 
         Item::Mod(i) => {
             return Some((
                 i.ident.to_string(),
-                Target::Module(format!("{owner}::{}", i.ident)),
+                Target::Module(crate::loader::child_id(owner, &i.ident)),
             ));
         }
         Item::ExternCrate(i) => {

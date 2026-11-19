@@ -1,7 +1,7 @@
 //! Role: 有効なRust構文を走査し、名前解決済みのモジュール参照を収集する。
 use crate::{
     ast, cfg, loader,
-    model::{AnalysisOptions, Reference},
+    model::{Env, Reference},
     symbols::{
         Namespace, Symbols, Tables, Target, apply_import, declaration, imports, resolve_path,
     },
@@ -16,7 +16,7 @@ pub(crate) struct References<'a> {
     pub(crate) tables: &'a Tables,
     /// Textual-scope `macro_rules!` names per module.
     pub(crate) textual: &'a Tables,
-    pub(crate) options: &'a AnalysisOptions,
+    pub(crate) env: Env<'a>,
     /// Modules whose trusted crate-local item macros may define items we cannot see.
     pub(crate) opaque: &'a BTreeSet<String>,
     pub(crate) scopes: Vec<Symbols>,
@@ -26,32 +26,44 @@ pub(crate) struct References<'a> {
 }
 
 impl References<'_> {
-    pub(crate) fn enabled(&mut self, attrs: &[syn::Attribute]) -> bool {
+    /// Evaluates the cfg of an expression, statement, or associated item, and reports
+    /// its invalid predicate. Module-level items were already evaluated by the loader.
+    fn cfg_enabled(&mut self, attrs: &[syn::Attribute]) -> bool {
         // Most expression and statement nodes have no attributes. They cannot
         // disable code or require expansion, so avoid cloning the module and
         // local symbol tables just to compute unused intrinsic derive names.
         if attrs.is_empty() {
             return true;
         }
-        match cfg::enabled(attrs, self.options) {
-            Ok(true) => {
-                match cfg::expansion_diagnostics(attrs, self.options, &self.intrinsic_derives()) {
-                    Ok(diagnostics) => {
-                        for diagnostic in diagnostics {
-                            self.diagnostics
-                                .insert(format!("{}: {diagnostic}", self.module));
-                        }
-                    }
-                    Err(error) => {
-                        self.diagnostics.insert(format!("{}: {error}", self.module));
-                    }
-                }
-                true
-            }
-            Ok(false) => false,
+        match cfg::enabled(attrs, self.env) {
+            Ok(enabled) => enabled,
             Err(error) => {
                 self.diagnostics.insert(format!("{}: {error}", self.module));
                 false
+            }
+        }
+    }
+    pub(crate) fn enabled(&mut self, attrs: &[syn::Attribute]) -> bool {
+        let enabled = self.cfg_enabled(attrs);
+        if enabled {
+            self.expansions(attrs);
+        }
+        enabled
+    }
+    /// Reports the attribute expansions that this analysis does not model.
+    pub(crate) fn expansions(&mut self, attrs: &[syn::Attribute]) {
+        if attrs.is_empty() {
+            return;
+        }
+        match cfg::expansion_diagnostics(attrs, self.env, &self.intrinsic_derives()) {
+            Ok(diagnostics) => {
+                for diagnostic in diagnostics {
+                    self.diagnostics
+                        .insert(format!("{}: {diagnostic}", self.module));
+                }
+            }
+            Err(error) => {
+                self.diagnostics.insert(format!("{}: {error}", self.module));
             }
         }
     }
@@ -69,7 +81,7 @@ impl References<'_> {
         symbols.extend(self.symbols());
         let unknown_glob = symbols.get("$external_globs").is_some_and(|targets| targets.iter().any(|target|
             matches!(target, Target::External(path) if !path.first().is_some_and(|p| p == "std" || p == "core")
-                && !self.options.trusted_globs.contains(&path.join("::")))));
+                && !self.env.settings.trusted_globs.contains(&path.join("::")))));
         let mut intrinsic = if unknown_glob {
             BTreeSet::new()
         } else {
@@ -310,9 +322,9 @@ impl<'ast> Visit<'ast> for References<'_> {
         }
     }
     fn visit_item(&mut self, item: &'ast Item) {
-        if !self.enabled(loader::attrs(item)) {
-            return;
-        }
+        // The cfg of a module item was evaluated by the loader, and that of a block item
+        // by visit_block, so only the expansions remain.
+        self.expansions(loader::attrs(item));
         // Child modules are visited separately in their own resolution environment.
         if let Item::Mod(module) = item {
             if !self.scopes.is_empty() {
@@ -430,29 +442,34 @@ impl<'ast> Visit<'ast> for References<'_> {
     }
     fn visit_block(&mut self, block: &'ast syn::Block) {
         self.scopes.push(Symbols::new());
+        // Each block item's cfg is evaluated once here; a disabled item is skipped entirely.
+        let active = block
+            .stmts
+            .iter()
+            .map(|statement| match statement {
+                syn::Stmt::Item(item) => self.cfg_enabled(loader::attrs(item)),
+                _ => true,
+            })
+            .collect::<Vec<_>>();
         // Block items and imports are visible throughout the block, including before their declaration.
-        for statement in &block.stmts {
-            if let syn::Stmt::Item(item) = statement {
-                if !self.enabled(loader::attrs(item)) {
-                    continue;
-                }
-                if let Some((name, target)) = declaration(item, self.module) {
-                    self.scopes
-                        .last_mut()
-                        .unwrap()
-                        .insert(name, BTreeSet::from([target]));
-                }
+        for (statement, _) in block.stmts.iter().zip(&active).filter(|(_, on)| **on) {
+            if let syn::Stmt::Item(item) = statement
+                && let Some((name, target)) = declaration(item, self.module)
+            {
+                self.scopes
+                    .last_mut()
+                    .unwrap()
+                    .insert(name, BTreeSet::from([target]));
             }
         }
-        for statement in &block.stmts {
-            match statement {
-                syn::Stmt::Item(Item::Use(item)) if self.enabled(&item.attrs) => {
-                    self.use_item(item)
-                }
-                _ => {}
+        for (statement, _) in block.stmts.iter().zip(&active).filter(|(_, on)| **on) {
+            if let syn::Stmt::Item(Item::Use(item)) = statement {
+                self.use_item(item);
             }
         }
-        visit::visit_block(self, block);
+        for (statement, _) in block.stmts.iter().zip(&active).filter(|(_, on)| **on) {
+            self.visit_stmt(statement);
+        }
         self.scopes.pop();
     }
     fn visit_local(&mut self, local: &'ast syn::Local) {
@@ -530,7 +547,8 @@ impl<'ast> Visit<'ast> for References<'_> {
             return;
         }
         if self
-            .options
+            .env
+            .settings
             .trusted_macros
             .contains(&macro_path_text(&item.mac.path))
         {
@@ -575,7 +593,8 @@ impl<'ast> Visit<'ast> for References<'_> {
         if is_local_macro(&local_macro) {
             self.edge(local_macro);
             if !self
-                .options
+                .env
+                .settings
                 .trusted_macros
                 .contains(&macro_path_text(&mac.path))
             {
@@ -592,7 +611,8 @@ impl<'ast> Visit<'ast> for References<'_> {
         self.visit_path(&mac.path);
         self.namespace = previous_namespace;
         if self
-            .options
+            .env
+            .settings
             .trusted_macros
             .contains(&macro_path_text(&mac.path))
         {
@@ -645,7 +665,7 @@ impl<'ast> Visit<'ast> for References<'_> {
                 targets.iter().any(|target| {
                     matches!(target, Target::External(path)
                         if !path.first().is_some_and(|p| p == "std" || p == "core" || p == "alloc")
-                            && !self.options.trusted_globs.contains(&path.join("::")))
+                            && !self.env.settings.trusted_globs.contains(&path.join("::")))
                 })
             });
             if unknown_glob
@@ -830,17 +850,17 @@ pub(crate) fn opaque_modules(
     sources: &[loader::Source],
     tables: &Tables,
     textual: &Tables,
-    options: &AnalysisOptions,
+    env: Env,
 ) -> BTreeSet<String> {
     let mut opaque = BTreeSet::new();
     for source in sources {
-        for item in &source.items {
+        for item in source.items() {
             let Item::Macro(item) = item else { continue };
             if item.mac.path.is_ident("macro_rules")
-                || !options
+                || !env
+                    .settings
                     .trusted_macros
                     .contains(&macro_path_text(&item.mac.path))
-                || !matches!(cfg::enabled(&item.attrs, options), Ok(true))
             {
                 continue;
             }

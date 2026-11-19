@@ -1,7 +1,8 @@
 //! Role: Index static names declared by the standard thread_local macro.
 use crate::{
-    AnalysisOptions, cfg,
+    cfg,
     loader::Source,
+    model::Env,
     symbols::{Namespace, Tables, Target, imports, resolve_path},
     visitor::local_macro_targets,
 };
@@ -12,18 +13,12 @@ use syn::{
 
 struct Statics(Vec<syn::ItemStatic>);
 
-fn imports_unknown_thread_local(
-    source: &Source,
-    options: &AnalysisOptions,
-) -> Result<bool, String> {
-    for item in &source.items {
+fn imports_unknown_thread_local(source: &Source, env: Env) -> Result<bool, String> {
+    for item in source.items() {
         let Item::ExternCrate(item) = item else {
             continue;
         };
-        if !cfg::enabled(&item.attrs, options)? {
-            continue;
-        }
-        for attribute in cfg::effective(&item.attrs, options)? {
+        for attribute in cfg::effective(&item.attrs, env)? {
             if !attribute.path().is_ident("macro_use") {
                 continue;
             }
@@ -73,7 +68,7 @@ fn uncertain_binding(
     if !visited.insert(source.module.id.clone()) {
         return false;
     }
-    for item in &source.items {
+    for item in source.items() {
         let Item::Use(item) = item else { continue };
         let mut bindings = Vec::new();
         imports(
@@ -159,12 +154,12 @@ pub(crate) fn register(
     tables: &mut Tables,
     textual: &Tables,
     strong: &mut BTreeMap<String, BTreeSet<String>>,
-    options: &AnalysisOptions,
+    env: Env,
 ) -> Result<(), String> {
     let mut declarations = Vec::new();
     let mut unknown_macro_scopes = BTreeSet::new();
     for source in sources {
-        if imports_unknown_thread_local(source, options)? {
+        if imports_unknown_thread_local(source, env)? {
             unknown_macro_scopes.insert(source.module.id.clone());
         }
     }
@@ -172,7 +167,7 @@ pub(crate) fn register(
         let unknown_macro_use = unknown_macro_scopes.iter().any(|scope| {
             source.module.id == *scope || source.module.id.starts_with(&format!("{scope}::"))
         });
-        for item in &source.items {
+        for item in source.items() {
             let Item::Macro(item) = item else { continue };
             let targets =
                 local_macro_targets(&source.module.id, &item.mac.path, tables, textual, None);
@@ -220,7 +215,7 @@ pub(crate) fn register(
                         if path.iter().map(String::as_str).eq(["std", "thread_local"]))
                 })
             };
-            if !standard || !cfg::enabled(&item.attrs, options)? {
+            if !standard {
                 continue;
             }
             let statics = syn::parse2::<Statics>(item.mac.tokens.clone()).map_err(|error| {
@@ -230,7 +225,7 @@ pub(crate) fn register(
                 )
             })?;
             for item in statics.0 {
-                if cfg::enabled(&item.attrs, options)? {
+                if cfg::enabled(&item.attrs, env)? {
                     declarations.push((source.module.id.clone(), item.ident.to_string()));
                 }
             }

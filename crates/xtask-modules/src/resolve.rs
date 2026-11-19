@@ -1,15 +1,19 @@
 //! Role: 宣言と再公開の名前解決を収束させ、参照と循環を解析する。
 use crate::{
-    AnalysisOptions, ModuleGraph, components::components, loader::Source, symbols::*,
+    ModuleGraph,
+    components::components,
+    loader::{Loaded, Source},
+    model::Env,
+    symbols::*,
     visitor::References,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use syn::{Item, visit::Visit};
-pub(crate) fn analyze(
-    mut sources: Vec<Source>,
-    options: &AnalysisOptions,
-) -> Result<ModuleGraph, String> {
-    sources.sort_by(|a, b| a.module.id.cmp(&b.module.id));
+pub(crate) fn analyze(loaded: Loaded, env: Env) -> Result<ModuleGraph, String> {
+    let Loaded {
+        sources,
+        diagnostics: loading,
+    } = loaded;
     let mut tables = Tables::new();
     let mut uses = BTreeMap::<String, Vec<Import>>::new();
     let mut strong = BTreeMap::<String, BTreeSet<String>>::new();
@@ -19,14 +23,10 @@ pub(crate) fn analyze(
         .collect::<BTreeSet<_>>();
     for source in &sources {
         let owner = &source.module.id;
-        for item in &source.items {
-            let inactive = matches!(item, Item::Mod(module) if !active_modules.contains(&format!("{owner}::{}", module.ident)));
-            if inactive {
-                continue;
-            }
+        for item in source.items() {
             if let Item::Macro(mac) = item
                 && mac.mac.path.is_ident("macro_rules")
-                && has_attribute(&mac.attrs, options, "macro_export")
+                && has_attribute(&mac.attrs, env, "macro_export")
                 && let Some((name, target)) = declaration(item, owner)
             {
                 // #[macro_export] places the macro at the crate root, wherever it is defined.
@@ -62,14 +62,14 @@ pub(crate) fn analyze(
             }
         }
     }
-    let textual = textual_macros(&sources, &active_modules, options);
+    let textual = textual_macros(&sources, &active_modules, env);
     let externs = sources
         .iter()
         .find(|s| s.module.id == "crate")
         .map(|source| {
             source
-                .items
-                .iter()
+                .items()
+                .into_iter()
                 .filter_map(|i| {
                     if matches!(i, Item::ExternCrate(_)) {
                         declaration(i, "crate")
@@ -101,13 +101,7 @@ pub(crate) fn analyze(
     for (external_fallback, generated_values) in [(false, false), (true, false), (true, true)] {
         // Macro providers must reach their fixed point before generated values exist.
         if generated_values {
-            crate::thread_local_items::register(
-                &sources,
-                &mut tables,
-                &textual,
-                &mut strong,
-                options,
-            )?;
+            crate::thread_local_items::register(&sources, &mut tables, &textual, &mut strong, env)?;
         }
         loop {
             let previous = tables.clone();
@@ -128,24 +122,23 @@ pub(crate) fn analyze(
             }
         }
     }
-    let opaque = crate::visitor::opaque_modules(&sources, &tables, &textual, options);
+    let opaque = crate::visitor::opaque_modules(&sources, &tables, &textual, env);
     let mut edges = BTreeSet::new();
-    let mut diagnostics = BTreeSet::new();
+    let mut diagnostics = loading.into_iter().collect::<BTreeSet<_>>();
     for source in &sources {
-        diagnostics.extend(source.role_diagnostics.iter().cloned());
         let mut visitor = References {
             module: &source.module.id,
             tables: &tables,
             textual: &textual,
-            options,
+            env,
             opaque: &opaque,
             scopes: Vec::new(),
             namespace: Namespace::Type,
             edges: &mut edges,
             diagnostics: &mut diagnostics,
         };
-        visitor.enabled(&source.attrs);
-        for item in &source.items {
+        visitor.expansions(source.attrs());
+        for item in source.items() {
             visitor.visit_item(item);
         }
     }
@@ -162,25 +155,21 @@ pub(crate) fn analyze(
 
 /// `macro_rules!` names in textual scope per module: own definitions plus those
 /// that `#[macro_use] mod child;` adds to its parent. Declaration order is not modeled.
-fn textual_macros(
-    sources: &[Source],
-    active_modules: &BTreeSet<String>,
-    options: &AnalysisOptions,
-) -> Tables {
+fn textual_macros(sources: &[Source], active_modules: &BTreeSet<String>, env: Env) -> Tables {
     let mut textual = Tables::new();
     let mut inherited = Vec::<(String, String)>::new();
     for source in sources {
         let owner = &source.module.id;
         let table = textual.entry(owner.clone()).or_default();
-        for item in &source.items {
+        for item in source.items() {
             match item {
                 Item::Macro(mac) if mac.mac.path.is_ident("macro_rules") => {
                     if let Some((name, target)) = declaration(item, owner) {
                         table.entry(name).or_default().insert(target);
                     }
                 }
-                Item::Mod(module) if has_attribute(&module.attrs, options, "macro_use") => {
-                    let child = format!("{owner}::{}", module.ident);
+                Item::Mod(module) if has_attribute(&module.attrs, env, "macro_use") => {
+                    let child = crate::loader::child_id(owner, &module.ident);
                     if active_modules.contains(&child) {
                         inherited.push((owner.clone(), child));
                     }
@@ -211,7 +200,7 @@ fn textual_macros(
 
 /// Whether the attribute is present after `cfg_attr` expansion. The loader has already
 /// validated these attributes, so an expansion error cannot occur here.
-fn has_attribute(attrs: &[syn::Attribute], options: &AnalysisOptions, name: &str) -> bool {
-    crate::cfg::effective(attrs, options)
+fn has_attribute(attrs: &[syn::Attribute], env: Env, name: &str) -> bool {
+    crate::cfg::effective(attrs, env)
         .is_ok_and(|metas| metas.iter().any(|meta| meta.path().is_ident(name)))
 }

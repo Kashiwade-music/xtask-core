@@ -1,17 +1,31 @@
 //! Role: cfgとcfg_attrを評価し、解析できない属性展開を診断する。
-use crate::AnalysisOptions;
+use crate::model::Env;
 use syn::{Attribute, Meta, Token, punctuated::Punctuated};
 
-pub(crate) fn enabled(attrs: &[Attribute], options: &AnalysisOptions) -> Result<bool, String> {
-    for attr in effective(attrs, options)? {
+/// One predicate of a cfg: the literal `true` or `false`, or a name, `key = "value"`,
+/// `all(..)`, `any(..)`, or `not(..)`.
+enum Predicate {
+    Bool(bool),
+    Meta(Meta),
+}
+
+impl syn::parse::Parse for Predicate {
+    fn parse(input: syn::parse::ParseStream<'_>) -> syn::Result<Self> {
+        if input.peek(syn::LitBool) {
+            return Ok(Self::Bool(input.parse::<syn::LitBool>()?.value));
+        }
+        Ok(Self::Meta(input.parse()?))
+    }
+}
+
+pub(crate) fn enabled(attrs: &[Attribute], env: Env) -> Result<bool, String> {
+    for attr in effective(attrs, env)? {
         if attr.path().is_ident("cfg") {
             let Meta::List(list) = attr else {
                 return Err("invalid cfg attribute".into());
             };
-            if !evaluate(
-                &syn::parse2(list.tokens).map_err(|e| e.to_string())?,
-                options,
-            )? {
+            let predicate = syn::parse2::<Predicate>(list.tokens).map_err(|e| e.to_string())?;
+            if !evaluate(&predicate, env)? {
                 return Ok(false);
             }
         }
@@ -19,30 +33,30 @@ pub(crate) fn enabled(attrs: &[Attribute], options: &AnalysisOptions) -> Result<
     Ok(true)
 }
 
-pub(crate) fn effective(
-    attrs: &[Attribute],
-    options: &AnalysisOptions,
-) -> Result<Vec<Meta>, String> {
+pub(crate) fn effective(attrs: &[Attribute], env: Env) -> Result<Vec<Meta>, String> {
     let mut result = Vec::new();
     for attr in attrs {
-        expand(attr.meta.clone(), options, &mut result)?;
+        expand(attr.meta.clone(), env, &mut result)?;
     }
     Ok(result)
 }
 
-fn expand(meta: Meta, options: &AnalysisOptions, result: &mut Vec<Meta>) -> Result<(), String> {
+fn expand(meta: Meta, env: Env, result: &mut Vec<Meta>) -> Result<(), String> {
     if meta.path().is_ident("cfg_attr") {
         let Meta::List(list) = meta else {
             return Err("invalid cfg_attr".into());
         };
         let args = list
-            .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+            .parse_args_with(Punctuated::<Predicate, Token![,]>::parse_terminated)
             .map_err(|e| e.to_string())?;
         let mut args = args.into_iter();
         let predicate = args.next().ok_or("empty cfg_attr")?;
-        if evaluate(&predicate, options)? {
+        if evaluate(&predicate, env)? {
             for attr in args {
-                expand(attr, options, result)?;
+                let Predicate::Meta(attr) = attr else {
+                    return Err("invalid cfg_attr".into());
+                };
+                expand(attr, env, result)?;
             }
         }
     } else {
@@ -51,11 +65,19 @@ fn expand(meta: Meta, options: &AnalysisOptions, result: &mut Vec<Meta>) -> Resu
     Ok(())
 }
 
-fn evaluate(meta: &Meta, options: &AnalysisOptions) -> Result<bool, String> {
+fn evaluate(predicate: &Predicate, env: Env) -> Result<bool, String> {
+    match predicate {
+        Predicate::Bool(value) => Ok(*value),
+        Predicate::Meta(meta) => evaluate_meta(meta, env),
+    }
+}
+
+fn evaluate_meta(meta: &Meta, env: Env) -> Result<bool, String> {
     match meta {
-        Meta::Path(path) => Ok(path
-            .get_ident()
-            .is_some_and(|i| options.cfg.contains(&i.to_string()))),
+        Meta::Path(path) => match path.get_ident() {
+            Some(name) => Ok(env.cfg.contains(&name.to_string())),
+            None => Err("unsupported cfg predicate".into()),
+        },
         Meta::NameValue(value) => {
             let key = value
                 .path
@@ -70,18 +92,18 @@ fn evaluate(meta: &Meta, options: &AnalysisOptions) -> Result<bool, String> {
             };
             let value = value.value();
             Ok(if key == "feature" {
-                options.features.contains(&value)
+                env.settings.features.contains(&value)
             } else {
-                options.cfg.contains(&format!("{key}=\"{value}\""))
+                env.cfg.contains(&format!("{key}=\"{value}\""))
             })
         }
         Meta::List(list) => {
             let args = list
-                .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+                .parse_args_with(Punctuated::<Predicate, Token![,]>::parse_terminated)
                 .map_err(|e| e.to_string())?;
             let values = args
                 .iter()
-                .map(|m| evaluate(m, options))
+                .map(|p| evaluate(p, env))
                 .collect::<Result<Vec<_>, _>>()?;
             if list.path.is_ident("all") {
                 Ok(values.into_iter().all(|v| v))
@@ -98,11 +120,11 @@ fn evaluate(meta: &Meta, options: &AnalysisOptions) -> Result<bool, String> {
 
 pub(crate) fn expansion_diagnostics(
     attrs: &[Attribute],
-    options: &AnalysisOptions,
+    env: Env,
     intrinsic_derives: &std::collections::BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
     let mut diagnostics = Vec::new();
-    for meta in effective(attrs, options)? {
+    for meta in effective(attrs, env)? {
         let name = meta
             .path()
             .segments
@@ -127,7 +149,7 @@ pub(crate) fn expansion_diagnostics(
                 let path = derive.split("::").map(str::to_owned).collect::<Vec<_>>();
                 if !intrinsic_derives.contains(&derive)
                     && !crate::intrinsic::derive(&path)
-                    && !options.trusted_derives.contains(&derive)
+                    && !env.settings.trusted_derives.contains(&derive)
                 {
                     diagnostics.push(format!("derive macro expansion is unsupported: {derive}"));
                 }
@@ -184,7 +206,7 @@ pub(crate) fn expansion_diagnostics(
                 | "no_builtins"
                 | "naked"
         ) && !is_tool_attribute(meta.path())
-            && !options.trusted_attributes.contains(&name)
+            && !env.settings.trusted_attributes.contains(&name)
         {
             diagnostics.push(format!("attribute macro expansion is unsupported: {name}"));
         }

@@ -18,21 +18,30 @@ mod symbols;
 mod thread_local_items;
 mod visitor;
 
-pub use model::{AnalysisOptions, DEFAULT_MAX_ROLE_CHARS, Module, ModuleGraph, Reference};
+use model::Env;
+pub use model::{Configuration, Module, ModuleGraph, ModuleKind, Reference, Settings};
 use std::path::Path;
 
-pub fn analyze(root_file: &Path, options: &AnalysisOptions) -> Result<ModuleGraph, String> {
-    role::validate_limit(root_file, options.max_role_chars)?;
-    let sources = loader::load(root_file, options)?;
-    resolve::analyze(sources, options)
-}
-
-/// Read the crate root's static inner Role doc without loading child modules.
-pub fn crate_role(root_file: &Path) -> Result<String, String> {
-    crate_role_with_limit(root_file, DEFAULT_MAX_ROLE_CHARS)
-}
-
-/// Read the root Role using a positive, configurable Unicode character limit.
-pub fn crate_role_with_limit(root_file: &Path, max_role_chars: usize) -> Result<String, String> {
-    role::root(root_file, max_role_chars)
+/// Analyzes one crate root under each configuration. The root and every module file
+/// are parsed once for all configurations; results are returned in the same order.
+pub fn analyze(
+    root_file: &Path,
+    settings: &Settings,
+    configurations: &[Configuration],
+) -> Vec<Result<ModuleGraph, String>> {
+    if let Err(error) = role::validate_limit(root_file, settings.max_role_chars) {
+        return configurations.iter().map(|_| Err(error.clone())).collect();
+    }
+    let mut cache = loader::ParseCache::new();
+    configurations
+        .iter()
+        .map(|configuration| {
+            let env = Env {
+                settings,
+                cfg: &configuration.cfg,
+            };
+            let loaded = loader::load(root_file, env, &mut cache)?;
+            resolve::analyze(loaded, env)
+        })
+        .collect()
 }

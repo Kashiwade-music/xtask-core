@@ -1,13 +1,14 @@
 //! Role: 静的な内側ドキュメントからモジュールの役割宣言を検証する。
-use std::{fs, path::Path};
+use std::path::Path;
 use syn::{AttrStyle, Attribute, Expr, Lit, Meta};
 
+/// The module's Role, or the diagnostic that explains why it has none.
 pub(crate) fn extract(
     attrs: &[Attribute],
     file: &Path,
     module: &str,
     max_role_chars: usize,
-) -> (Option<String>, Vec<String>) {
+) -> Result<String, String> {
     let context = format!("{} ({module})", file.display());
     let mut declarations = Vec::new();
     for attribute in attrs {
@@ -35,28 +36,19 @@ pub(crate) fn extract(
         }
     }
     if declarations.is_empty() {
-        return (
-            None,
-            vec![format!(
-                "{context}: missing module role; add //! Role: <description>"
-            )],
-        );
+        return Err(format!(
+            "{context}: missing module role; add //! Role: <description>"
+        ));
     }
     if declarations.len() != 1 {
-        return (
-            None,
-            vec![format!(
-                "{context}: duplicate module Role declarations; exactly one is required"
-            )],
-        );
+        return Err(format!(
+            "{context}: duplicate module Role declarations; exactly one is required"
+        ));
     }
     let malformed = |reason: &str| {
-        (
-            None,
-            vec![format!(
-                "{context}: malformed module Role declaration: {reason}"
-            )],
-        )
+        Err(format!(
+            "{context}: malformed module Role declaration: {reason}"
+        ))
     };
     if declarations[0].1 {
         return malformed("Role documentation must be a single line without control characters");
@@ -76,7 +68,7 @@ pub(crate) fn extract(
             "description must be at most {max_role_chars} Unicode characters"
         ));
     }
-    (Some(description.to_string()), Vec::new())
+    Ok(description.to_string())
 }
 
 pub(crate) fn validate_limit(file: &Path, max_role_chars: usize) -> Result<(), String> {
@@ -87,13 +79,4 @@ pub(crate) fn validate_limit(file: &Path, max_role_chars: usize) -> Result<(), S
         ));
     }
     Ok(())
-}
-
-pub(crate) fn root(file: &Path, max_role_chars: usize) -> Result<String, String> {
-    validate_limit(file, max_role_chars)?;
-    let context = format!("{} (crate)", file.display());
-    let source = fs::read_to_string(file).map_err(|e| format!("{context}: {e}"))?;
-    let source = syn::parse_file(&source).map_err(|e| format!("{context}: {e}"))?;
-    let (role, diagnostics) = extract(&source.attrs, file, "crate", max_role_chars);
-    role.ok_or_else(|| diagnostics.join("\n"))
 }

@@ -1,12 +1,14 @@
 //! Role: Verify standard thread-local static names without expanding other macros.
+mod common;
+
+use common::{Options, write_fixture};
 use std::fs;
-use xtask_modules::{AnalysisOptions, ModuleGraph, analyze};
+use xtask_modules::ModuleGraph;
 
 fn graph(source: &str) -> ModuleGraph {
-    let directory = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    let directory = write_fixture(&[("lib.rs", source)]);
     let root = directory.path().join("lib.rs");
-    fs::write(&root, source).unwrap();
-    let mut options = AnalysisOptions::default();
+    let mut options = Options::default();
     for name in [
         "thread_local",
         "std::thread_local",
@@ -16,7 +18,7 @@ fn graph(source: &str) -> ModuleGraph {
     ] {
         options.trusted_macros.insert(name.into());
     }
-    analyze(&root, &options).unwrap()
+    options.analyze(&root).unwrap()
 }
 
 #[test]
@@ -516,7 +518,7 @@ mod consumer {
 "#,
     )
     .unwrap();
-    let control = analyze(&root, &AnalysisOptions::default()).unwrap();
+    let control = Options::default().analyze(&root).unwrap();
     assert!(
         control
             .diagnostics
@@ -584,7 +586,7 @@ mod consumer {
         let directory = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
         let root = directory.path().join("lib.rs");
         fs::write(&root, source).unwrap();
-        let result = analyze(&root, &AnalysisOptions::default()).unwrap();
+        let result = Options::default().analyze(&root).unwrap();
         assert!(
             result
                 .diagnostics
@@ -638,9 +640,9 @@ mod declarations {
 "#,
     )
     .unwrap();
-    let mut options = AnalysisOptions::default();
+    let mut options = Options::default();
     options.trusted_macros.insert("thread_local".into());
-    let error = analyze(&root, &options).unwrap_err();
+    let error = options.analyze(&root).unwrap_err();
     assert!(
         error
             .to_string()
