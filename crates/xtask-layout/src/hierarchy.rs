@@ -193,7 +193,9 @@ fn post_order(tree: &Tree) -> Vec<usize> {
 fn run_level(input: &LevelInput) -> Result<LevelOutput, LayoutError> {
     let layers = crate::layering::assign(input)?;
     let chains = crate::chains::build(input, &layers)?;
+    crate::level::check_chains(&chains)?;
     let order = crate::order::arrange(&chains)?;
+    crate::level::check_order(&chains, &order)?;
     let y = crate::position::vertical(&chains, &order)?;
     crate::route::finish(input, &chains, &order, &y)
 }

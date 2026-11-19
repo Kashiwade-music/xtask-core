@@ -31,6 +31,8 @@ pub(crate) fn order(node_count: usize, edges: &[(usize, usize, i64)]) -> Vec<usi
 /// 残りの node と辺の重み（手順の R、out(v)、in(v)）。自己ループは除く。
 struct Remaining {
     arcs: Vec<(usize, usize, i64)>,
+    /// node ごとに、接する辺の index（`arcs` の中の位置）。
+    touching: Vec<Vec<usize>>,
     alive: Vec<bool>,
     out_weight: Vec<i64>,
     in_weight: Vec<i64>,
@@ -46,12 +48,16 @@ impl Remaining {
             .collect();
         let mut out_weight = vec![0i64; node_count];
         let mut in_weight = vec![0i64; node_count];
-        for &(from, to, weight) in &arcs {
+        let mut touching = vec![Vec::new(); node_count];
+        for (index, &(from, to, weight)) in arcs.iter().enumerate() {
             out_weight[from] += weight;
             in_weight[to] += weight;
+            touching[from].push(index);
+            touching[to].push(index);
         }
         Self {
             arcs,
+            touching,
             alive: vec![true; node_count],
             out_weight,
             in_weight,
@@ -88,7 +94,8 @@ impl Remaining {
     fn remove(&mut self, node: usize) {
         self.alive[node] = false;
         self.left -= 1;
-        for &(from, to, weight) in &self.arcs {
+        for &index in &self.touching[node] {
+            let (from, to, weight) = self.arcs[index];
             if from == node && self.alive[to] {
                 self.in_weight[to] -= weight;
             }

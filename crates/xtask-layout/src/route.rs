@@ -11,7 +11,7 @@ pub(crate) fn finish(
     order: &Order,
     y: &[i64],
 ) -> Result<LevelOutput, LayoutError> {
-    check_shape(input, chains, order, y)?;
+    check_shape(input, chains, y)?;
     let plan = Plan::new(&input.frame, chains, order, y)?;
     let rects: Vec<Rect> = (0..chains.items.len())
         .map(|item| plan.item_rect(item))
@@ -41,30 +41,20 @@ pub(crate) fn finish(
 }
 
 /// 入力の形が配置の前提に合うか確かめる。合わなければ実装の誤りとして返す。
-fn check_shape(
-    input: &LevelInput,
-    chains: &Chains,
-    order: &Order,
-    y: &[i64],
-) -> Result<(), LayoutError> {
+/// link の両端と道のりの link の範囲は `level::check_chains` が確かめ済み。
+fn check_shape(input: &LevelInput, chains: &Chains, y: &[i64]) -> Result<(), LayoutError> {
     let items = chains.items.len();
-    let links = chains.links.len();
     let adjacent = chains.layer.len() == items
-        && chains.links.iter().all(|link| {
-            link.left < items
-                && link.right < items
-                && chains.layer[link.right] == chains.layer[link.left] + 1
-        });
-    let steps_valid = chains.paths.iter().flatten().all(|step| step.link < links);
+        && chains
+            .links
+            .iter()
+            .all(|link| chains.layer[link.right] == chains.layer[link.left] + 1);
     let consistent = input.items.len() <= items
         && chains.layer.len() == items
         && y.len() >= items
         && chains.paths.len() == input.segments.len()
-        && order.east.len() == links
-        && order.west.len() == links
         && chains.layer.iter().all(|&layer| layer < chains.layer_count)
-        && adjacent
-        && steps_valid;
+        && adjacent;
     if consistent {
         Ok(())
     } else {

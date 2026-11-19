@@ -1,5 +1,5 @@
 //! Role: 平らな段の要素・区間・中間結果の型を定義する。
-use crate::model::{Point, Rect, Size};
+use crate::model::{LayoutError, Point, Rect, Size};
 
 /// 段の中の要素の index。
 pub(crate) type ItemId = usize;
@@ -145,4 +145,53 @@ pub(crate) struct LevelOutput {
 pub(crate) struct Piece {
     pub points: Vec<Point>,
     pub label: Option<Rect>,
+}
+
+/// chains の参照（link の両端と、道のりの link の index）が範囲内にあることを確かめる。
+pub(crate) fn check_chains(chains: &Chains) -> Result<(), LayoutError> {
+    let item_count = chains.items.len();
+    let link_count = chains.links.len();
+    if chains
+        .links
+        .iter()
+        .any(|link| link.left >= item_count || link.right >= item_count)
+    {
+        return Err(LayoutError::Internal(
+            "link refers to a missing item".to_string(),
+        ));
+    }
+    if chains
+        .paths
+        .iter()
+        .flatten()
+        .any(|step| step.link >= link_count)
+    {
+        return Err(LayoutError::Internal(
+            "path refers to a missing link".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// order が chains と合うことを確かめる。port は link ごと、層は各 item を一度ずつ含む。
+pub(crate) fn check_order(chains: &Chains, order: &Order) -> Result<(), LayoutError> {
+    let link_count = chains.links.len();
+    if order.east.len() != link_count || order.west.len() != link_count {
+        return Err(LayoutError::Internal(
+            "port count differs from the link count".to_string(),
+        ));
+    }
+    let mut seen = vec![0usize; chains.items.len()];
+    for &item in order.layers.iter().flatten() {
+        let count = seen
+            .get_mut(item)
+            .ok_or_else(|| LayoutError::Internal("layer refers to a missing item".to_string()))?;
+        *count += 1;
+    }
+    if seen.iter().any(|&count| count != 1) {
+        return Err(LayoutError::Internal(
+            "layers do not list each item once".to_string(),
+        ));
+    }
+    Ok(())
 }
