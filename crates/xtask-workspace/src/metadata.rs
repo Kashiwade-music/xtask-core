@@ -1,11 +1,13 @@
-//! Role: Cargoの宣言・解決情報からworkspaceの依存とfeatureを取得する。
+//! Role: Cargo metadataを読み、workspaceの構造・依存の辺・featureを検証して作る。
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Deserialize;
+use xtask_policy::{AnalysisSettings, Features};
+use xtask_source::normalize;
 
-use crate::model::{Dependency, Package, Target, Workspace};
+use crate::model::{Dependency, DependencyKind, Edition, Package, Target, TargetKind, Workspace};
 
 #[derive(Deserialize)]
 struct Metadata {
@@ -21,7 +23,6 @@ struct MetadataPackage {
     name: String,
     manifest_path: PathBuf,
     targets: Vec<MetadataTarget>,
-    features: BTreeMap<String, Vec<String>>,
     dependencies: Vec<MetadataDependency>,
 }
 
@@ -52,20 +53,11 @@ struct MetadataDependency {
     kind: Option<String>,
     target: Option<String>,
     path: Option<PathBuf>,
-    rename: Option<String>,
 }
 
 #[derive(Deserialize)]
-struct FeatureMetadata {
-    workspace_members: Vec<String>,
-    packages: Vec<FeaturePackage>,
+struct SelectionMetadata {
     resolve: Option<Resolve>,
-}
-
-#[derive(Deserialize)]
-struct FeaturePackage {
-    id: String,
-    name: String,
 }
 
 #[derive(Deserialize)]
@@ -83,7 +75,6 @@ struct ResolveNode {
 
 #[derive(Deserialize)]
 struct ResolvedDependency {
-    name: String,
     pkg: String,
     dep_kinds: Vec<ResolvedKind>,
 }
@@ -94,356 +85,328 @@ struct ResolvedKind {
     target: Option<String>,
 }
 
-fn canonical(path: &Path) -> Result<PathBuf, String> {
-    std::fs::canonicalize(path).map_err(|error| format!("{}: {error}", path.display()))
+impl ResolvedKind {
+    fn matches(&self, kind: DependencyKind, target: Option<&str>) -> bool {
+        self.kind.as_deref().unwrap_or("normal") == kind.as_str()
+            && self.target.as_deref() == target
+    }
+}
+
+/// Whether `features` needs a second `cargo metadata` run. The structural run already gives
+/// the features of `Features::All` without a target.
+pub fn needs_selection_run(analysis: &AnalysisSettings) -> bool {
+    !(matches!(analysis.features(), Features::All) && analysis.target().is_none())
 }
 
 impl Workspace {
-    /// Ask Cargo for resolved feature activation, including dependency feature
-    /// requests and unification. The consumer's lockfile and cache must exist.
-    /// Unlike declaration loading this resolves external dependencies, but never
-    /// downloads crates or changes the lockfile.
-    pub fn resolved_features(
-        root: &Path,
-        features: &[String],
-        default_features: bool,
-        all_features: bool,
-        target: Option<&str>,
+    /// Read the structure of the workspace with one `cargo metadata` run under `--all-features`.
+    /// A failure is fatal, because nothing can be checked without the structure.
+    pub fn load(root: &Path) -> Result<Self, String> {
+        let json = run_metadata(root, None)?;
+        Self::from_json(&json)
+    }
+
+    /// The features Cargo activates for each member under the analysis selection. A failure
+    /// belongs to the analysis environment, so other checks can still run.
+    pub fn features(
+        &self,
+        analysis: &AnalysisSettings,
     ) -> Result<BTreeMap<String, BTreeSet<String>>, String> {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let mut command = Command::new(cargo);
-        command
-            .args(["metadata", "--format-version", "1", "--locked", "--offline"])
-            .current_dir(root);
-        if !features.is_empty() {
-            command.arg("--features").arg(features.join(","));
+        if !needs_selection_run(analysis) {
+            return Ok(self.all_features.clone());
         }
-        if !default_features {
-            command.arg("--no-default-features");
-        }
-        if all_features {
-            command.arg("--all-features");
-        }
-        if let Some(target) = target {
-            command.arg("--filter-platform").arg(target);
-        }
-        let output = command.output().map_err(|error| {
+        let json = run_metadata(&self.root, Some(analysis)).map_err(|error| {
             format!(
-                "cannot resolve Cargo features in {}: {error}",
-                root.display()
+                "{error}\nPrepare the consumer's Cargo.lock and dependency cache before running checks (cargo generate-lockfile and cargo fetch)."
             )
         })?;
-        if !output.status.success() {
-            return Err(format!(
-                "Cargo feature resolution in {} failed ({}): {}\nPrepare the consumer's Cargo.lock and dependency cache before running checks (cargo generate-lockfile and cargo fetch).",
-                root.display(),
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
-        Self::resolved_features_from_json(
-            &String::from_utf8(output.stdout)
-                .map_err(|error| format!("Cargo feature metadata is not UTF-8: {error}"))?,
-        )
-    }
-
-    /// Read the member feature map from full Cargo metadata, by package ID.
-    pub fn resolved_features_from_json(
-        json: &str,
-    ) -> Result<BTreeMap<String, BTreeSet<String>>, String> {
-        let metadata: FeatureMetadata = serde_json::from_str(json)
+        let metadata: SelectionMetadata = serde_json::from_str(&json)
             .map_err(|error| format!("invalid Cargo feature metadata: {error}"))?;
-        let members: BTreeSet<_> = metadata.workspace_members.into_iter().collect();
-        let packages: BTreeMap<_, _> = metadata
-            .packages
-            .into_iter()
-            .filter(|package| members.contains(&package.id))
-            .map(|package| (package.id, package.name))
-            .collect();
-        if let Some(missing) = members.iter().find(|id| !packages.contains_key(*id)) {
-            return Err(format!(
-                "workspace member `{missing}` is missing from feature metadata packages"
-            ));
-        }
         let resolve = metadata
             .resolve
-            .ok_or("Cargo feature metadata has no resolve graph")?;
-        let mut features = BTreeMap::new();
-        let mut found = BTreeSet::new();
-        for node in resolve.nodes {
-            if let Some(name) = packages.get(&node.id) {
-                if !found.insert(node.id.clone()) {
-                    return Err(format!("duplicate resolve node `{}`", node.id));
-                }
-                if features
-                    .insert(name.clone(), node.features.into_iter().collect())
-                    .is_some()
-                {
-                    return Err(format!("duplicate workspace package name `{name}`"));
-                }
-            }
-        }
-        if let Some(missing) = members.difference(&found).next() {
-            return Err(format!(
-                "workspace member `{missing}` is missing from Cargo resolve graph"
-            ));
-        }
-        Ok(features)
+            .ok_or("cargo metadata did not return a resolve graph")?;
+        member_features(&resolve, &self.member_names())
     }
 
-    /// Run offline declaration metadata, resolving ambiguous same-name registry
-    /// dependencies when needed to distinguish patches from external packages.
-    /// `CARGO` may select the Cargo executable used by the caller's xtask.
-    pub fn load(root: &Path) -> Result<Self, String> {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let output = Command::new(cargo)
-            .args([
-                "metadata",
-                "--format-version",
-                "1",
-                "--no-deps",
-                "--locked",
-                "--offline",
-            ])
-            .current_dir(root)
-            .output()
-            .map_err(|error| format!("cannot run cargo metadata in {}: {error}", root.display()))?;
-        if !output.status.success() {
-            return Err(format!(
-                "cargo metadata in {} failed ({}): {}",
-                root.display(),
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
-        }
-        let json = std::str::from_utf8(&output.stdout)
-            .map_err(|error| format!("cargo metadata output is not UTF-8: {error}"))?;
-        let metadata: Metadata = serde_json::from_str(json)
-            .map_err(|error| format!("invalid Cargo metadata: {error}"))?;
-        let members: BTreeSet<_> = metadata.workspace_members.iter().collect();
-        let member_names: BTreeSet<_> = metadata
-            .packages
+    fn member_names(&self) -> BTreeMap<&str, &str> {
+        self.packages
             .iter()
-            .filter(|package| members.contains(&package.id))
-            .map(|package| package.name.as_str())
-            .collect();
-        let ambiguous = metadata
-            .packages
-            .iter()
-            .filter(|package| members.contains(&package.id))
-            .any(|package| {
-                package
-                    .dependencies
-                    .iter()
-                    .any(|dep| dep.path.is_none() && member_names.contains(dep.name.as_str()))
-            });
-        if ambiguous {
-            let output = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-                .args([
-                    "metadata",
-                    "--format-version",
-                    "1",
-                    "--locked",
-                    "--offline",
-                    "--all-features",
-                ])
-                .current_dir(root)
-                .output()
-                .map_err(|error| {
-                    format!("cannot resolve ambiguous workspace dependency identity: {error}")
-                })?;
-            if !output.status.success() {
-                return Err(format!(
-                    "cannot resolve registry dependency identity against same-name workspace members: {}\nPrepare the consumer's Cargo.lock and dependency cache (cargo generate-lockfile and cargo fetch).",
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ));
-            }
-            let json = std::str::from_utf8(&output.stdout)
-                .map_err(|error| format!("cargo metadata output is not UTF-8: {error}"))?;
-            let full: Metadata = serde_json::from_str(json)
-                .map_err(|error| format!("invalid resolved Cargo metadata: {error}"))?;
-            if full.resolve.is_none() {
-                return Err("cannot resolve ambiguous dependency identity: full Cargo metadata has no resolve graph".into());
-            }
-            return Self::from_json(json);
-        }
-        Self::from_json(json)
+            .map(|package| (package.id.as_str(), package.name.as_str()))
+            .collect()
     }
 
-    /// Parse Cargo metadata. Paths must exist, so filesystem identity is checked.
-    pub fn from_json(json: &str) -> Result<Self, String> {
+    /// Parse one full metadata document. Paths must exist, so filesystem identity is checked.
+    pub(crate) fn from_json(json: &str) -> Result<Self, String> {
         let metadata: Metadata = serde_json::from_str(json)
             .map_err(|error| format!("invalid Cargo metadata: {error}"))?;
-        let root = canonical(&metadata.workspace_root)?;
-        let resolved: Option<BTreeMap<_, _>> = metadata.resolve.map(|resolve| {
-            resolve
-                .nodes
-                .into_iter()
-                .map(|node| (node.id, node.deps))
-                .collect()
-        });
-        let resolved_libraries: BTreeMap<_, _> = metadata
+        let root = normalize(&metadata.workspace_root)?;
+        let names: BTreeMap<String, String> = metadata
             .packages
             .iter()
-            .map(|package| {
-                let libraries: BTreeSet<_> = package
-                    .targets
-                    .iter()
-                    .filter(|target| {
-                        target.kind.iter().any(|kind| {
-                            matches!(
-                                kind.as_str(),
-                                "lib" | "rlib" | "dylib" | "cdylib" | "staticlib" | "proc-macro"
-                            )
-                        })
-                    })
-                    .map(|target| target.name.replace('-', "_"))
-                    .collect();
-                (package.id.clone(), (package.name.clone(), libraries))
-            })
+            .map(|package| (package.id.clone(), package.name.clone()))
             .collect();
-        let members: BTreeSet<_> = metadata.workspace_members.into_iter().collect();
-        let mut found = BTreeSet::new();
-        let mut names = BTreeSet::new();
-        let mut manifests = BTreeMap::new();
-        let mut selected = Vec::new();
-        for package in metadata.packages {
-            if !members.contains(&package.id) {
-                continue;
-            }
-            if !found.insert(package.id.clone()) {
-                return Err(format!("duplicate workspace package ID `{}`", package.id));
-            }
-            if !names.insert(package.name.clone()) {
-                return Err(format!(
-                    "duplicate workspace package name `{}`",
-                    package.name
-                ));
-            }
-            let manifest = canonical(&package.manifest_path)?;
-            if manifests
-                .insert(manifest.clone(), package.id.clone())
-                .is_some()
-            {
-                return Err(format!(
-                    "duplicate workspace manifest {}",
-                    manifest.display()
-                ));
-            }
-            selected.push((package, manifest));
-        }
-        if let Some(missing) = members.difference(&found).next() {
-            return Err(format!(
-                "workspace member `{missing}` is missing from Cargo metadata packages"
-            ));
-        }
-        let by_id: BTreeMap<_, _> = selected
-            .iter()
-            .map(|(package, _)| (package.id.as_str(), package.name.as_str()))
-            .collect();
-        let mut edges = BTreeSet::new();
-        for (package, _) in &selected {
-            for dependency in &package.dependencies {
-                let kind = dependency.kind.as_deref().unwrap_or("normal");
-                let provider_id = if let Some(path) = &dependency.path {
-                    let manifest = canonical(&path.join("Cargo.toml"))?;
-                    manifests.get(&manifest).cloned()
-                } else if let Some(resolved) = &resolved {
-                    if !names.contains(&dependency.name) {
-                        continue;
-                    }
-                    let alias = dependency
-                        .rename
-                        .as_deref()
-                        .unwrap_or(&dependency.name)
-                        .replace('-', "_");
-                    let deps = resolved.get(&package.id).ok_or_else(|| {
-                        format!(
-                            "workspace member `{}` is missing from Cargo resolve graph",
-                            package.name
-                        )
-                    })?;
-                    let candidates: BTreeSet<_> = deps
-                        .iter()
-                        .filter(|dep| {
-                            let name_matches = if dependency.rename.is_some() {
-                                dep.name == alias
-                            } else {
-                                resolved_libraries
-                                    .get(&dep.pkg)
-                                    .is_some_and(|(name, libraries)| {
-                                        name == &dependency.name && libraries.contains(&dep.name)
-                                    })
-                            };
-                            name_matches
-                                && dep.dep_kinds.iter().any(|resolved_kind| {
-                                    resolved_kind.kind.as_deref().unwrap_or("normal") == kind
-                                        && resolved_kind.target == dependency.target
-                                })
-                        })
-                        .map(|dep| &dep.pkg)
-                        .collect();
-                    if candidates.len() != 1 {
-                        return Err(format!(
-                            "cannot uniquely resolve `{}` {} dependency of `{}` for {:?}; provide full unfiltered Cargo metadata with --all-features",
-                            dependency.name, kind, package.name, dependency.target
-                        ));
-                    }
-                    candidates.into_iter().next().cloned()
-                } else {
-                    // No resolve graph cannot prove a registry declaration was
-                    // patched locally. `load` resolves ambiguous names first.
-                    None
-                };
-                let Some(provider_id) = provider_id else {
-                    continue;
-                };
-                let Some(provider) = by_id.get(provider_id.as_str()).copied() else {
-                    continue;
-                };
-                if dependency.name != provider {
-                    return Err(format!(
-                        "dependency `{}` of `{}` points to workspace package `{provider}` ({provider_id})",
-                        dependency.name, package.name
-                    ));
-                }
-                if !matches!(kind, "normal" | "dev" | "build") {
-                    return Err(format!("invalid Cargo dependency kind `{kind}`"));
-                }
-                edges.insert(Dependency {
-                    from: package.name.clone(),
-                    to: provider.into(),
-                    kind: kind.into(),
-                    target: dependency.target.clone(),
-                });
-            }
-        }
-        let mut packages: Vec<_> = selected
+        let members = select_members(metadata.packages, &metadata.workspace_members)?;
+        let resolve = metadata
+            .resolve
+            .ok_or("cargo metadata did not return a resolve graph")?;
+        let (edges, all_features) = {
+            let member_names: BTreeMap<&str, &str> = members
+                .iter()
+                .map(|(package, _)| (package.id.as_str(), package.name.as_str()))
+                .collect();
+            (
+                dependency_edges(&members, &names, &member_names, &resolve)?,
+                member_features(&resolve, &member_names)?,
+            )
+        };
+        let mut packages = members
             .into_iter()
-            .map(|(package, manifest)| Package {
-                id: package.id,
-                name: package.name,
-                manifest_path: manifest,
-                features: package.features,
-                targets: package
-                    .targets
-                    .into_iter()
-                    .map(|target| Target {
-                        name: target.name,
-                        kind: target.kind,
-                        src_path: target.src_path,
-                        required_features: target.required_features,
-                        test: target.test,
-                        edition: target.edition,
-                    })
-                    .collect(),
-            })
-            .collect();
+            .map(|(package, manifest)| package_record(package, manifest))
+            .collect::<Result<Vec<_>, String>>()?;
         packages.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(Self {
             root,
             packages,
             edges: edges.into_iter().collect(),
+            all_features,
         })
     }
+}
+
+/// The one `cargo metadata` command. `None` is the structural run; `Some` selects features.
+fn metadata_command(root: &Path, selection: Option<&AnalysisSettings>) -> Command {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut command = Command::new(cargo);
+    command
+        .args(["metadata", "--format-version", "1", "--locked", "--offline"])
+        .current_dir(root);
+    match selection {
+        None => {
+            command.arg("--all-features");
+        }
+        Some(analysis) => {
+            match analysis.features() {
+                Features::All => {
+                    command.arg("--all-features");
+                }
+                Features::Selected {
+                    features,
+                    default_features,
+                } => {
+                    if !features.is_empty() {
+                        let list: Vec<&str> = features.iter().map(String::as_str).collect();
+                        command.arg("--features").arg(list.join(","));
+                    }
+                    if !default_features {
+                        command.arg("--no-default-features");
+                    }
+                }
+            }
+            if let Some(target) = analysis.target() {
+                command.arg("--filter-platform").arg(target);
+            }
+        }
+    }
+    command
+}
+
+fn run_metadata(root: &Path, selection: Option<&AnalysisSettings>) -> Result<String, String> {
+    let output = metadata_command(root, selection)
+        .output()
+        .map_err(|error| format!("cannot run cargo metadata in {}: {error}", root.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let last = stderr
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or_default()
+            .trim();
+        return Err(format!("cargo metadata failed: {last}"));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("cargo metadata output is not UTF-8: {error}"))
+}
+
+/// Select the workspace members, normalizing each manifest path once.
+fn select_members(
+    packages: Vec<MetadataPackage>,
+    members: &[String],
+) -> Result<Vec<(MetadataPackage, PathBuf)>, String> {
+    let wanted: BTreeSet<&str> = members.iter().map(String::as_str).collect();
+    let mut found = BTreeSet::new();
+    let mut names = BTreeSet::new();
+    let mut manifests = BTreeSet::new();
+    let mut selected = Vec::new();
+    for package in packages {
+        if !wanted.contains(package.id.as_str()) {
+            continue;
+        }
+        if !found.insert(package.id.clone()) {
+            return Err(format!("duplicate workspace package ID `{}`", package.id));
+        }
+        if !names.insert(package.name.clone()) {
+            return Err(format!(
+                "duplicate workspace package name `{}`",
+                package.name
+            ));
+        }
+        let manifest = normalize(&package.manifest_path)?;
+        if !manifests.insert(manifest.clone()) {
+            return Err(format!(
+                "duplicate workspace manifest {}",
+                manifest.display()
+            ));
+        }
+        selected.push((package, manifest));
+    }
+    if let Some(missing) = members.iter().find(|id| !found.contains(id.as_str())) {
+        return Err(format!(
+            "workspace member `{missing}` is missing from Cargo metadata packages"
+        ));
+    }
+    Ok(selected)
+}
+
+fn package_record(package: MetadataPackage, manifest_path: PathBuf) -> Result<Package, String> {
+    let targets = package
+        .targets
+        .into_iter()
+        .map(target_record)
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(Package {
+        id: package.id,
+        name: package.name,
+        manifest_path,
+        targets,
+    })
+}
+
+fn target_record(target: MetadataTarget) -> Result<Target, String> {
+    Ok(Target {
+        name: target.name,
+        kinds: target
+            .kind
+            .iter()
+            .map(String::as_str)
+            .map(TargetKind::from_cargo)
+            .collect(),
+        src_path: normalize(&target.src_path)?,
+        required_features: target.required_features,
+        test: target.test,
+        edition: Edition::from_cargo(&target.edition),
+    })
+}
+
+/// The declared dependencies between members, from the manifests of the members.
+fn dependency_edges(
+    members: &[(MetadataPackage, PathBuf)],
+    names: &BTreeMap<String, String>,
+    member_names: &BTreeMap<&str, &str>,
+    resolve: &Resolve,
+) -> Result<BTreeSet<Dependency>, String> {
+    let directories: BTreeMap<PathBuf, &str> = members
+        .iter()
+        .filter_map(|(package, manifest)| {
+            manifest
+                .parent()
+                .map(|directory| (directory.to_path_buf(), package.name.as_str()))
+        })
+        .collect();
+    let member_name_set: BTreeSet<&str> = member_names.values().copied().collect();
+    let mut edges = BTreeSet::new();
+    for (package, _) in members {
+        for dependency in &package.dependencies {
+            let kind = DependencyKind::from_cargo(dependency.kind.as_deref().unwrap_or("normal"))?;
+            let provider = match &dependency.path {
+                Some(path) => directories.get(&normalize(path)?).copied(),
+                None if member_name_set.contains(dependency.name.as_str()) => {
+                    let id = registry_package_id(resolve, package, dependency, kind, names)?;
+                    member_names.get(id.as_str()).copied()
+                }
+                None => None,
+            };
+            if let Some(provider) = provider {
+                edges.insert(Dependency {
+                    from: package.name.clone(),
+                    to: provider.into(),
+                    kind,
+                    target: dependency.target.clone(),
+                });
+            }
+        }
+    }
+    Ok(edges)
+}
+
+/// The package ID that a declaration without a `path` resolves to. Each declaration must
+/// resolve to exactly one package, so a patched or a registry package is told apart by ID.
+fn registry_package_id(
+    resolve: &Resolve,
+    package: &MetadataPackage,
+    dependency: &MetadataDependency,
+    kind: DependencyKind,
+    names: &BTreeMap<String, String>,
+) -> Result<String, String> {
+    let node = resolve
+        .nodes
+        .iter()
+        .find(|node| node.id == package.id)
+        .ok_or_else(|| {
+            format!(
+                "workspace member `{}` is missing from Cargo resolve graph",
+                package.name
+            )
+        })?;
+    let target = dependency.target.as_deref();
+    let candidates: BTreeSet<&str> = node
+        .deps
+        .iter()
+        .filter(|dep| {
+            names
+                .get(&dep.pkg)
+                .is_some_and(|name| *name == dependency.name)
+        })
+        .filter(|dep| {
+            dep.dep_kinds
+                .iter()
+                .any(|kinds| kinds.matches(kind, target))
+        })
+        .map(|dep| dep.pkg.as_str())
+        .collect();
+    let mut candidates = candidates.into_iter();
+    match (candidates.next(), candidates.next()) {
+        (Some(id), None) => Ok(id.to_string()),
+        _ => Err(format!(
+            "cannot resolve registry dependency identity for {} of {}",
+            dependency.name, package.name
+        )),
+    }
+}
+
+/// The features of each member, by package name, from the resolve graph.
+fn member_features(
+    resolve: &Resolve,
+    members: &BTreeMap<&str, &str>,
+) -> Result<BTreeMap<String, BTreeSet<String>>, String> {
+    let mut features = BTreeMap::new();
+    let mut found = BTreeSet::new();
+    for node in &resolve.nodes {
+        let Some(name) = members.get(node.id.as_str()) else {
+            continue;
+        };
+        if !found.insert(node.id.as_str()) {
+            return Err(format!("duplicate resolve node `{}`", node.id));
+        }
+        let activated: BTreeSet<String> = node.features.iter().cloned().collect();
+        if features.insert((*name).to_string(), activated).is_some() {
+            return Err(format!("duplicate workspace package name `{name}`"));
+        }
+    }
+    if let Some(missing) = members.keys().copied().find(|id| !found.contains(id)) {
+        return Err(format!(
+            "workspace member `{missing}` is missing from Cargo resolve graph"
+        ));
+    }
+    Ok(features)
 }
