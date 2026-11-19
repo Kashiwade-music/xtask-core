@@ -5,7 +5,7 @@ use xtask_archive::{EdgeStyle, Item};
 use xtask_layout::{Edge, Graph, Layering, Node, Region};
 use xtask_modules::ModuleGraph;
 
-use crate::Drawing;
+use crate::model::Drawing;
 use crate::text::{NO_ROLE, node_box, node_text, region_text};
 
 type DrawnEdges = Vec<(EdgeStyle, Option<Vec<String>>)>;

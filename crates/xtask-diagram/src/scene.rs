@@ -2,7 +2,7 @@
 use xtask_archive::{Edge, Label, Node, Point, Rect, Region, Scene};
 use xtask_layout::Layout;
 
-use crate::Drawing;
+use crate::model::Drawing;
 
 const RANGE_ERROR: &str = "diagram exceeds the 32-bit coordinate range";
 

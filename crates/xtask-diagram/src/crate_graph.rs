@@ -5,8 +5,10 @@ use xtask_archive::{DiagramKind, EdgeStyle, Item};
 use xtask_layout::{Graph, Layering, Size};
 use xtask_workspace::{Dependency, DependencyKind, Package, Workspace};
 
+use crate::model::{
+    Body, Drawing, Input, OpenIndices, Plan, analyzed_root_role, key, primary_target,
+};
 use crate::text::{NO_ROLE, Text, node_box, node_text};
-use crate::{Body, Drawing, Input, OpenIndices, Plan, analyzed_root_role, key};
 
 const TITLE: &str = "Workspace crate dependencies (consumer -> provider)";
 
@@ -80,7 +82,7 @@ fn sorted_packages(workspace: &Workspace) -> Vec<&Package> {
 
 /// node の一つ（package）の item と、その文字。
 fn entry(input: &Input<'_>, opens: &OpenIndices, package: &Package) -> (Item, Text) {
-    let primary = crate::primary_target(package);
+    let primary = primary_target(package);
     let role = primary.and_then(|target| analyzed_root_role(input, package, target));
     let open = primary.and_then(|target| {
         opens
