@@ -4,29 +4,24 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use xtask_workspace::{AnalysisSettings, StylePolicy, StyleRule, Workspace};
+use xtask_policy::{StyleRule, StyleSettings};
 
-use super::common::{ToolReport, cargo, cfg_environment, failure, feature_args};
-use crate::model::StyleDiagnostic;
+use super::common::{cargo, cfg_environment, failure, feature_args};
+use crate::model::{StyleDiagnostic, StyleReport};
+use crate::style::{StyleInput, enabled};
 
-pub(super) fn check(
-    root: &Path,
-    workspace: &Workspace,
-    settings: &AnalysisSettings,
-    policy: &StylePolicy,
-    report: &mut ToolReport,
-) {
+pub(super) fn check(input: &StyleInput<'_>, report: &mut StyleReport) {
     // A workspace run preserves cross-package feature selection and dependency
     // feature unification. Packages sharing configuration use one invocation;
     // distinct package configs get independent runs and package-filtered output.
     let mut groups = BTreeMap::<(String, bool), BTreeSet<&str>>::new();
-    for package in &workspace.packages {
-        let api = policy.api_packages.contains(&package.name);
-        if lints(policy, api).is_empty() {
+    for package in &input.workspace.packages {
+        let api = input.style.api_packages().contains(&package.name);
+        if lints(input.style, api).is_empty() {
             continue;
         }
-        let directory = package.manifest_path.parent().unwrap_or(root);
-        match merged_config(directory, policy) {
+        let directory = package.manifest_path.parent().unwrap_or(input.root);
+        match merged_config(directory, input.style) {
             Ok(config) => {
                 groups.entry((config, api)).or_default().insert(&package.id);
             }
@@ -36,68 +31,79 @@ pub(super) fn check(
         }
     }
     for ((configuration, api), selected) in groups {
-        let config = match tempfile::tempdir() {
-            Ok(config) => config,
-            Err(error) => {
-                report
-                    .errors
-                    .push(format!("style Clippy temporary config: {error}"));
-                continue;
-            }
-        };
-        if let Err(error) = fs::write(config.path().join("clippy.toml"), configuration) {
+        run_group(input, &configuration, api, &selected, report);
+    }
+}
+
+/// One Clippy run for the packages that share a configuration.
+fn run_group(
+    input: &StyleInput<'_>,
+    configuration: &str,
+    api: bool,
+    selected: &BTreeSet<&str>,
+    report: &mut StyleReport,
+) {
+    let config = match tempfile::tempdir() {
+        Ok(config) => config,
+        Err(error) => {
             report
                 .errors
                 .push(format!("style Clippy temporary config: {error}"));
-            continue;
+            return;
         }
-        let lints = lints(policy, api);
-        let mut command = cargo(policy, root);
-        command.args([
-            "clippy",
-            "--locked",
-            "--offline",
-            "--workspace",
-            "--all-targets",
-            "--message-format=json",
-        ]);
-        feature_args(&mut command, settings);
-        if let Err(error) = cfg_environment(&mut command, root, settings) {
-            report.errors.push(format!("style Clippy: {error}"));
-            continue;
-        }
-        command.env("CLIPPY_CONF_DIR", config.path());
-        // Isolate this invocation from normal checks with different Clippy config.
-        command.arg("--").args(["-D", "unknown_lints"]);
-        for lint in lints.keys() {
-            // force-warn allows policy exceptions to be applied by xtask without
-            // cargo stopping on a lint before the remaining diagnostics exist.
-            command.args(["--force-warn", lint]);
-        }
-        match command.output() {
-            Err(error) => report
-                .errors
-                .push(format!("style Clippy: cannot run cargo clippy: {error}")),
-            Ok(output) => {
-                let compiler_error =
-                    parse_selected_output(root, &output.stdout, &lints, Some(&selected), report);
-                if !output.status.success() && !compiler_error {
-                    report.errors.push(failure("style Clippy", &output));
-                } else if output.status.success() && !output.stderr.is_empty() {
-                    // Cargo progress lines need not be repeated in the user's report.
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    if stderr.contains("error:") {
-                        report
-                            .errors
-                            .push(format!("style Clippy: {}", stderr.trim()));
-                    }
+    };
+    if let Err(error) = fs::write(config.path().join("clippy.toml"), configuration) {
+        report
+            .errors
+            .push(format!("style Clippy temporary config: {error}"));
+        return;
+    }
+    let lints = lints(input.style, api);
+    let mut command = cargo(input.style, input.root);
+    command.args([
+        "clippy",
+        "--locked",
+        "--offline",
+        "--workspace",
+        "--all-targets",
+        "--message-format=json",
+    ]);
+    feature_args(&mut command, input.analysis);
+    if let Err(error) = cfg_environment(&mut command, input.root, input.analysis) {
+        report.errors.push(format!("style Clippy: {error}"));
+        return;
+    }
+    command.env("CLIPPY_CONF_DIR", config.path());
+    // Isolate this invocation from normal checks with different Clippy config.
+    command.arg("--").args(["-D", "unknown_lints"]);
+    for lint in lints.keys() {
+        // force-warn allows policy exceptions to be applied by xtask without
+        // cargo stopping on a lint before the remaining diagnostics exist.
+        command.args(["--force-warn", lint]);
+    }
+    match command.output() {
+        Err(error) => report
+            .errors
+            .push(format!("style Clippy: cannot run cargo clippy: {error}")),
+        Ok(output) => {
+            let compiler_error =
+                parse_selected_output(input.root, &output.stdout, &lints, Some(selected), report);
+            if !output.status.success() && !compiler_error {
+                report.errors.push(failure("style Clippy", &output));
+            } else if output.status.success() && !output.stderr.is_empty() {
+                // Cargo progress lines need not be repeated in the user's report.
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if stderr.contains("error:") {
+                    report
+                        .errors
+                        .push(format!("style Clippy: {}", stderr.trim()));
                 }
             }
         }
     }
 }
 
-pub(super) fn lints(policy: &StylePolicy, api: bool) -> BTreeMap<&'static str, StyleRule> {
+pub(super) fn lints(style: &StyleSettings, api: bool) -> BTreeMap<&'static str, StyleRule> {
     use StyleRule::*;
     let mut output = BTreeMap::new();
     for (rule, names) in [
@@ -119,15 +125,15 @@ pub(super) fn lints(policy: &StylePolicy, api: bool) -> BTreeMap<&'static str, S
         (SafetyDocs, &["clippy::missing_safety_doc"][..]),
         (SafetyComments, &["clippy::undocumented_unsafe_blocks"][..]),
     ] {
-        if policy.is_enabled(rule) {
+        if enabled(style, rule) {
             output.extend(names.iter().map(|name| (*name, rule)));
         }
     }
-    if api && policy.is_enabled(NonExhaustive) {
+    if api && enabled(style, NonExhaustive) {
         output.insert("clippy::exhaustive_enums", NonExhaustive);
         output.insert("clippy::exhaustive_structs", NonExhaustive);
     }
-    if policy.is_enabled(CatchUnwind) || policy.is_enabled(PoisonAccess) {
+    if enabled(style, CatchUnwind) || enabled(style, PoisonAccess) {
         // The reason embedded in each configured entry selects the actual rule.
         output.insert("clippy::disallowed_methods", CatchUnwind);
     }
@@ -154,25 +160,25 @@ fn locate_config(start: &Path) -> Result<Option<PathBuf>, String> {
 
 pub(super) fn config_table(
     mut table: toml::Table,
-    policy: &StylePolicy,
+    style: &StyleSettings,
 ) -> Result<toml::Table, String> {
     // Test code may unwrap: `#[test]` functions and `#[cfg(test)]` modules are
     // exempted here, and integration test targets when parsing the output.
-    if policy.is_enabled(StyleRule::Unwrap) {
+    if enabled(style, StyleRule::Unwrap) {
         table.insert("allow-unwrap-in-tests".into(), true.into());
     }
     // Unsafe API documentation deliberately includes private items.
-    if policy.is_enabled(StyleRule::SafetyDocs) {
+    if enabled(style, StyleRule::SafetyDocs) {
         table.insert("check-private-items".into(), true.into());
     }
-    if policy.is_enabled(StyleRule::FlexibleReferences) {
+    if enabled(style, StyleRule::FlexibleReferences) {
         table.insert("avoid-breaking-exported-api".into(), false.into());
     }
     let mut blocked = Vec::new();
-    if policy.is_enabled(StyleRule::CatchUnwind) {
+    if enabled(style, StyleRule::CatchUnwind) {
         blocked.push(("std::panic::catch_unwind", "xtask-style:catch-unwind"));
     }
-    if policy.is_enabled(StyleRule::PoisonAccess) {
+    if enabled(style, StyleRule::PoisonAccess) {
         for method in ["into_inner", "get_ref", "get_mut"] {
             blocked.push((
                 match method {
@@ -200,7 +206,7 @@ pub(super) fn config_table(
     Ok(table)
 }
 
-fn merged_config(directory: &Path, policy: &StylePolicy) -> Result<String, String> {
+fn merged_config(directory: &Path, style: &StyleSettings) -> Result<String, String> {
     let original = locate_config(directory)?;
     let table = match original {
         Some(path) => fs::read_to_string(&path)
@@ -209,7 +215,7 @@ fn merged_config(directory: &Path, policy: &StylePolicy) -> Result<String, Strin
             .map_err(|error| format!("{}: {error}", path.display()))?,
         None => toml::Table::new(),
     };
-    let table = config_table(table, policy)?;
+    let table = config_table(table, style)?;
     toml::to_string(&table).map_err(|error| error.to_string())
 }
 
@@ -218,7 +224,7 @@ pub(super) fn parse_output(
     root: &Path,
     stdout: &[u8],
     lints: &BTreeMap<&str, StyleRule>,
-    report: &mut ToolReport,
+    report: &mut StyleReport,
 ) -> bool {
     parse_selected_output(root, stdout, lints, None, report)
 }
@@ -228,7 +234,7 @@ fn parse_selected_output(
     stdout: &[u8],
     lints: &BTreeMap<&str, StyleRule>,
     selected: Option<&BTreeSet<&str>>,
-    report: &mut ToolReport,
+    report: &mut StyleReport,
 ) -> bool {
     let mut compiler_error = false;
     for line in String::from_utf8_lossy(stdout).lines() {
@@ -276,9 +282,10 @@ fn parse_selected_output(
                 // Selected lints are forced to warnings, but xtask reports them as
                 // style errors, so the compiler's level prefix would be misleading.
                 let text = text.trim();
+                let path = root.join(span["file_name"].as_str().unwrap_or("Cargo.toml"));
                 report.diagnostics.push(StyleDiagnostic {
                     rule,
-                    path: root.join(span["file_name"].as_str().unwrap_or("Cargo.toml")),
+                    path: xtask_source::normalize(&path).unwrap_or(path),
                     line: span["line_start"].as_u64().unwrap_or(1) as usize,
                     column: span["column_start"].as_u64().unwrap_or(1) as usize,
                     message: text.strip_prefix("warning: ").unwrap_or(text).to_owned(),

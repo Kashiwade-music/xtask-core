@@ -1,0 +1,20 @@
+[package]
+name = "xtask-style"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Style checks for xtask: source syntax, rustfmt, Clippy, and Default probes"
+
+[dependencies]
+proc-macro2.workspace = true
+serde_json.workspace = true
+syn.workspace = true
+tempfile.workspace = true
+toml.workspace = true
+xtask-policy.workspace = true
+xtask-source.workspace = true
+xtask-workspace.workspace = true
+
+[lints]
+workspace = true

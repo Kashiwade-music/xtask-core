@@ -1,37 +1,32 @@
-//! Role: 整形器と型検査器を呼び出し、親workspaceのstyle診断を集約する。
+//! Role: 整形器・Clippy・Default probeを呼び出し、その診断と通知を一つの報告にまとめる。
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use xtask_workspace::{AnalysisSettings, StylePolicy, StyleRule, Workspace};
+use xtask_policy::StyleRule;
 
-use crate::model::StyleDiagnostic;
+use crate::model::{StyleDiagnostic, StyleReport};
+use crate::style::{StyleInput, enabled};
 
 mod clippy;
 mod common;
 mod probe;
 
-pub(crate) use common::ToolReport;
 use common::{cargo, failure, rustfmt};
 
 /// The Google guide's column limit. Narrower project settings also satisfy it.
 const MAX_WIDTH: usize = 100;
 
-pub(crate) fn check(
-    root: &Path,
-    files: &[PathBuf],
-    workspace: &Workspace,
-    settings: &AnalysisSettings,
-    policy: &StylePolicy,
-) -> ToolReport {
-    let mut report = ToolReport::default();
-    if policy.is_enabled(StyleRule::Format) {
-        width_limit(root, files, policy, &mut report);
-        formatting(root, policy, &mut report);
-    }
-    clippy::check(root, workspace, settings, policy, &mut report);
-    if policy.is_enabled(StyleRule::OptionsDefault) {
-        probe::check(root, workspace, settings, policy, &mut report);
-    }
+/// Formatting runs beside the compiler checks. Its diagnostics come first in the report.
+pub(crate) fn check(input: &StyleInput<'_>) -> StyleReport {
+    let (mut report, compiler) = std::thread::scope(|scope| {
+        let format = scope.spawn(|| format_check(input));
+        let compiler = compiler_checks(input);
+        (
+            format.join().expect("style format thread panicked"),
+            compiler,
+        )
+    });
+    report.append(compiler);
     report.diagnostics.sort();
     report.diagnostics.dedup();
     // Each Clippy configuration group compiles the whole workspace, so a
@@ -41,22 +36,33 @@ pub(crate) fn check(
     report
 }
 
+fn format_check(input: &StyleInput<'_>) -> StyleReport {
+    let mut report = StyleReport::default();
+    if enabled(input.style, StyleRule::Format) {
+        width_limit(input, &mut report);
+        formatting(input, &mut report);
+    }
+    report
+}
+
+/// Clippy, then the Default probe when it is enabled.
+fn compiler_checks(input: &StyleInput<'_>) -> StyleReport {
+    let mut report = StyleReport::default();
+    clippy::check(input, &mut report);
+    if enabled(input.style, StyleRule::OptionsDefault) {
+        probe::check(input, &mut report);
+    }
+    report
+}
+
 /// The project's rustfmt configuration stays authoritative: overriding its
 /// width would demand a layout that the repository's own `cargo fmt` never
 /// produces. Instead, the effective width must not exceed the guide's limit.
-fn width_limit(root: &Path, files: &[PathBuf], policy: &StylePolicy, report: &mut ToolReport) {
-    let mut directories = BTreeMap::new();
-    for file in files {
-        let file = std::fs::canonicalize(file).unwrap_or_else(|_| file.clone());
-        if let Some(directory) = file.parent() {
-            directories
-                .entry(directory.to_path_buf())
-                .or_insert(file.clone());
-        }
-    }
+fn width_limit(input: &StyleInput<'_>, report: &mut StyleReport) {
+    let root = input.root;
     let mut reported = BTreeSet::new();
-    for (directory, file) in directories {
-        let output = match rustfmt(policy, root)
+    for (directory, file) in config_groups(root, input.files) {
+        let output = match rustfmt(input.style, root)
             .args(["--print-config", "current"])
             .arg(&file)
             .output()
@@ -94,17 +100,7 @@ fn width_limit(root: &Path, files: &[PathBuf], policy: &StylePolicy, report: &mu
             continue;
         }
         // Report the nearest project configuration once, not every directory.
-        let config = directory
-            .ancestors()
-            .take_while(|ancestor| ancestor.starts_with(root))
-            .flat_map(|ancestor| {
-                [
-                    ancestor.join(".rustfmt.toml"),
-                    ancestor.join("rustfmt.toml"),
-                ]
-            })
-            .find(|candidate| candidate.is_file())
-            .unwrap_or_else(|| root.join("rustfmt.toml"));
+        let config = project_config(root, &directory);
         if reported.insert(config.clone()) {
             report.diagnostics.push(StyleDiagnostic {
                 rule: StyleRule::Format,
@@ -120,8 +116,39 @@ fn width_limit(root: &Path, files: &[PathBuf], policy: &StylePolicy, report: &mu
     }
 }
 
-fn formatting(root: &Path, policy: &StylePolicy, report: &mut ToolReport) {
-    let output = cargo(policy, root)
+/// Group the files by the directory of their nearest rustfmt configuration within
+/// the root. Files without one share the root. Each group keeps its first file,
+/// which rustfmt reads the configuration for.
+fn config_groups(root: &Path, files: &[PathBuf]) -> BTreeMap<PathBuf, PathBuf> {
+    let mut groups = BTreeMap::new();
+    for file in files {
+        let directory = file
+            .ancestors()
+            .skip(1)
+            .take_while(|directory| directory.starts_with(root))
+            .find(|directory| config_file(directory).is_some())
+            .map_or_else(|| root.to_path_buf(), Path::to_path_buf);
+        groups.entry(directory).or_insert_with(|| file.clone());
+    }
+    groups
+}
+
+/// The rustfmt configuration in a directory. `.rustfmt.toml` takes precedence.
+fn config_file(directory: &Path) -> Option<PathBuf> {
+    [".rustfmt.toml", "rustfmt.toml"]
+        .into_iter()
+        .map(|name| directory.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+/// The configuration that a directory's files use, or the root's default location.
+fn project_config(root: &Path, directory: &Path) -> PathBuf {
+    config_file(directory).unwrap_or_else(|| root.join("rustfmt.toml"))
+}
+
+fn formatting(input: &StyleInput<'_>, report: &mut StyleReport) {
+    let root = input.root;
+    let output = cargo(input.style, root)
         .args(["fmt", "--all", "--", "--check"])
         .output();
     match output {
