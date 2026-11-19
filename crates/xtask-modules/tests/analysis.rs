@@ -1265,3 +1265,17 @@ fn block_use_is_processed_once() {
         .count();
     assert_eq!(count, 1, "{:?}", result.diagnostics);
 }
+
+#[test]
+fn invalid_cfg_on_impl_fn_is_one_diagnostic() {
+    let result = graph(
+        &[("lib.rs", "struct S;\nimpl S { #[cfg(a::b)] fn f() {} }\n")],
+        Options::default(),
+    );
+    let reported = result
+        .diagnostics
+        .iter()
+        .filter(|message| message.contains("unsupported cfg predicate"))
+        .count();
+    assert_eq!(reported, 1, "{:?}", result.diagnostics);
+}

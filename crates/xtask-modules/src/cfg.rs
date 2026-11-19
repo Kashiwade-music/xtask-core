@@ -1,6 +1,16 @@
 //! Role: cfgとcfg_attrを評価し、解析できない属性展開を診断する。
 use crate::model::Env;
-use syn::{Attribute, Meta, Token, punctuated::Punctuated};
+use syn::{Attribute, Meta, Token, punctuated::Punctuated, spanned::Spanned};
+
+/// The line that a cfg error on these attributes is located at: the first cfg attribute, or
+/// else the first attribute.
+pub(crate) fn error_line(attrs: &[Attribute]) -> usize {
+    attrs
+        .iter()
+        .find(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
+        .or(attrs.first())
+        .map_or(1, |attr| attr.span().start().line)
+}
 
 /// One predicate of a cfg: the literal `true` or `false`, or a name, `key = "value"`,
 /// `all(..)`, `any(..)`, or `not(..)`.
@@ -16,12 +26,6 @@ impl syn::parse::Parse for Predicate {
         }
         Ok(Self::Meta(Box::new(input.parse()?)))
     }
-}
-
-/// Whether the attributes are enabled. Module items are evaluated by the loader on their
-/// expanded attributes (`enabled_metas`); this is for the attributes of other nodes.
-pub(crate) fn enabled(attrs: &[Attribute], env: Env) -> Result<bool, String> {
-    enabled_metas(&effective(attrs, env)?, env)
 }
 
 /// Whether the cfg predicates of expanded attributes hold.

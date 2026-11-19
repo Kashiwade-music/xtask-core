@@ -1,17 +1,67 @@
 //! Role: Index static names declared by the standard thread_local macro.
 use crate::{
-    cfg,
-    loader::Source,
+    ast, cfg,
+    loader::{Source, located},
     model::{Env, Settings},
     symbols::{Import, Layout, Modules, Namespace, Scope, Target, Textual},
-    visitor::local_macro_targets,
+    visitor::{is_local_macro, local_macro_targets},
 };
-use std::collections::BTreeSet;
+use proc_macro2::TokenStream;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 use syn::{
     Item, Meta, Token, ext::IdentExt, parse::Parse, parse::ParseStream, punctuated::Punctuated,
 };
 
 struct Statics(Vec<syn::ItemStatic>);
+
+/// A static of a `thread_local!` body whose configuration enables it, with its attributes after
+/// cfg_attr expansion. Its cfg is evaluated only by `enabled_statics`.
+pub(crate) struct Enabled {
+    pub(crate) item: syn::ItemStatic,
+    pub(crate) metas: Vec<Meta>,
+}
+
+/// The result of judging the standard `thread_local!` calls, and of evaluating the statics of
+/// the trusted calls that the visitor visits. Each static's cfg is evaluated once, here.
+#[derive(Default)]
+pub(crate) struct Standard {
+    /// The enabled statics of the standard calls, as (module, name).
+    pub(crate) declared: Vec<(usize, String)>,
+    /// The enabled statics of each trusted call at module level, by (module, item index).
+    pub(crate) calls: BTreeMap<(usize, usize), Vec<Enabled>>,
+    /// The cfg diagnostics of the statics. An invalid cfg disables only its own static.
+    pub(crate) diagnostics: Vec<String>,
+}
+
+/// Evaluates the cfg of each static of one `thread_local!` body. A static whose cfg is invalid
+/// is disabled and reported once, at its attribute's line; the other statics are unaffected.
+/// Returns `Err` only when the body does not parse as statics.
+pub(crate) fn enabled_statics(
+    tokens: &TokenStream,
+    file: &Path,
+    env: Env,
+) -> syn::Result<(Vec<Enabled>, Vec<String>)> {
+    let mut enabled = Vec::new();
+    let mut diagnostics = Vec::new();
+    for item in syn::parse2::<Statics>(tokens.clone())?.0 {
+        let evaluated = cfg::effective(&item.attrs, env).and_then(|metas| {
+            let on = cfg::enabled_metas(&metas, env)?;
+            Ok((on, metas))
+        });
+        match evaluated {
+            Ok((true, metas)) => enabled.push(Enabled { item, metas }),
+            Ok((false, _)) => {}
+            Err(error) => {
+                let line = cfg::error_line(&item.attrs);
+                diagnostics.push(located(file, line, &error));
+            }
+        }
+    }
+    Ok((enabled, diagnostics))
+}
 
 /// How a `thread_local!` call is recognized, syntactically. The visitor visits the statics of
 /// both kinds; only the calls that resolve to the standard macro declare names.
@@ -19,11 +69,6 @@ struct Statics(Vec<syn::ItemStatic>);
 pub(crate) enum Provider {
     Qualified,
     Alias,
-}
-
-/// The statics of a `thread_local!` body.
-pub(crate) fn statics(tokens: proc_macro2::TokenStream) -> syn::Result<Vec<syn::ItemStatic>> {
-    syn::parse2::<Statics>(tokens).map(|statics| statics.0)
 }
 
 /// Whether a `use` path names the standard `thread_local` macro.
@@ -121,15 +166,16 @@ impl Parse for Statics {
     }
 }
 
-/// The statics of the standard `thread_local!` calls, as (module, name). `first` is the first
-/// pass of the names, which has no such statics yet; each call is judged on it.
+/// Judges the module-level `thread_local!` calls on `first`, the first pass of the names, which
+/// has no such statics yet. The standard calls declare their enabled statics. The trusted calls
+/// keep theirs for the visitor. Each static's cfg is evaluated here and nowhere else.
 pub(crate) fn standard_statics(
     sources: &[Source],
     layout: &Layout,
     first: &[Scope],
     textual: &Textual,
     env: Env,
-) -> Result<Vec<(usize, String)>, String> {
+) -> Result<Standard, String> {
     let modules = Modules {
         layout,
         scopes: first,
@@ -140,35 +186,74 @@ pub(crate) fn standard_statics(
         .filter(|(_, source)| imports_unknown_thread_local(source))
         .map(|(module, _)| module)
         .collect::<BTreeSet<_>>();
-    let mut statics = Vec::new();
+    let mut result = Standard::default();
     for (module, source) in sources.iter().enumerate() {
         let macro_use_visible = macro_use_visible(layout, &macro_use, module);
-        for (item, _) in source.items() {
+        for (index, (item, _)) in source.items().into_iter().enumerate() {
             let Item::Macro(item) = item else { continue };
-            if !is_standard_call(
+            let standard = is_standard_call(
                 &modules,
                 textual,
                 module,
                 &item.mac.path,
                 macro_use_visible,
                 env,
-            ) {
+            );
+            let trusted = is_trusted_call(&modules, textual, module, item, env);
+            if !standard && !trusted {
                 continue;
             }
-            let parsed = syn::parse2::<Statics>(item.mac.tokens.clone()).map_err(|error| {
-                format!(
-                    "{}: invalid thread_local declaration: {error}",
-                    source.module.id
-                )
-            })?;
-            for declaration in parsed.0 {
-                if cfg::enabled(&declaration.attrs, env)? {
-                    statics.push((module, declaration.ident.to_string()));
+            let (enabled, diagnostics) = match (
+                standard,
+                enabled_statics(&item.mac.tokens, &source.module.file, env),
+            ) {
+                (_, Ok(evaluated)) => evaluated,
+                (true, Err(error)) => {
+                    return Err(format!(
+                        "{}: invalid thread_local declaration: {error}",
+                        source.module.id
+                    ));
                 }
+                // Only the standard call must be a static body; for another trusted call the
+                // visitor then visits nothing, as before.
+                (false, Err(_)) => continue,
+            };
+            result.diagnostics.extend(diagnostics);
+            if standard {
+                result
+                    .declared
+                    .extend(enabled.iter().map(|s| (module, s.item.ident.to_string())));
+            }
+            if trusted {
+                result.calls.insert((module, index), enabled);
             }
         }
     }
-    Ok(statics)
+    Ok(result)
+}
+
+/// Whether the visitor visits the statics of a module-level macro call: a trusted call of a
+/// `thread_local` provider that is not a crate-local macro.
+fn is_trusted_call(
+    modules: &Modules,
+    textual: &Textual,
+    module: usize,
+    item: &syn::ItemMacro,
+    env: Env,
+) -> bool {
+    !item.mac.path.is_ident("macro_rules")
+        && env
+            .settings
+            .trusted_macros
+            .contains(&ast::path_text(&item.mac.path))
+        && !is_local_macro(&local_macro_targets(
+            modules,
+            textual,
+            module,
+            &item.mac.path,
+            &[],
+        ))
+        && provider(&item.mac.path, &modules.layout.uses[module]).is_some()
 }
 
 /// Whether a module, or one of its ancestors, has a `#[macro_use]` that may import `thread_local`.

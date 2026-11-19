@@ -9,10 +9,12 @@ use crate::{
     },
     thread_local_items,
 };
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 use syn::{
     Item,
-    spanned::Spanned,
     visit::{self, Visit},
 };
 
@@ -36,6 +38,9 @@ pub(crate) struct References<'a> {
     pub(crate) opaque: &'a BTreeSet<usize>,
     /// The blocks and generic parameters around the node being visited, innermost last.
     pub(crate) blocks: Vec<Block>,
+    /// The enabled statics of each standard or trusted `thread_local!` call at module level,
+    /// by (module, item index). Their cfg was evaluated by `thread_local_items`.
+    pub(crate) calls: &'a BTreeMap<(usize, usize), Vec<thread_local_items::Enabled>>,
     pub(crate) edges: &'a mut BTreeSet<Reference>,
     pub(crate) diagnostics: &'a mut BTreeSet<String>,
 }
@@ -76,12 +81,7 @@ impl References<'_> {
 
     /// Reports an invalid cfg, located at its attribute, and so disables the node.
     fn cfg_error(&mut self, attrs: &[syn::Attribute], error: &str) {
-        let line = attrs
-            .iter()
-            .find(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
-            .or(attrs.first())
-            .map_or(1, |attr| attr.span().start().line);
-        let message = loader::located(self.file, line, error);
+        let message = loader::located(self.file, cfg::error_line(attrs), error);
         self.diagnostics.insert(message);
     }
 
@@ -422,9 +422,13 @@ impl References<'_> {
         self.edge(targets);
     }
 
-    /// Visits a module-level item. Its module's `use` items are reported here.
-    pub(crate) fn module_item(&mut self, item: &Item) {
-        self.item(item, Context::Module);
+    /// Visits a module-level item, the `index`th active item of its module. Its module's `use`
+    /// items are reported here.
+    pub(crate) fn module_item(&mut self, index: usize, item: &Item) {
+        match item {
+            Item::Macro(item) => self.item_macro(item, Some(index)),
+            _ => self.item(item, Context::Module),
+        }
     }
 
     fn item(&mut self, item: &Item, context: Context) {
@@ -469,17 +473,76 @@ impl References<'_> {
         }
     }
 
-    /// Visits the statics of a standard `thread_local!` body: their types and initializers.
-    fn standard_statics(&mut self, tokens: &proc_macro2::TokenStream) {
-        let Ok(statics) = thread_local_items::statics(tokens.clone()) else {
-            return;
-        };
-        for item in &statics {
-            if self.enabled(&item.attrs) {
-                self.visit_type(&item.ty);
-                self.visit_expr(&item.expr);
+    /// Visits the enabled statics of a trusted `thread_local!` body: their attributes' expansions,
+    /// types, and initializers. A module-level call takes the statics that `thread_local_items`
+    /// evaluated; a block-level call is evaluated here, once, by the same function.
+    fn thread_local_statics(&mut self, tokens: &proc_macro2::TokenStream, index: Option<usize>) {
+        let calls = self.calls;
+        let owned;
+        let enabled: &[thread_local_items::Enabled] = match index {
+            Some(index) => calls.get(&(self.module, index)).map_or(&[], Vec::as_slice),
+            None => {
+                let Ok((enabled, diagnostics)) =
+                    thread_local_items::enabled_statics(tokens, self.file, self.env)
+                else {
+                    return;
+                };
+                for diagnostic in diagnostics {
+                    self.diagnostics.insert(diagnostic);
+                }
+                owned = enabled;
+                &owned
             }
+        };
+        for statics in enabled {
+            self.expansions(&statics.metas);
+            self.visit_type(&statics.item.ty);
+            self.visit_expr(&statics.item.expr);
         }
+    }
+
+    /// An item macro: `index` is the module-level item's index, and `None` in a block.
+    fn item_macro(&mut self, item: &syn::ItemMacro, index: Option<usize>) {
+        if item.mac.path.is_ident("macro_rules") {
+            return;
+        }
+        if self
+            .env
+            .settings
+            .trusted_macros
+            .contains(&ast::path_text(&item.mac.path))
+        {
+            let local_macro = local_macro_targets(
+                &self.modules,
+                self.textual,
+                self.module,
+                &item.mac.path,
+                &self.blocks,
+            );
+            if is_local_macro(&local_macro) {
+                self.edge(local_macro);
+            } else if thread_local_items::provider(
+                &item.mac.path,
+                &self.modules.layout.uses[self.module],
+            )
+            .is_some()
+            {
+                self.thread_local_statics(&item.mac.tokens, index);
+            }
+            return;
+        }
+        let message = format!(
+            "{}: item macro expansion is unsupported: {}",
+            self.id(),
+            item.mac
+                .path
+                .segments
+                .iter()
+                .map(|s| s.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("::")
+        );
+        self.diagnostics.insert(message);
     }
 
     /// Records the edges of a call whose macro is local, and reports it unless the macro is trusted.
@@ -863,46 +926,7 @@ impl<'ast> Visit<'ast> for References<'_> {
         }
     }
     fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
-        if item.mac.path.is_ident("macro_rules") {
-            return;
-        }
-        if self
-            .env
-            .settings
-            .trusted_macros
-            .contains(&ast::path_text(&item.mac.path))
-        {
-            let local_macro = local_macro_targets(
-                &self.modules,
-                self.textual,
-                self.module,
-                &item.mac.path,
-                &self.blocks,
-            );
-            if is_local_macro(&local_macro) {
-                self.edge(local_macro);
-            } else if thread_local_items::provider(
-                &item.mac.path,
-                &self.modules.layout.uses[self.module],
-            )
-            .is_some()
-            {
-                self.standard_statics(&item.mac.tokens);
-            }
-            return;
-        }
-        let message = format!(
-            "{}: item macro expansion is unsupported: {}",
-            self.id(),
-            item.mac
-                .path
-                .segments
-                .iter()
-                .map(|s| s.ident.to_string())
-                .collect::<Vec<_>>()
-                .join("::")
-        );
-        self.diagnostics.insert(message);
+        self.item_macro(item, None);
     }
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
         let parts = mac
@@ -968,7 +992,7 @@ pub(crate) fn local_macro_targets(
     targets
 }
 
-fn is_local_macro(targets: &BTreeSet<Target>) -> bool {
+pub(crate) fn is_local_macro(targets: &BTreeSet<Target>) -> bool {
     targets
         .iter()
         .any(|target| matches!(target, Target::Item(_, Namespace::Macro)))
