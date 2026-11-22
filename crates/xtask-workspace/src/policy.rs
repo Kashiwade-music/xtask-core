@@ -95,6 +95,7 @@ pub struct AnalysisSettings {
     pub trusted_attributes: BTreeSet<String>,
     pub trusted_derives: BTreeSet<String>,
     pub trusted_macros: BTreeSet<String>,
+    pub generated_type_attributes: BTreeSet<String>,
 }
 
 impl Default for AnalysisSettings {
@@ -108,6 +109,7 @@ impl Default for AnalysisSettings {
             trusted_attributes: BTreeSet::new(),
             trusted_derives: BTreeSet::new(),
             trusted_macros: BTreeSet::new(),
+            generated_type_attributes: BTreeSet::new(),
         }
     }
 }

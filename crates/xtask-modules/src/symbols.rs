@@ -1,4 +1,5 @@
 //! Role: 型・値の名前空間で宣言、import、再公開とパス解決を扱う。
+use crate::{AnalysisOptions, resolve::has_attribute};
 use std::collections::{BTreeMap, BTreeSet};
 use syn::{Item, UseTree};
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -127,6 +128,36 @@ pub(crate) fn declaration(item: &Item, owner: &str) -> Option<(String, Target)> 
         _ => Namespace::Type,
     };
     Some((ident.to_string(), Target::Item(owner.into(), namespace)))
+}
+
+/// The type that a listed generated-type attribute (such as `#[component]`) declares beside
+/// its fn: `fn user_row` declares `UserRow`, in the type and the value namespace.
+pub(crate) fn generated_type(
+    item: &Item,
+    owner: &str,
+    options: &AnalysisOptions,
+) -> Option<(String, Target)> {
+    let Item::Fn(function) = item else {
+        return None;
+    };
+    let generated = options
+        .generated_type_attributes
+        .iter()
+        .any(|name| has_attribute(&function.attrs, options, name));
+    generated.then(|| {
+        let name = function
+            .sig
+            .ident
+            .to_string()
+            .split('_')
+            .filter_map(|part| {
+                let mut chars = part.chars();
+                let first = chars.next()?;
+                Some(first.to_uppercase().chain(chars).collect::<String>())
+            })
+            .collect::<String>();
+        (name, Target::Item(owner.into(), Namespace::Both))
+    })
 }
 
 pub(crate) fn resolve_path(

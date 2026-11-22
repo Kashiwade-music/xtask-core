@@ -15,6 +15,9 @@ pub struct AnalysisOptions {
     pub trusted_derives: BTreeSet<String>,
     /// これらの macro の展開・token は解析しない。生成・内包される参照は source-level 解析の外。
     pub trusted_macros: BTreeSet<String>,
+    /// Attributes whose fn also declares a type named by its PascalCase name:
+    /// `#[component] fn user_row` declares `UserRow` beside the fn.
+    pub generated_type_attributes: BTreeSet<String>,
     /// Positive maximum number of Unicode scalar values in a Role description.
     pub max_role_chars: usize,
 }
@@ -27,6 +30,7 @@ impl Default for AnalysisOptions {
             trusted_attributes: BTreeSet::new(),
             trusted_derives: BTreeSet::new(),
             trusted_macros: BTreeSet::new(),
+            generated_type_attributes: BTreeSet::new(),
             max_role_chars: DEFAULT_MAX_ROLE_CHARS,
         }
     }

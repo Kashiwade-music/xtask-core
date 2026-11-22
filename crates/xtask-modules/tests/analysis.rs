@@ -1032,3 +1032,26 @@ fn named_struct_patterns_use_the_type_namespace() {
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     assert_eq!(edges(&result), BTreeSet::from([("crate::b", "crate::a")]));
 }
+
+#[test]
+fn generated_types_of_listed_attributes_resolve_beside_their_fn() {
+    let files = [(
+        "lib.rs",
+        "mod a { #[component] pub fn user_row() {} } mod b { fn f(_: crate::a::UserRow) {} }",
+    )];
+    let mut options = AnalysisOptions::default();
+    options.trusted_attributes.insert("component".into());
+    let result = graph(&files, options.clone());
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("unresolved explicit local path: crate::a::UserRow")),
+        "{:?}",
+        result.diagnostics
+    );
+    options.generated_type_attributes.insert("component".into());
+    let result = graph(&files, options);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(edges(&result), BTreeSet::from([("crate::b", "crate::a")]));
+}

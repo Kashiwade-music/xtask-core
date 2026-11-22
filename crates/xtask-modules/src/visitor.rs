@@ -3,7 +3,8 @@ use crate::{
     ast, cfg, loader,
     model::{AnalysisOptions, Reference},
     symbols::{
-        Namespace, Symbols, Tables, Target, apply_import, declaration, imports, resolve_path,
+        Namespace, Symbols, Tables, Target, apply_import, declaration, generated_type, imports,
+        resolve_path,
     },
 };
 use std::collections::BTreeSet;
@@ -436,6 +437,12 @@ impl<'ast> Visit<'ast> for References<'_> {
                     continue;
                 }
                 if let Some((name, target)) = declaration(item, self.module) {
+                    self.scopes
+                        .last_mut()
+                        .unwrap()
+                        .insert(name, BTreeSet::from([target]));
+                }
+                if let Some((name, target)) = generated_type(item, self.module, self.options) {
                     self.scopes
                         .last_mut()
                         .unwrap()

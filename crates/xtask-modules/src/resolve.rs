@@ -49,6 +49,13 @@ pub(crate) fn analyze(
                     .insert(name.clone());
                 table.entry(name).or_default().insert(target);
             }
+            if let Some((name, target)) = generated_type(item, owner, options) {
+                strong
+                    .entry(owner.clone())
+                    .or_default()
+                    .insert(name.clone());
+                table.entry(name).or_default().insert(target);
+            }
             if let Item::Use(item) = item {
                 imports(
                     &item.tree,
@@ -201,7 +208,11 @@ fn textual_macros(
 
 /// Whether the attribute is present after `cfg_attr` expansion. The loader has already
 /// validated these attributes, so an expansion error cannot occur here.
-fn has_attribute(attrs: &[syn::Attribute], options: &AnalysisOptions, name: &str) -> bool {
+pub(crate) fn has_attribute(
+    attrs: &[syn::Attribute],
+    options: &AnalysisOptions,
+    name: &str,
+) -> bool {
     crate::cfg::effective(attrs, options)
         .is_ok_and(|metas| metas.iter().any(|meta| meta.path().is_ident(name)))
 }
