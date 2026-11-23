@@ -8,7 +8,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-kivact = { git = "https://github.com/Kashiwade-music/kivact", rev = "2b8df5aceea40c9ae23950f9d6c942559c89e840" }
+kivact = { git = "https://github.com/Kashiwade-music/kivact", rev = "3766e4c884bed826536bfacd6544ae13680de198" }
 xtask-archive = { path = "../crates/xtask-archive" }
 xtask-render = { path = "crates/xtask-render" }
 
@@ -18,7 +18,7 @@ lto = "fat"
 codegen-units = 1
 opt-level = "s"
 strip = "symbols"
-# panic stays unwind: an embedded UI (a DAW plugin) must not unwind a panic into its host.
+# panic stays "unwind": an embedded App (a DAW plugin editor) must not let a panic escape into its host.
 
 # The drawing, shaping and layout hot paths favour speed.
 [profile.release.package.vello_cpu]

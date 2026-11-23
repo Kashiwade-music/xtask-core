@@ -2,10 +2,11 @@
 use std::rc::Rc;
 
 use kivact::custom::Part;
-use kivact::draw::{Draw, Layer, RegionId, Transform};
+use kivact::draw::{Draw, Layer, RegionId};
 use kivact::prelude::*;
-use kivact::style::Position;
-use kivact::view::{ButtonPress, MouseButton, PointerPhase, WheelEvent, overlay_at};
+use kivact::state::IntoValue;
+use kivact::style::{Position, Transform};
+use kivact::view::{ButtonPress, MouseButton, Placement, PointerPhase, WheelEvent, overlay_at};
 use xtask_archive::{Content, DiagramKind, Item, Scene};
 use xtask_render::{Picture, neighbors};
 
@@ -26,7 +27,7 @@ pub fn diagram_view(state: AppState) -> impl IntoView {
             .unwrap_or_default()
     });
     let base = canvas(move |draw, size| base_draw(state, diagram, draw, size))
-        .style(style().grow(1).min_height(0))
+        .style(style().flex_grow(1).min_height(0))
         .name("Diagram")
         .regions(
             entries,
@@ -48,7 +49,12 @@ pub fn diagram_view(state: AppState) -> impl IntoView {
                 .hit_testable(false)
         }),
     ))
-    .style(style().grow(1).min_height(0).position(Position::Relative))
+    .style(
+        style()
+            .flex_grow(1)
+            .min_height(0)
+            .position(Position::Relative),
+    )
 }
 
 /// 表示中の図の region の一つ。`id` は `RegionId` と同じ値。

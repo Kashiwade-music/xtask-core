@@ -4,8 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use kivact::interaction::TreeNode;
 use kivact::prelude::{
     Element, Handled, IntoView, Key, KeyEvent, column, effect, memo, scroll, signal, style,
-    text_input, tree,
+    text_input,
 };
+use kivact::ui::tree;
 use xtask_archive::{Content, Diagram, DiagramKind, Mode, Scene};
 
 use crate::navigate;
@@ -58,7 +59,8 @@ pub fn sidebar(state: AppState) -> impl IntoView {
         expanded.set(keys);
     });
     column((
-        text_input("Search", state.search)
+        text_input(state.search)
+            .label("Search")
             .placeholder("Filter crates and modules")
             .on_key(|event: KeyEvent| {
                 if event.key() == Key::Backspace {
@@ -72,7 +74,7 @@ pub fn sidebar(state: AppState) -> impl IntoView {
                 .expanded(expanded)
                 .on_activate(move |key: TreeKey| activate(state, key)),
         )
-        .style(style().grow(1).min_height(0)),
+        .style(style().flex_grow(1).min_height(0)),
     ))
 }
 

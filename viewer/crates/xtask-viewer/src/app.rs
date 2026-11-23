@@ -28,10 +28,10 @@ pub fn view(state: AppState, initial: Option<PathBuf>) -> impl IntoView {
     let side = column(sidebar::sidebar(state)).style(style().width(300));
     let main = column((
         toolbar(state),
-        column(canvas::diagram_view(state)).style(style().grow(1).min_height(0)),
+        column(canvas::diagram_view(state)).style(style().flex_grow(1).min_height(0)),
         notices(state),
     ))
-    .style(style().grow(1).min_width(0));
+    .style(style().flex_grow(1).min_width(0));
     row((side, main))
         .style(style().width(pct(100)).height(pct(100)))
         .on_file(move |event: FileEvent| {
@@ -53,7 +53,6 @@ fn toolbar(state: AppState) -> impl IntoView {
         button("Fit").on_press(move || navigate::fit(state)),
         button("Export SVG").on_press(move || export::export_svg(state)),
         select(
-            "Diagram",
             move || package_items(state),
             binding(
                 move || selected(state),
@@ -63,7 +62,8 @@ fn toolbar(state: AppState) -> impl IntoView {
                     }
                 },
             ),
-        ),
+        )
+        .label("Diagram"),
     ))
 }
 
