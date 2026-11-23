@@ -3,7 +3,8 @@ use std::path::Path;
 
 use kivact::draw::Offscreen;
 use kivact::platform::{FileDialog, save_file};
-use kivact::prelude::{blocking, spawn};
+use kivact::prelude::spawn;
+use kivact::task::blocking;
 use xtask_render::Picture;
 
 use crate::paint;

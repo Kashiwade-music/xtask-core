@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use kivact::prelude::{blocking, spawn};
+use kivact::prelude::spawn;
+use kivact::task::blocking;
 use xtask_archive::{Content, DiagramKind, MAX_FILE_LEN};
 
 use crate::state::{AppState, Camera, Document, Gesture, Loaded, Nav, Reason, Request, Stamp};
