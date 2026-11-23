@@ -11,6 +11,7 @@ pub struct Options {
     pub trusted_derives: BTreeSet<String>,
     pub trusted_macros: BTreeSet<String>,
     pub trusted_globs: BTreeSet<String>,
+    pub generated_type_attributes: BTreeSet<String>,
     pub max_role_chars: usize,
 }
 
@@ -23,6 +24,7 @@ impl Default for Options {
             trusted_derives: BTreeSet::new(),
             trusted_macros: BTreeSet::new(),
             trusted_globs: BTreeSet::new(),
+            generated_type_attributes: BTreeSet::new(),
             max_role_chars: 80,
         }
     }
@@ -37,6 +39,7 @@ impl Options {
             trusted_derives: self.trusted_derives.clone(),
             trusted_macros: self.trusted_macros.clone(),
             trusted_globs: self.trusted_globs.clone(),
+            generated_type_attributes: self.generated_type_attributes.clone(),
             max_role_chars: self.max_role_chars,
         }
     }

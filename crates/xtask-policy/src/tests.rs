@@ -285,6 +285,7 @@ fn analysis_settings_parse_cargo_cfg_and_trusted_expansions_with_other_rules() {
         "trusted_derives=['derive_lib::Marker']\n",
         "trusted_macros=['proptest','prop_assert']\n",
         "trusted_globs=['framework::prelude']\n",
+        "generated_type_attributes=['component']\n",
         "[limits]\nmax_code_lines=25\nmax_role_chars=160\n",
         "[visible_to]\ncore=['app*']\n"
     ))
@@ -309,6 +310,7 @@ fn analysis_settings_parse_cargo_cfg_and_trusted_expansions_with_other_rules() {
         &names(&["prop_assert", "proptest"])
     );
     assert_eq!(analysis.trusted_globs(), &names(&["framework::prelude"]));
+    assert_eq!(analysis.generated_type_attributes(), &names(&["component"]));
     assert_eq!(policy.limits().max_code_lines(), 25);
     assert_eq!(policy.limits().max_role_chars(), 160);
     assert!(policy.visible("core", "app-shell"));
@@ -333,6 +335,8 @@ fn analysis_settings_reject_unknown_fields_and_incorrect_types() {
         "trusted_derives=[false]",
         "trusted_macros='proptest'",
         "trusted_macros=[1]",
+        "generated_type_attributes='component'",
+        "generated_type_attributes=[1]",
     ] {
         let text = format!("[analysis]\n{setting}\n");
         assert!(Policy::from_toml(&text).is_err(), "accepted {text}");

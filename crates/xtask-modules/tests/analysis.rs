@@ -618,3 +618,26 @@ fn raw_identifier_module_file() {
     assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
     assert!(result.modules.iter().any(|m| m.id == "crate::type"));
 }
+
+#[test]
+fn generated_types_of_listed_attributes_resolve_beside_their_fn() {
+    let files = [(
+        "lib.rs",
+        "mod a { #[component] pub fn user_row() {} } mod b { fn f(_: crate::a::UserRow) {} }",
+    )];
+    let mut options = Options::default();
+    options.trusted_attributes.insert("component".into());
+    let result = graph(&files, options.clone());
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("crate::a::UserRow")),
+        "{:?}",
+        result.diagnostics
+    );
+    options.generated_type_attributes.insert("component".into());
+    let result = graph(&files, options);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert_eq!(edges(&result), BTreeSet::from([("crate::b", "crate::a")]));
+}

@@ -129,6 +129,7 @@ trusted_attributes = ["serde"]
 trusted_derives = ["Deserialize", "Serialize"]
 trusted_macros = ["proptest", "prop_assert"]
 trusted_globs = ["framework::prelude"]
+generated_type_attributes = ["component"]
 
 [style]
 enabled = true
@@ -218,6 +219,13 @@ name must also be listed in `trusted_attributes` or `trusted_macros`.
 `trusted_globs` and `allowed_globs` in `[style]` are separate settings.
 `allowed_globs` only lets the `glob-imports` style rule accept the glob; it does
 not change the analysis. A glob that needs both must be listed in both.
+
+`generated_type_attributes` names attribute macros that generate a type beside
+the fn they mark, such as `component`. A fn with one of these attributes also
+declares the type named by its PascalCase name (`#[component] fn user_row`
+declares `UserRow`) in the type and the value namespace, so that paths to the
+generated type resolve. The attribute must still be listed in
+`trusted_attributes`.
 
 ## Output
 

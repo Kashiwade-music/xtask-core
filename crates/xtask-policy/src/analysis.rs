@@ -28,6 +28,9 @@ pub struct AnalysisSettings {
     /// attributes, such as a framework's prelude of types and traits. Other external globs make
     /// macro and derive providers unknowable.
     trusted_globs: BTreeSet<String>,
+    /// Attribute macros that generate a type named after the PascalCase of the fn they mark:
+    /// `#[component] fn user_row` declares `UserRow` beside the fn.
+    generated_type_attributes: BTreeSet<String>,
 }
 
 impl Default for AnalysisSettings {
@@ -43,6 +46,7 @@ impl Default for AnalysisSettings {
             trusted_derives: BTreeSet::new(),
             trusted_macros: BTreeSet::new(),
             trusted_globs: BTreeSet::new(),
+            generated_type_attributes: BTreeSet::new(),
         }
     }
 }
@@ -69,7 +73,15 @@ impl AnalysisSettings {
             trusted_derives: name_set("analysis.trusted_derives", trusted_derives)?,
             trusted_macros: name_set("analysis.trusted_macros", trusted_macros)?,
             trusted_globs: name_set("analysis.trusted_globs", trusted_globs)?,
+            generated_type_attributes: BTreeSet::new(),
         })
+    }
+
+    /// Set the attribute macros that generate a type beside the fn they mark. Uses the same
+    /// checks as a policy file.
+    pub fn with_generated_type_attributes(mut self, names: Vec<String>) -> Result<Self, String> {
+        self.generated_type_attributes = name_set("analysis.generated_type_attributes", names)?;
+        Ok(self)
     }
 
     /// Target triple whose cfg and dependencies are analyzed, or the host when absent.
@@ -100,6 +112,10 @@ impl AnalysisSettings {
     pub fn trusted_globs(&self) -> &BTreeSet<String> {
         &self.trusted_globs
     }
+
+    pub fn generated_type_attributes(&self) -> &BTreeSet<String> {
+        &self.generated_type_attributes
+    }
 }
 
 /// The `[analysis]` table as written. `into_settings` checks it.
@@ -115,6 +131,7 @@ pub(crate) struct RawAnalysis {
     trusted_derives: Vec<String>,
     trusted_macros: Vec<String>,
     trusted_globs: Vec<String>,
+    generated_type_attributes: Vec<String>,
 }
 
 impl RawAnalysis {
@@ -128,7 +145,8 @@ impl RawAnalysis {
             self.trusted_derives,
             self.trusted_macros,
             self.trusted_globs,
-        )
+        )?
+        .with_generated_type_attributes(self.generated_type_attributes)
     }
 
     fn feature_selection(&self) -> Result<Features, String> {
