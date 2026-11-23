@@ -287,6 +287,7 @@ fn package_settings(context: &Context, features: &FeatureTable) -> Vec<Settings>
             trusted_derives: analysis.trusted_derives().clone(),
             trusted_macros: analysis.trusted_macros().clone(),
             trusted_globs: analysis.trusted_globs().clone(),
+            generated_type_attributes: analysis.generated_type_attributes().clone(),
             max_role_chars: context.policy.limits().max_role_chars(),
         })
         .collect()

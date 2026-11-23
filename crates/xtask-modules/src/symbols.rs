@@ -1,7 +1,7 @@
 //! Role: 名前空間ごとの宣言・名前付きの use・glob の表と、パスの解決を扱う。
-use crate::{loader, model::Settings};
+use crate::{ast, loader, model::Settings};
 use std::collections::{BTreeMap, BTreeSet};
-use syn::{Item, UseTree, ext::IdentExt};
+use syn::{Item, Meta, UseTree, ext::IdentExt};
 
 /// The namespaces of Rust names. A tuple or unit struct is declared in the type and value ones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -536,4 +536,41 @@ pub(crate) fn declarations(
         }
         _ => Vec::new(),
     }
+}
+
+/// The type that a listed generated-type attribute (such as `#[component]`) declares beside
+/// its fn, in the type and the value namespace like a tuple struct: `fn user_row` declares
+/// `UserRow`. `attributes` are the attributes of the fn after cfg_attr expansion.
+pub(crate) fn generated_declarations(
+    item: &Item,
+    attributes: &[Meta],
+    owner: usize,
+    settings: &Settings,
+) -> Vec<(Namespace, String, Target)> {
+    let Item::Fn(function) = item else {
+        return Vec::new();
+    };
+    let generated = attributes.iter().any(|meta| {
+        settings
+            .generated_type_attributes
+            .contains(&ast::path_text(meta.path()))
+    });
+    if !generated {
+        return Vec::new();
+    }
+    let name = function
+        .sig
+        .ident
+        .unraw()
+        .to_string()
+        .split('_')
+        .filter_map(|part| {
+            let mut chars = part.chars();
+            let first = chars.next()?;
+            Some(first.to_uppercase().chain(chars).collect::<String>())
+        })
+        .collect::<String>();
+    [Namespace::Type, Namespace::Value]
+        .map(|namespace| (namespace, name.clone(), Target::Item(owner, namespace)))
+        .into()
 }

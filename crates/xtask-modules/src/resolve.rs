@@ -3,10 +3,10 @@ use crate::{
     ModuleGraph, cfg,
     components::components,
     loader::{Loaded, Source},
-    model::{Env, ModuleKind},
+    model::{Env, ModuleKind, Settings},
     symbols::{
         Fallback, Glob, Import, Layout, Modules, Namespace, Scope, Target, Textual, child_index,
-        declarations, use_imports,
+        declarations, generated_declarations, use_imports,
     },
     thread_local_items,
     visitor::References,
@@ -107,7 +107,7 @@ fn tables(
     env: Env,
 ) -> Vec<Scope> {
     let mut scopes = sources.iter().map(|_| Scope::default()).collect::<Vec<_>>();
-    declare(sources, layout, &mut scopes);
+    declare(sources, layout, env.settings, &mut scopes);
     for (owner, name) in statics {
         scopes[*owner]
             .declared
@@ -122,7 +122,7 @@ fn tables(
 
 /// Declares the items of every module, and the alias of each named import. The extern crates of
 /// the root are not declared here: they are the extern prelude.
-fn declare(sources: &[Source], layout: &Layout, scopes: &mut [Scope]) {
+fn declare(sources: &[Source], layout: &Layout, settings: &Settings, scopes: &mut [Scope]) {
     let ids = &layout.ids;
     for (owner, source) in sources.iter().enumerate() {
         for (item, attributes) in source.items() {
@@ -132,7 +132,10 @@ fn declare(sources: &[Source], layout: &Layout, scopes: &mut [Scope]) {
             // A #[macro_export] macro is also declared at the crate root, wherever it is defined.
             let exported = matches!(item, Item::Macro(mac) if mac.mac.path.is_ident("macro_rules"))
                 && cfg::contains(attributes, "macro_export");
-            for (namespace, name, target) in declarations(item, owner, ids) {
+            let generated = generated_declarations(item, attributes, owner, settings);
+            for (namespace, name, target) in
+                declarations(item, owner, ids).into_iter().chain(generated)
+            {
                 if exported {
                     scopes[0]
                         .declared

@@ -5,7 +5,8 @@ use crate::{
     model::{Env, Reference},
     symbols::{
         Block, Fallback, Import, LocalBinding, Modules, NAMESPACES, Namespace, Scope, Target,
-        Textual, declarations, is_local_macro, local_macro_targets, use_imports,
+        Textual, declarations, generated_declarations, is_local_macro, local_macro_targets,
+        use_imports,
     },
     thread_local_items,
 };
@@ -389,15 +390,19 @@ impl References<'_> {
 
     /// Declares the items of a block, so that each name is visible throughout the block.
     fn declare_block_items(&mut self, live: &[(&syn::Stmt, Vec<syn::Meta>)]) {
-        for (statement, _) in live {
+        for (statement, attributes) in live {
             let syn::Stmt::Item(item) = statement else {
                 continue;
             };
             if matches!(item, Item::Mod(_)) {
                 continue;
             }
+            let generated =
+                generated_declarations(item, attributes, self.module, self.env.settings);
             for (namespace, name, target) in
                 declarations(item, self.module, &self.modules.layout.ids)
+                    .into_iter()
+                    .chain(generated)
             {
                 if let Some(block) = self.blocks.last_mut() {
                     block

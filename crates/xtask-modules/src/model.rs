@@ -13,6 +13,9 @@ pub struct Settings {
     pub trusted_macros: BTreeSet<String>,
     /// External glob imports (`crate::module`) known to provide no macros, derives or attributes.
     pub trusted_globs: BTreeSet<String>,
+    /// Attribute macros that generate a type named after the PascalCase of the fn they mark:
+    /// `#[component] fn user_row` declares `UserRow` beside the fn.
+    pub generated_type_attributes: BTreeSet<String>,
     /// Positive maximum number of Unicode scalar values in a Role description.
     pub max_role_chars: usize,
 }

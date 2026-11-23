@@ -475,6 +475,7 @@ mod tests {
             trusted_derives: BTreeSet::new(),
             trusted_macros: BTreeSet::new(),
             trusted_globs: BTreeSet::new(),
+            generated_type_attributes: BTreeSet::new(),
             max_role_chars: 80,
         }
     }

@@ -107,6 +107,7 @@ trusted_attributes = ["serde"]
 trusted_derives = ["Deserialize", "Serialize"]
 trusted_macros = ["proptest", "prop_assert"]
 trusted_globs = ["framework::prelude"]
+generated_type_attributes = ["component"]
 
 [style]
 enabled = true
@@ -163,6 +164,8 @@ mod config {
 他crateからのglob importはどのmacro・derive・attributeでも提供しうるため、それを含むmoduleでは `vec!` や `#[derive(Clone)]` の提供元を特定できない。`trusted_globs` には、そのようなimportをpath（`framework::prelude` など）で指定し、未知の提供元として扱わないようにする。glob が提供するattributeやmacroをコードが使うなら、その名前を `trusted_attributes` または `trusted_macros` にも書く。
 
 `trusted_globs` と `[style]` の `allowed_globs` は別の設定。`allowed_globs` は `glob-imports` 規則でそのglobを許すだけで、解析の結果は変えない。両方が必要なglobは、両方に書く。
+
+`generated_type_attributes` には、印を付けたfnの隣に型を生成するattribute macro（`component` など）を指定する。これを持つfnは、PascalCaseにした名前の型（`#[component] fn user_row` なら `UserRow`）も型と値の名前空間に宣言するものとして扱い、生成された型へのpathが解決される。そのattributeは `trusted_attributes` にも書く必要がある。
 
 ## 出力
 
